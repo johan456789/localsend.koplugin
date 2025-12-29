@@ -1,8 +1,8 @@
 package utils
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -90,16 +90,25 @@ var aliasFruit = []string{
 	"Tomato",
 }
 
+// GenAndSaveTLScert generates an Ed25519 TLS certificate (per protocol spec v3:
+// "Key Algorithm: RSA 2048 or Ed25519"). Ed25519 is preferred for constrained
+// devices as it generates almost instantly compared to RSA.
 func GenAndSaveTLScert(privKeyFile, certFile string) (tls.Certificate, error) {
+	// Generate Ed25519 key pair - much faster than RSA on constrained devices
+	pubkey, privkey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
 			CommonName: "LocalSend User",
 		},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().AddDate(1, 0, 0),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		NotAfter:              time.Now().AddDate(10, 0, 0), // 10 years per spec
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  false,
 		// SAN is required by modern TLS clients (iOS, etc.)
@@ -107,20 +116,20 @@ func GenAndSaveTLScert(privKeyFile, certFile string) (tls.Certificate, error) {
 		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("0.0.0.0")},
 	}
 
-	privkey, err := rsa.GenerateKey(rand.Reader, 4096)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	pubkey := privkey.Public()
-
 	certBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, pubkey, privkey)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
 
+	// Marshal Ed25519 private key to PKCS8 format
+	privBytes, err := x509.MarshalPKCS8PrivateKey(privkey)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
 	certPrivKeyPem := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(privkey),
+		Type:  "PRIVATE KEY",
+		Bytes: privBytes,
 	})
 
 	certPem := pem.EncodeToMemory(&pem.Block{

@@ -144,6 +144,10 @@ final_nonce = sender_nonce || receiver_nonce
 
 The sender transmits their nonce first, then the final nonce is the concatenation of sender's nonce followed by receiver's nonce. Both peers compute the same combined nonce.
 
+> **Note on Salt Types:** Token salts come in two forms:
+> - **Nonces** (WebRTC): 16-128 bytes, used for peer authentication
+> - **Timestamps** (Discovery/HTTP): Exactly 8 bytes (little-endian u64 Unix seconds), valid for 1 hour
+
 ### 4.3 Token Format
 
 Tokens are used for authentication and pairing. The format is:
@@ -155,10 +159,12 @@ Tokens are used for authentication and pairing. The format is:
 | Field | Description |
 |-------|-------------|
 | `HASH_METHOD` | Always `sha256` |
-| `HASH` | Base64-encoded SHA-256 hash of `(public_key_der \|\| salt)` |
+| `HASH` | Base64-encoded SHA-256 hash of `(public_key_spki_der \|\| salt)` |
 | `SALT` | Base64-encoded salt (nonce bytes or timestamp) |
 | `SIGN_METHOD` | `ed25519` or `rsa-pss` |
 | `SIGNATURE` | Base64-encoded signature of the hash |
+
+> **Important:** The public key MUST be encoded in **SPKI DER format** (SubjectPublicKeyInfo), not raw key bytes. This is the format returned by `to_public_key_der()` in most cryptographic libraries.
 
 **Example token:**
 ```
@@ -167,45 +173,103 @@ sha256.VGhpcyBpcyBhIHRlc3Q.MTIzNDU2Nzg.ed25519.U2lnbmF0dXJlRGF0YUhlcmU
 
 ### 4.4 Token Generation
 
+There are two token types with different salt sources:
+
+#### Nonce-based Tokens (WebRTC)
+Used for WebRTC authentication where both peers exchange nonces.
+
 ```python
-def generate_token(signing_key, salt):
-    # 1. Get public key in DER format
-    public_key_der = signing_key.to_public_key_der()
-    
+def generate_token_nonce(signing_key, nonce):
+    # 1. Get public key in SPKI DER format
+    public_key_der = signing_key.to_public_key_der()  # SPKI format
+
     # 2. Compute hash
-    hash_input = public_key_der + salt
+    hash_input = public_key_der + nonce
     digest = sha256(hash_input)
-    
+
     # 3. Sign the hash
     signature = signing_key.sign(digest)
-    
+
     # 4. Format token
+    return f"sha256.{base64(digest)}.{base64(nonce)}.ed25519.{base64(signature)}"
+```
+
+#### Timestamp-based Tokens (Discovery/HTTP)
+Used for HTTP discovery and registration where no prior nonce exchange exists.
+
+```python
+def generate_token_timestamp(signing_key):
+    # 1. Get current Unix timestamp as 8-byte little-endian
+    salt = unix_timestamp_u64().to_le_bytes()  # 8 bytes
+
+    # 2. Get public key in SPKI DER format
+    public_key_der = signing_key.to_public_key_der()
+
+    # 3. Compute hash
+    hash_input = public_key_der + salt
+    digest = sha256(hash_input)
+
+    # 4. Sign the hash
+    signature = signing_key.sign(digest)
+
+    # 5. Format token
     return f"sha256.{base64(digest)}.{base64(salt)}.ed25519.{base64(signature)}"
 ```
 
 ### 4.5 Token Verification
 
+#### Nonce-based Token Verification
 ```python
-def verify_token(public_key, token, expected_salt):
+def verify_token_nonce(public_key, token, expected_nonce):
     # 1. Parse token
     hash_method, hash_b64, salt_b64, sign_method, sig_b64 = token.split('.')
-    
+
     # 2. Validate methods
     assert hash_method == "sha256"
     assert sign_method == public_key.signature_method()  # "ed25519" or "rsa-pss"
-    
-    # 3. Decode and validate salt
+
+    # 3. Decode and validate salt matches expected nonce
     salt = base64_decode(salt_b64)
-    assert salt == expected_salt
-    
-    # 4. Recompute hash
-    public_key_der = public_key.to_der()
+    assert salt == expected_nonce
+
+    # 4. Recompute hash using SPKI DER format
+    public_key_der = public_key.to_der()  # SPKI format
     expected_digest = sha256(public_key_der + salt)
-    
+
     # 5. Verify hash matches
     provided_digest = base64_decode(hash_b64)
     assert expected_digest == provided_digest
-    
+
+    # 6. Verify signature
+    signature = base64_decode(sig_b64)
+    public_key.verify(expected_digest, signature)
+```
+
+#### Timestamp-based Token Verification
+```python
+def verify_token_timestamp(public_key, token):
+    # 1. Parse token
+    hash_method, hash_b64, salt_b64, sign_method, sig_b64 = token.split('.')
+
+    # 2. Validate methods
+    assert hash_method == "sha256"
+    assert sign_method == public_key.signature_method()
+
+    # 3. Decode and validate timestamp
+    salt = base64_decode(salt_b64)
+    assert len(salt) == 8  # Must be exactly 8 bytes
+    timestamp = u64_from_le_bytes(salt)
+    now = unix_timestamp_u64()
+    assert now - timestamp <= 3600  # Token valid for 1 hour
+
+    # 4. Recompute hash using SPKI DER format
+    public_key_der = public_key.to_der()
+    expected_digest = sha256(public_key_der + salt)
+
+    # 5. Verify hash matches
+    provided_digest = base64_decode(hash_b64)
+    assert expected_digest == provided_digest
+
     # 6. Verify signature
     signature = base64_decode(sig_b64)
     public_key.verify(expected_digest, signature)
@@ -990,6 +1054,34 @@ Read buffer: 1 KiB (for file reading)
 Send chunk:  16 KiB (for data channel transmission)
 ```
 
+### 10.5 WebRTC ICE Configuration
+
+For WebRTC implementations, consider these ICE-related settings:
+
+**Ephemeral UDP Port Range:**
+On restricted environments (embedded devices, firewalls), limit the ephemeral UDP port range used by ICE candidates:
+
+```
+Recommended range: 50000-50100 (101 ports)
+Default range:     1-65535 (full ephemeral range)
+```
+
+Restricting the port range:
+- Makes firewall configuration simpler and more secure
+- Reduces the attack surface on embedded devices
+- Ensures compatibility with NAT and firewall rules
+
+**ICE Timeouts:**
+For reliable connections across varying network conditions:
+
+```
+ICE disconnected timeout: 25 seconds (extended from default)
+ICE candidate pool size:  2 (for faster connection setup)
+```
+
+**ICE Candidate Types:**
+LocalSend primarily uses host and server-reflexive (STUN) candidates. TURN relay is optional for enterprise environments.
+
 ---
 
 ## Appendix A: Test Vectors
@@ -1078,7 +1170,12 @@ MCowBQYDK2VwAyEAZmdXP230oqK92o65ra3XaF2F8r3+fK5DEBK4c40qVts=
 token = "sha256.RikOdJlAUTdMVFZjEk7Bft5G9cxnNBBLfgttPpyS2FY.hJCuZwAAAAA.ed25519.iNgHrRzX2Iel-Ozj47yn5o5v0cGY_BswK6JYqwY65j7Krpr43KanAaCrjUng7gHtc2pCcylUrKswR_rxyswhDA"
 
 # Token format: sha256.{hash}.{salt}.ed25519.{signature}
-# This should verify successfully against the public key
+# Salt is 8-byte little-endian timestamp: 0x67AE9084 = 1739456644
+
+# CRITICAL: Hash is computed over SPKI DER format, not raw key bytes
+# The PEM above decodes to SPKI DER (44 bytes for Ed25519):
+#   30 2a 30 05 06 03 2b 65 70 03 21 00 [32-byte raw key]
+# The hash input is: SPKI_DER || salt_bytes
 ```
 
 ### A.4 Chunk Processing Test
@@ -1233,10 +1330,23 @@ response = client.prepare_upload(
 - [Official Rust Implementation](https://github.com/localsend/localsend/tree/main/packages/core)
 - Source files analyzed:
   - `core/src/crypto/nonce.rs` - Nonce generation (32 bytes, valid 16-128)
-  - `core/src/crypto/token.rs` - Token format, Ed25519 & RSA-PSS support
+  - `core/src/crypto/token.rs` - Token format, Ed25519 & RSA-PSS support, SPKI DER key format, timestamp tokens
   - `core/src/crypto/cert.rs` - Certificate verification
   - `core/src/util/base64.rs` - Base64 encoding (URL_SAFE_NO_PAD)
+  - `core/src/util/time.rs` - Unix timestamp handling (little-endian u64)
   - `core/src/http/client/mod.rs` - HTTP v3 client implementation
   - `core/src/webrtc/signaling.rs` - WebSocket signaling (3 unit tests)
-  - `core/src/webrtc/webrtc.rs` - Data channel protocol, 16KB chunks (2 unit tests)
+  - `core/src/webrtc/webrtc.rs` - Data channel protocol, 16KB chunks, PIN handling (2 unit tests)
   - `core/src/main.rs` - Integration test examples
+
+---
+
+## Revision History
+
+| Date | Changes |
+|------|---------|
+| 2025-12-28 | Added SPKI DER format clarification for token hashing |
+| 2025-12-28 | Added timestamp-based tokens for discovery/HTTP |
+| 2025-12-28 | Added salt type distinction (nonces vs timestamps) |
+| 2025-12-28 | Added WebRTC ICE configuration section (port ranges, timeouts) |
+| 2025-12-28 | Updated test vectors with SPKI DER format notes |

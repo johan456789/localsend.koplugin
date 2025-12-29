@@ -56,15 +56,11 @@ if ! $PACKAGE_ONLY; then
     # Build for armv7 (32-bit ARM)
     echo "Building for armv7..."
     GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-armv7" .
-    echo "Compressing armv7 with UPX..."
-    upx --best "$BIN_DIR/localsend-armv7"
     echo "armv7: $(ls -lh "$BIN_DIR/localsend-armv7" | awk '{print $5}')"
 
     # Build for arm64 (64-bit ARM)
     echo "Building for arm64..."
     GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-arm64" .
-    echo "Compressing arm64 with UPX..."
-    upx --best "$BIN_DIR/localsend-arm64"
     echo "arm64: $(ls -lh "$BIN_DIR/localsend-arm64" | awk '{print $5}')"
 fi
 

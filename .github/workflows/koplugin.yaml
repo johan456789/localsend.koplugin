@@ -21,9 +21,6 @@ jobs:
           go-version: "1.23"
           cache: true
 
-      - name: Install UPX
-        run: sudo apt-get update && sudo apt-get install -y upx
-
       - name: Build ARM binaries
         run: |
           BUILD_DIR="build"
@@ -41,14 +38,10 @@ jobs:
           # Build for armv7 (32-bit ARM)
           echo "Building for armv7..."
           GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-armv7" .
-          echo "Compressing armv7 with UPX..."
-          upx --best "$BIN_DIR/localsend-armv7"
 
           # Build for arm64 (64-bit ARM)
           echo "Building for arm64..."
           GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-arm64" .
-          echo "Compressing arm64 with UPX..."
-          upx --best "$BIN_DIR/localsend-arm64"
 
           # Create armv7 zip
           echo "Creating armv7 zip..."

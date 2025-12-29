@@ -111,7 +111,7 @@ armv7 devices:
 - Kindle Colorsoft 32GB
 - Kobo Clara Colour
 - Kobo Forma
-- Kobo Libra Color
+- Kobo Libra Colour
 - Kobo Aura N236
 
 ### License

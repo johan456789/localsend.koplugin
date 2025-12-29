@@ -7,6 +7,7 @@ A KOReader plugin that enables receiving files from other devices using the [Loc
 ### Features
 
 - **Receive files wirelessly** - Accept files from phones, tablets, and computers running LocalSend
+- **WebRTC support** - Works with the latest LocalSend v3 protocol (opt-in)
 - **File type filtering** - Accept only specific file types (epub, pdf, mobi, etc.) or allow all
 - **PIN protection** - Optionally require a PIN code for incoming transfers
 - **HTTPS support** - Secure file transfers with TLS encryption
@@ -45,14 +46,16 @@ A KOReader plugin that enables receiving files from other devices using the [Loc
 | Allowed extensions  | Comma-separated list of accepted file types     |
 | PIN code            | Required PIN for incoming transfers (optional)  |
 | Use HTTPS           | Enable TLS encryption (recommended)             |
+| Use WebRTC          | Enable v3 protocol for latest LocalSend apps    |
 | Start with KOReader | Auto-start server on launch                     |
 
 ### How It Works
 
-This plugin uses a lightweight LocalSend CLI implementation as its backend. The CLI handles the LocalSend v2 protocol including:
+This plugin uses a lightweight LocalSend CLI implementation as its backend. The CLI handles both LocalSend v2 and v3 protocols including:
 
 - Multicast UDP device discovery
 - HTTPS/HTTP file transfer server
+- WebRTC signaling and data transfer (v3)
 - Certificate generation and management
 
 The KOReader frontend provides the user interface, settings management, and integrates with KOReader's file browser and notification system.
@@ -86,12 +89,12 @@ Tested on Kindle Paperwhite 12 (armv7). Should work on other devices supported b
 
 ### Which architecture do I need?
 
-| Architecture | Devices                                                                |
-| ------------ | ---------------------------------------------------------------------- |
-| **armv7**    | Kindle (firmware ≥5.16.3), Kobo (all models), reMarkable 2, PocketBook |
-| **arm64**    | reMarkable Paper Pro                                                   |
+| Architecture | Devices                                                |
+| ------------ | ------------------------------------------------------ |
+| **armv7**    | Kindle, Kobo (all models), reMarkable 2, PocketBook    |
+| **arm64**    | reMarkable Paper Pro                                   |
 
-> **Kindle users:** This plugin requires firmware 5.16.3 or newer (the same requirement as KOReader's `kindlehf` package). Older firmware uses a different floating-point ABI that isn't supported.
+> **Kindle users:** This plugin works best with firmware 5.16.3 or newer. Older firmware versions may also work as of v1.0.7 — give it a try!
 
 **Not sure?** Try armv7 first.
 
@@ -100,9 +103,16 @@ _Reported_ to work on:
 armv7 devices:
 
 - Kindle Paperwhite 12th Gen (PW6)
+- Kindle Paperwhite 11th Gen (PW5/SE)
 - Kindle Paperwhite 10th Gen (PW4)
+- Kindle Basic 11th Gen
+- Kindle Basic 10th Gen
 - Kindle Oasis
+- Kindle Colorsoft 32GB
 - Kobo Clara Colour
+- Kobo Forma
+- Kobo Libra Color
+- Kobo Aura N236
 
 ### License
 

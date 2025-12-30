@@ -30,13 +30,13 @@ const (
 
 // RTCReceiver handles receiving files over WebRTC.
 type RTCReceiver struct {
-	signaling  *signaling.SignalingClient
-	signingKey *crypto.SigningKey
-	peer       *PeerConnection
-	pin        string
+	signaling   *signaling.SignalingClient
+	signingKey  *crypto.SigningKey
+	peer        *PeerConnection
+	pin         string
 	pinAttempts int
-	saveDir    string
-	mu         sync.Mutex
+	saveDir     string
+	mu          sync.Mutex
 
 	// Handshake state
 	state       int
@@ -45,10 +45,10 @@ type RTCReceiver struct {
 	finalNonce  []byte
 
 	// Token verification (optional, requires PAIR flow for public key)
-	senderPublicKey     crypto.VerifyingKey // Set via PAIR flow
-	strictVerification  bool                 // If true, fail on invalid tokens
-	requirePairing      bool                 // If true, require PAIR before accepting files
-	pendingFiles        []RTCFileDto         // Files pending while waiting for PAIR response
+	senderPublicKey    crypto.VerifyingKey // Set via PAIR flow
+	strictVerification bool                // If true, fail on invalid tokens
+	requirePairing     bool                // If true, require PAIR before accepting files
+	pendingFiles       []RTCFileDto        // Files pending while waiting for PAIR response
 
 	// Files
 	files       []RTCFileDto
@@ -119,12 +119,12 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 	r.mu.Lock()
 	hadPreviousPeer := r.peer != nil
 	if r.peer != nil {
-		r.peer.Close()
+		_ = r.peer.Close()
 		r.peer = nil
 	}
 	// Close any open file writers
 	for _, f := range r.fileWriters {
-		f.Close()
+		_ = f.Close()
 	}
 	r.fileWriters = make(map[string]*os.File)
 	r.fileTokens = make(map[string]string)
@@ -162,12 +162,12 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 
 	answer, err := peer.AcceptOffer(sdp)
 	if err != nil {
-		peer.Close()
+		_ = peer.Close()
 		return fmt.Errorf("failed to accept offer: %w", err)
 	}
 
 	if err := r.signaling.SendAnswer(offer.SessionID, offer.Peer.ID, answer); err != nil {
-		peer.Close()
+		_ = peer.Close()
 		return fmt.Errorf("failed to send answer: %w", err)
 	}
 
@@ -194,7 +194,7 @@ func (r *RTCReceiver) handleMessage(data []byte) {
 			go func() {
 				time.Sleep(100 * time.Millisecond) // Brief delay to ensure response is sent
 				if peer != nil {
-					peer.Close()
+					_ = peer.Close()
 				}
 			}()
 		}
@@ -309,7 +309,7 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 			slog.Warn("Sender token verification failed", "error", err)
 			if r.strictVerification {
 				response := RTCTokenResponse{Status: "INVALID_SIGNATURE"}
-				r.sendJSON(response)
+				_ = r.sendJSON(response)
 				slog.Error("Rejecting sender due to invalid token signature")
 				return
 			}
@@ -335,10 +335,9 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 		response = RTCTokenResponse{Status: "OK", Token: token}
 	}
 
-	if err := r.sendJSON(response); err != nil {
-		slog.Error("Failed to send token response", "error", err)
-		return
-	}
+	_ = r.sendJSON(response)
+
+	slog.Info("Token exchange complete", "status", response.Status)
 
 	slog.Info("Token exchange complete", "status", response.Status)
 	if response.Status == "PIN_REQUIRED" {
@@ -361,7 +360,7 @@ func (r *RTCReceiver) handlePin(msg interface{}, msgType string) {
 	if pinMsg.Pin == r.pin {
 		slog.Info("PIN correct")
 		response := RTCPinReceivingResponse{Status: "OK"}
-		r.sendJSON(response)
+		_ = r.sendJSON(response)
 		r.state = stateWaitFileList
 		return
 	}
@@ -372,13 +371,13 @@ func (r *RTCReceiver) handlePin(msg interface{}, msgType string) {
 	if r.pinAttempts >= 3 {
 		slog.Error("Too many PIN attempts, closing connection")
 		response := RTCPinReceivingResponse{Status: "TOO_MANY_ATTEMPTS"}
-		r.sendJSON(response)
-		r.Close()
+		_ = r.sendJSON(response)
+		_ = r.Close()
 		return
 	}
 
 	response := RTCPinReceivingResponse{Status: "PIN_REQUIRED"}
-	r.sendJSON(response)
+	_ = r.sendJSON(response)
 }
 
 // handleFileList processes the file list from sender.
@@ -626,8 +625,8 @@ func (r *RTCReceiver) finishCurrentFile() {
 
 	// Close and sync the file
 	if f, ok := r.fileWriters[fileID]; ok {
-		f.Sync()
-		f.Close()
+		_ = f.Sync()
+		_ = f.Close()
 		delete(r.fileWriters, fileID)
 
 		// Verify checksum if provided
@@ -652,9 +651,9 @@ func (r *RTCReceiver) finishCurrentFile() {
 				success = false
 				msg := "checksum mismatch"
 				errorMsg = &msg
-				// Delete the corrupted file
+				// Delete corrupted file
 				if pathOk {
-					os.Remove(path)
+					_ = os.Remove(path)
 				}
 			} else if pathOk {
 				savedFilename := filepath.Base(path)
@@ -709,7 +708,7 @@ func (r *RTCReceiver) sendDelimiter() error {
 // Close closes the receiver.
 func (r *RTCReceiver) Close() error {
 	for _, f := range r.fileWriters {
-		f.Close()
+		_ = f.Close()
 	}
 	if r.peer != nil {
 		return r.peer.Close()

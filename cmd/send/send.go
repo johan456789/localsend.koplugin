@@ -36,7 +36,7 @@ var Cmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		files = append(files, args...)
 		if len(files) == 0 {
-			return errors.New("File is required")
+			return errors.New("file is required")
 		}
 
 		// WebRTC mode
@@ -65,7 +65,7 @@ var Cmd = &cobra.Command{
 
 		sender := localsend.NewFileSender(useDownloadAPI)
 		sender.SetPIN(pin)
-		sender.Init(&devinfo, supportHttps)
+		_ = sender.Init(&devinfo, supportHttps)
 
 		// try to add every file
 		for _, file := range files {
@@ -149,7 +149,7 @@ func sendViaWebRTC() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to signaling server: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	slog.Info("Connected to signaling server", "id", client.ClientID())
 
@@ -163,7 +163,7 @@ func sendViaWebRTC() error {
 		}
 		if finfo.IsDir() {
 			// Walk directory
-			filepath.Walk(file, func(path string, info os.FileInfo, err error) error {
+			_ = filepath.Walk(file, func(path string, info os.FileInfo, err error) error {
 				if err != nil || info.IsDir() {
 					return nil
 				}
@@ -190,18 +190,18 @@ func sendViaWebRTC() error {
 	// Send to target
 	slog.Info("Sending offer to target", "target", target)
 	if err := sender.Send(target, fileMetas); err != nil {
-		sender.Close()
+		_ = sender.Close()
 		return fmt.Errorf("failed to initiate transfer: %w", err)
 	}
 
 	// Send files
 	slog.Info("Sending files...")
 	if err := sender.SendFiles(); err != nil {
-		sender.Close()
+		_ = sender.Close()
 		return fmt.Errorf("failed to send files: %w", err)
 	}
 
-	sender.Close()
+	_ = sender.Close()
 	slog.Info("Transfer complete")
 	return nil
 }

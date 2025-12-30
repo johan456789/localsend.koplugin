@@ -48,7 +48,7 @@ func NewDiscoverier(devInfo models.DeviceInfo, supportHttps bool) (*Discoverier,
 		protocol = "https"
 	}
 
-	conn.SetReadBuffer(512)
+	_ = conn.SetReadBuffer(512)
 
 	return &Discoverier{
 		mcastConn: conn,
@@ -68,7 +68,7 @@ func (ma *Discoverier) Listen() error {
 	ticker := time.NewTicker(advInterval)
 	defer ticker.Stop()
 
-	ma.advertise()
+	_ = ma.advertise()
 
 	for {
 		select {
@@ -105,7 +105,7 @@ func (ma *Discoverier) advertise() error {
 func (ma *Discoverier) Shutdown() error {
 	// Close connection first to unblock any pending reads in readAndRegister(),
 	// allowing Listen() to return to the select and receive the stop signal
-	ma.mcastConn.Close()
+	_ = ma.mcastConn.Close()
 	ma.stop <- struct{}{}
 	return nil
 }
@@ -123,7 +123,7 @@ func (mcs *Discoverier) getCachedIPs() ([]net.IP, error) {
 }
 
 func (mcs *Discoverier) readAndRegister() error {
-	mcs.mcastConn.SetReadDeadline(time.Now().Add(1 * time.Second))
+	_ = mcs.mcastConn.SetReadDeadline(time.Now().Add(1 * time.Second))
 
 	buf := make([]byte, 512)
 
@@ -344,10 +344,10 @@ func (mcs *Discoverier) scanIP(ip string) {
 					Port:       53317,
 					Announce:   false,
 				})
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return // Found and registered
 			}
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 }

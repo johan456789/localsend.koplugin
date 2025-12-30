@@ -42,13 +42,13 @@ type FileMeta struct {
 
 // RTCSender handles sending files over WebRTC using official protocol.
 type RTCSender struct {
-	signaling  *signaling.SignalingClient
-	signingKey *crypto.SigningKey
-	peer       *PeerConnection
-	pin        string
-	sessionID  string
+	signaling   *signaling.SignalingClient
+	signingKey  *crypto.SigningKey
+	peer        *PeerConnection
+	pin         string
+	sessionID   string
 	pinAttempts int
-	mu         sync.Mutex
+	mu          sync.Mutex
 
 	// State machine
 	state       int
@@ -58,8 +58,8 @@ type RTCSender struct {
 
 	// Token verification (optional, requires PAIR flow for public key)
 	receiverPublicKey  crypto.VerifyingKey // Set via PAIR flow
-	strictVerification bool                 // If true, fail on invalid tokens
-	receiverToken      string               // Stored for verification
+	strictVerification bool                // If true, fail on invalid tokens
+	receiverToken      string              // Stored for verification
 
 	// Files
 	files       []FileMeta
@@ -67,10 +67,10 @@ type RTCSender struct {
 	acceptedIDs []string
 
 	// Channels
-	ready     chan struct{}
-	accepted  chan map[string]string // fileId -> token
-	declined  chan struct{}
-	errors    chan error
+	ready    chan struct{}
+	accepted chan map[string]string // fileId -> token
+	declined chan struct{}
+	errors   chan error
 }
 
 // NewRTCSender creates a new WebRTC sender.
@@ -125,7 +125,7 @@ func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 	// Create offer
 	sdp, err := peer.CreateOffer()
 	if err != nil {
-		peer.Close()
+		_ = peer.Close()
 		return fmt.Errorf("failed to create offer: %w", err)
 	}
 
@@ -142,7 +142,7 @@ func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 
 	// Send offer via signaling
 	if err := s.signaling.SendOffer(s.sessionID, target, sdp); err != nil {
-		peer.Close()
+		_ = peer.Close()
 		return fmt.Errorf("failed to send offer: %w", err)
 	}
 
@@ -152,12 +152,12 @@ func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 	select {
 	case answer := <-answerChan:
 		if err := peer.SetAnswer(answer); err != nil {
-			peer.Close()
+			_ = peer.Close()
 			return fmt.Errorf("failed to set answer: %w", err)
 		}
 		slog.Info("Received answer, waiting for connection")
 	case <-time.After(30 * time.Second):
-		peer.Close()
+		_ = peer.Close()
 		return fmt.Errorf("timeout waiting for answer")
 	}
 
@@ -170,13 +170,13 @@ func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 		}
 		slog.Info("Files accepted", "count", len(tokens))
 	case <-s.declined:
-		peer.Close()
+		_ = peer.Close()
 		return fmt.Errorf("transfer declined by receiver")
 	case err := <-s.errors:
-		peer.Close()
+		_ = peer.Close()
 		return err
 	case <-time.After(60 * time.Second):
-		peer.Close()
+		_ = peer.Close()
 		return fmt.Errorf("timeout waiting for file acceptance")
 	}
 
@@ -468,7 +468,7 @@ func (s *RTCSender) SendFiles() error {
 		// Send file header
 		header := RTCSendFileHeader{ID: id, Token: token}
 		if err := s.sendJSON(header); err != nil {
-			f.Close()
+			_ = f.Close()
 			return fmt.Errorf("failed to send file header: %w", err)
 		}
 
@@ -480,16 +480,16 @@ func (s *RTCSender) SendFiles() error {
 				break
 			}
 			if err != nil {
-				f.Close()
+				_ = f.Close()
 				return fmt.Errorf("failed to read file: %w", err)
 			}
 
 			if err := s.peer.Send(buf[:n]); err != nil {
-				f.Close()
+				_ = f.Close()
 				return fmt.Errorf("failed to send data: %w", err)
 			}
 		}
-		f.Close()
+		_ = f.Close()
 
 		slog.Info("File sent", "id", id, "name", file.FileName)
 	}

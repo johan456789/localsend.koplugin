@@ -24,7 +24,7 @@ func FetchX509Cert(addr string) ([]*x509.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	return conn.ConnectionState().PeerCertificates, nil
 }

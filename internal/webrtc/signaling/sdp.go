@@ -35,7 +35,7 @@ func DecompressSDP(compressed string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	result, err := io.ReadAll(r)
 	if err != nil {
@@ -44,4 +44,3 @@ func DecompressSDP(compressed string) (string, error) {
 
 	return string(result), nil
 }
-

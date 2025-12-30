@@ -128,7 +128,7 @@ func NewPeerConnection(config PeerConfig) (*PeerConnection, error) {
 	if config.IsInitiator {
 		dc, err := pc.CreateDataChannel("data", nil)
 		if err != nil {
-			pc.Close()
+			_ = pc.Close()
 			return nil, fmt.Errorf("failed to create data channel: %w", err)
 		}
 		p.setupDataChannel(dc)
@@ -319,7 +319,7 @@ func (p *PeerConnection) Close() error {
 	// Close the data channel first if it exists
 	p.mu.Lock()
 	if p.dataChannel != nil {
-		p.dataChannel.Close()
+		_ = p.dataChannel.Close()
 		p.dataChannel = nil
 	}
 	p.mu.Unlock()

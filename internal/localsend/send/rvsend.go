@@ -153,7 +153,7 @@ func (rs *ReverseSender) Start() error {
 			})
 		}
 
-		fmt.Fprintf(os.Stdout, "Visit %s://%s to download files\n", scheme, host)
+		_, _ = fmt.Fprintf(os.Stdout, "Visit %s://%s to download files\n", scheme, host)
 	}
 
 	if rs.https {

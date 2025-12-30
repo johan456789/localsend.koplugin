@@ -35,7 +35,7 @@ func SHA256ofFile(fpath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer fd.Close()
+	defer func() { _ = fd.Close() }()
 
 	hasher := sha256.New()
 	_, err = io.Copy(hasher, fd)

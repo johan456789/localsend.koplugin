@@ -107,7 +107,7 @@ func (s *TrustedDeviceStore) load() error {
 		}
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	return json.NewDecoder(file).Decode(&s.devices)
 }
@@ -122,7 +122,7 @@ func (s *TrustedDeviceStore) save() error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")

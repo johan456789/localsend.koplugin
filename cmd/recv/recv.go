@@ -82,7 +82,7 @@ var Cmd = &cobra.Command{
 
 		<-utils.WaitForSignal()
 
-		recver.Stop()
+		_ = recver.Stop()
 		wg.Wait()
 	},
 }
@@ -116,13 +116,13 @@ func startWebRTCReceiver(deviceName, saveDir, pin string, allowedExts []string, 
 		slog.Error("Failed to connect to signaling server", "error", err)
 		return
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	slog.Info("WebRTC receiver listening", "id", client.ClientID())
 
 	// Create receiver
 	receiver := transfer.NewRTCReceiver(client, key, pin, saveDir)
-	defer receiver.Close()
+	defer func() { _ = receiver.Close() }()
 
 	// Set up file received handler for transfer logging
 	if logTransfer != nil {

@@ -88,13 +88,13 @@ func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) 
 		slog.Error("Failed to open transfer log", "error", err)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
-	f.Write(data)
-	f.WriteString("\n")
+	_, _ = f.Write(data)
+	_, _ = f.WriteString("\n")
 }
 
-// SetAllowedExtensions sets the list of allowed file extensions. 
+// SetAllowedExtensions sets the list of allowed file extensions.
 // Extensions should be lowercase without the leading dot (e.g., "pdf", "epub").
 // If empty or nil, all extensions are accepted.
 func (fr *FileReceiver) SetAllowedExtensions(extensions []string) {
@@ -180,13 +180,13 @@ func (fr *FileReceiver) Start() error {
 	server.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
 	server.Post(constants.RegisterPathV3, fr.registerV3Handler)
 	server.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
-	server.Post(constants.UploadPathV3, fr.uploadHandler)      // Same logic as v2
-	server.Post(constants.CancelPathV3, fr.cancelHandler)      // Same logic as v2
+	server.Post(constants.UploadPathV3, fr.uploadHandler) // Same logic as v2
+	server.Post(constants.CancelPathV3, fr.cancelHandler) // Same logic as v2
 	server.Get(constants.InfoPathV3, fr.infoV3Handler)
 
 	slog.Info("Waiting for files (Ctrl-C to terminate)")
 
-	go fr.advertise() // let others know we are here
+	go func() { _ = fr.advertise() }() // let others know we are here
 
 	if fr.supportHttps {
 		return fr.webServer.ListenTLSWithCertificate("0.0.0.0:53317", fr.cert)
@@ -202,6 +202,6 @@ func (fr *FileReceiver) advertise() error {
 func (fr *FileReceiver) Stop() error {
 	slog.Info("Stop receiving")
 
-	fr.discoverier.Shutdown()
+	_ = fr.discoverier.Shutdown()
 	return fr.webServer.Shutdown()
 }

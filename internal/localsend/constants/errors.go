@@ -5,17 +5,17 @@ import (
 )
 
 var (
-	ErrFinished        = errors.New("No file transfer needed")
-	ErrInvalidBody     = errors.New("Invalid body")
+	ErrFinished        = errors.New("no file transfer needed")
+	ErrInvalidBody     = errors.New("invalid body")
 	ErrRejected        = errors.New("Rejected")
-	ErrInvalidPIN      = errors.New("Invalid PIN")
-	ErrBlockedByOthers = errors.New("Block by another session")
-	ErrUnknown         = errors.New("Unknown error")
-	ErrTooManyReq      = errors.New("Too many request")
-	ErrFileIO          = errors.New("File IO")
+	ErrInvalidPIN      = errors.New("invalid PIN")
+	ErrBlockedByOthers = errors.New("block by another session")
+	ErrUnknown         = errors.New("unknown error")
+	ErrTooManyReq      = errors.New("too many request")
+	ErrFileIO          = errors.New("file IO")
 	ErrChecksum        = errors.New("sha256 mismatch")
-	ErrFingerprint     = errors.New("Fingerprint mismatch")
-	ErrNotFound        = errors.New("Not Found")
+	ErrFingerprint     = errors.New("fingerprint mismatch")
+	ErrNotFound        = errors.New("not found")
 )
 
 func ParseError(status int) error {

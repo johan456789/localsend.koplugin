@@ -54,7 +54,7 @@ var Cmd = &cobra.Command{
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				scanner.Listen()
+				_ = scanner.Listen()
 			}()
 		}
 
@@ -76,23 +76,23 @@ var Cmd = &cobra.Command{
 
 		<-ctx.Done()
 		slog.Info("Stop Scanning")
-		scanner.Shutdown()
+		_ = scanner.Shutdown()
 		wg.Wait()
 
 		devlist := scanner.GetAllDiscovered()
 
 		if len(devlist) > 0 || len(signalingPeers) > 0 {
-			fmt.Fprintf(os.Stdout, "Found Devices: \n")
-			
+			_, _ = fmt.Fprintf(os.Stdout, "Found Devices: \n")
+
 			// LAN devices
 			for ip, info := range devlist {
-				fmt.Fprintf(os.Stdout, "\t[LAN] Name: %s, Version: %s, Address: %s:%d, Protocol: %s\n",
+				_, _ = fmt.Fprintf(os.Stdout, "\t[LAN] Name: %s, Version: %s, Address: %s:%d, Protocol: %s\n",
 					info.Alias, info.Version, ip, info.Port, info.Protocol)
 			}
-			
+
 			// WebRTC signaling peers
 			for _, peer := range signalingPeers {
-				fmt.Fprintf(os.Stdout, "\t[WebRTC] Name: %s, Version: %s, ID: %s\n",
+				_, _ = fmt.Fprintf(os.Stdout, "\t[WebRTC] Name: %s, Version: %s, ID: %s\n",
 					peer.Alias, peer.Version, peer.ID)
 			}
 		} else {
@@ -130,7 +130,7 @@ func discoverViaSignaling(ctx context.Context) []signaling.ClientInfo {
 		slog.Error("Failed to connect to signaling server", "error", err)
 		return nil
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	slog.Info("Connected to signaling server", "id", client.ClientID())
 
@@ -150,4 +150,3 @@ func init() {
 	Cmd.PersistentFlags().BoolVarP(&webrtc, "webrtc", "w", false, "discover peers via WebRTC signaling server")
 	Cmd.PersistentFlags().BoolVarP(&lan, "lan", "n", false, "perform LAN discovery (mDNS/UDP)")
 }
-

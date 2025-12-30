@@ -125,7 +125,7 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	if err != nil {
 		return "", lserrors.ErrFileIO
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	writer := io.MultiWriter(file, hasher)
 	_, err = io.Copy(writer, fileData)

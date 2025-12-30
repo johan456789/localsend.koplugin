@@ -30,7 +30,7 @@ const (
 // SignalingClient manages connection to the LocalSend signaling server.
 type SignalingClient struct {
 	conn     *websocket.Conn
-	client   ClientInfo             // Our info with server-assigned ID
+	client   ClientInfo // Our info with server-assigned ID
 	peers    map[uuid.UUID]ClientInfo
 	peersMu  sync.RWMutex
 	msgChan  chan WsServerMessage
@@ -88,7 +88,7 @@ func Connect(uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
 
 	// Wait for HELLO message
 	if err := client.waitForHello(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 
@@ -104,8 +104,8 @@ func Connect(uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
 
 // waitForHello waits for the initial HELLO message from the server.
 func (c *SignalingClient) waitForHello() error {
-	c.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-	defer c.conn.SetReadDeadline(time.Time{})
+	_ = c.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
 
 	_, msgBytes, err := c.conn.ReadMessage()
 	if err != nil {
@@ -183,7 +183,7 @@ func (c *SignalingClient) writeLoop() {
 	for {
 		select {
 		case msg := <-c.sendChan:
-			c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			if err := c.conn.WriteJSON(msg); err != nil {
 				slog.Warn("Failed to send message", "error", err)
 			}
@@ -201,7 +201,7 @@ func (c *SignalingClient) pingLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				slog.Warn("Failed to send ping", "error", err)
 				return

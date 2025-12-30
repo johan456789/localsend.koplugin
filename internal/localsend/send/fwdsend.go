@@ -144,7 +144,7 @@ func (fsp *ForwardSender) sendFile(fid string, ftoken string) error {
 	if err != nil {
 		return err
 	}
-	defer fd.Close()
+	defer func() { _ = fd.Close() }()
 
 	// send file
 	status, _, errs := agent.InsecureSkipVerify().BodyStream(fd, int(fmeta.Size)).Bytes()

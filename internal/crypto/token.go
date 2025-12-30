@@ -207,13 +207,6 @@ func ExtractSignatureMethod(token string) string {
 	return ""
 }
 
-// createDigest creates SHA256(publicKey || salt).
-// Deprecated: use createDigestFromDER which uses SPKI format required by protocol.
-func createDigest(publicKey ed25519.PublicKey, salt []byte) []byte {
-	pubKeyDER, _ := x509.MarshalPKIXPublicKey(publicKey)
-	return createDigestFromDER(pubKeyDER, salt)
-}
-
 // createDigestFromDER creates SHA256(publicKeyDER || salt).
 func createDigestFromDER(publicKeyDER, salt []byte) []byte {
 	h := sha256.New()

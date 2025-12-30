@@ -469,11 +469,56 @@ function LocalSend:onToggleLocalSend()
     end
 end
 
+function LocalSend:getPickerStartPath(path)
+    -- Only apply workaround if home folder lock is enabled
+    if not G_reader_settings:isTrue("lock_home_folder") then
+        return path
+    end
+
+    -- Check if save_dir is at or inside the locked home folder
+    local home_dir = G_reader_settings:readSetting("home_dir")
+    if home_dir then
+        -- Normalize paths (remove trailing slashes for comparison)
+        local norm_path = path:gsub("/$", "")
+        local norm_home = home_dir:gsub("/$", "")
+        -- Escape Lua pattern special characters for matching
+        local escaped_home = norm_home:gsub("([%.%-%+%[%]%(%)%$%^%%%?%*])", "%%%1")
+        -- If save_dir doesn't start with home_dir, no workaround needed
+        if norm_path ~= norm_home and not norm_path:match("^" .. escaped_home .. "/") then
+            return path
+        end
+    end
+
+    -- If already at root, stay there
+    if path == "/" then
+        return path
+    end
+
+    -- Remove trailing slash if present (except for root)
+    path = path:gsub("/$", "")
+
+    -- Get parent directory
+    local parent = path:match("^(.+)/[^/]+$")
+    if not parent or parent == "" then
+        -- Path is like "/foo" so parent would be root
+        parent = "/"
+    end
+
+    -- Check if parent directory exists and is accessible
+    if util.pathExists(parent) then
+        return parent
+    end
+
+    -- Parent doesn't exist or isn't accessible, fall back to original path
+    return path
+end
+
 function LocalSend:showSaveDirPicker(touchmenu_instance)
+    local start_path = self:getPickerStartPath(self.save_dir)
     local path_chooser = PathChooser:new{
         select_directory = true,
         select_file = false,
-        path = self.save_dir,
+        path = start_path,
         onConfirm = function(path)
             local valid, err = self:validateSaveDir(path)
             if valid then

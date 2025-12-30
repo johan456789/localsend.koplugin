@@ -1,9 +1,14 @@
 # LocalSend Protocol v3 (Unofficial)
 
-Based on the official Rust implementation at [localsend/core](https://github.com/localsend/localsend).
+Based on the official implementations:
+- **Rust Core**: [localsend/localsend/packages/core](https://github.com/localsend/localsend/tree/main/packages/core) (primary reference)
+- **Web Client**: [localsend/localsend/packages/web](https://github.com/localsend/localsend/tree/main/packages/web) (TypeScript/Nuxt)
 
 > [!NOTE]
-> This specification extends [Protocol v2.1](./localsend_protocol_v2_1.md) with WebRTC support and HTTP v3 endpoints. The v2.1 protocol remains valid for legacy/LAN-only communication.
+> This specification extends [Protocol v2.1](https://github.com/localsend/protocol) with WebRTC support and HTTP v3 endpoints. The v2.1 protocol remains valid for legacy/LAN-only communication.
+
+> [!IMPORTANT]
+> **Version Naming**: While HTTP endpoints use `/api/localsend/v3/*`, the `version` field in client info messages is `"2.3"`. This document refers to the protocol as "v3" for clarity regarding the endpoint version.
 
 ---
 
@@ -46,6 +51,7 @@ Based on the official Rust implementation at [localsend/core](https://github.com
   - [8.6 Message Types](#86-message-types)
 - [9. Enums](#9-enums)
 - [10. Implementation Notes](#10-implementation-notes)
+- [Appendix C: Implementation Differences (Rust vs Web)](#appendix-c-implementation-differences-rust-vs-web)
 
 ---
 
@@ -217,6 +223,9 @@ def generate_token_timestamp(signing_key):
 ```
 
 ### 4.5 Token Verification
+
+> [!WARNING]
+> **Implementation Note (as of 2024-12-30):** The Rust core fully implements nonce-based token verification for WebRTC. The web client only verifies timestamp-based tokens for discovery; it does **not** verify the remote peer's nonce-based token during WebRTC handshake. See [Appendix C](#appendix-c-implementation-differences-rust-vs-web) for details.
 
 #### Nonce-based Token Verification
 ```python
@@ -616,7 +625,30 @@ Messages sent from client to server.
 }
 ```
 
-### 7.4 SDP Encoding
+### 7.4 Keep-Alive
+
+Clients should send periodic keep-alive messages to prevent WebSocket timeout:
+
+| Implementation | Method | Interval |
+|----------------|--------|----------|
+| Rust Core | WebSocket Ping frame (`Message::Ping`) | 120 seconds |
+| Web Client | Empty text message (`""`) | 120 seconds |
+
+Both methods are acceptable; the signaling server handles both.
+
+**Token Refresh (Web-specific):**
+
+The web client also refreshes its identity token periodically to handle long-running browser sessions:
+
+```javascript
+// Every 30 minutes, generate new token and send UPDATE
+setInterval(async () => {
+  const info = await generateNewInfo();  // New token with fresh timestamp
+  socket.send(JSON.stringify({ type: "UPDATE", info }));
+}, 30 * 60 * 1000);
+```
+
+### 7.5 SDP Encoding
 
 SDP strings are compressed and encoded:
 
@@ -1036,14 +1068,29 @@ Two caches are maintained:
 
 ### 10.3 Buffer Management
 
-Before sending over WebRTC data channel:
+Before sending over WebRTC data channel, implementations should handle back-pressure:
 
+| Implementation | Buffer Check | Polling Interval |
+|----------------|--------------|------------------|
+| Rust Core | Wait until `buffered_amount() == 0` | 100ms |
+| Web Client | Wait while `bufferedAmount > 1 MiB` | 50ms |
+
+**Rust approach (wait for empty):**
 ```python
-# Wait for buffer to empty before sending delimiter
 def wait_buffer_empty(data_channel):
     while data_channel.buffered_amount() != 0:
         sleep(100ms)
 ```
+
+**Web approach (threshold-based):**
+```javascript
+const MAX_BUFFERED_AMOUNT = 1024 * 1024;  // 1 MiB
+while (dataChannel.bufferedAmount > MAX_BUFFERED_AMOUNT) {
+    await sleep(50);
+}
+```
+
+Both approaches work; the web approach allows more pipelining while the Rust approach is more conservative.
 
 ### 10.4 File Read Chunk Size
 
@@ -1081,6 +1128,38 @@ ICE candidate pool size:  2 (for faster connection setup)
 
 **ICE Candidate Types:**
 LocalSend primarily uses host and server-reflexive (STUN) candidates. TURN relay is optional for enterprise environments.
+
+### 10.6 ICE Gathering Strategy
+
+Both official implementations use **complete ICE gathering** (not trickle ICE):
+
+```python
+# Wait for all ICE candidates before sending SDP
+offer = peer_connection.create_offer()
+peer_connection.set_local_description(offer)
+await gathering_complete_promise()  # Block until complete
+send_sdp(peer_connection.local_description.sdp)
+```
+
+This simplifies the signaling protocol by including all ICE candidates in a single SDP message, at the cost of slightly longer connection setup time.
+
+### 10.7 Session and File Token Generation
+
+| Token Type | Rust Core | Web Client |
+|------------|-----------|------------|
+| Session ID | UUID v4 (`Uuid::new_v4()`) | Random alphanumeric (`Math.random().toString(36).substring(2,15)`) |
+| File Token | UUID v4 | Random decimal (`Math.random().toString()`) |
+
+For new implementations, UUID v4 is recommended for stronger uniqueness guarantees.
+
+### 10.8 Data Channel JavaScript Configuration
+
+For JavaScript/TypeScript implementations, set the binary type explicitly:
+
+```javascript
+const dataChannel = peerConnection.createDataChannel("data");
+dataChannel.binaryType = "arraybuffer";  // Required for proper binary handling
+```
 
 ---
 
@@ -1324,11 +1403,178 @@ response = client.prepare_upload(
 
 ---
 
+## Appendix C: Implementation Differences (Rust vs Web)
+
+> **Analysis Date:** 2024-12-30
+>
+> This appendix documents behavioral differences between the two official LocalSend implementations. Both are interoperable, but implementers should be aware of these variations.
+
+### C.1 Summary Table
+
+| Feature | Rust Core | Web Client | Interop Impact |
+|---------|-----------|------------|----------------|
+| Token verification (WebRTC) | Full verification with `verify_token_nonce()` | Token received but NOT verified | Web trusts unverified tokens |
+| File transfer pipelining | Sequential (waits for status) | Pipelined (sends next header before status) | Both work, different ordering |
+| Session ID format | UUID v4 | `Math.random().toString(36)` | Both unique, different entropy |
+| File token format | UUID v4 | `Math.random().toString()` | Both work |
+| Keep-alive method | WebSocket Ping frame | Empty text message `""` | Both accepted by server |
+| Back-pressure wait | 100ms, until buffer=0 | 50ms, until buffer<1MiB | Both work |
+| PAIR flow | Full implementation with user prompt | Auto-declines, waits for retry | Interoperable |
+| Token refresh | Not implemented | Every 30 minutes | Web-specific for long sessions |
+
+### C.2 Token Verification Gap
+
+**This is the most significant difference between implementations.**
+
+#### Rust Core (Full Verification)
+```rust
+// webrtc.rs:276-285
+if let Some(expecting_public_key) = expecting_public_key {
+    if !crypto::token::verify_token_nonce(
+        &*expecting_public_key,
+        &token,
+        &nonce,
+    ) {
+        return Err(anyhow::anyhow!("Invalid token signature or nonce"));
+    }
+}
+```
+
+The Rust implementation:
+1. Parses the token's 5 components
+2. Validates hash method is `sha256`
+3. Validates signature method matches key type
+4. Verifies the nonce in the token matches the expected combined nonce
+5. Recomputes the hash over `SPKI_DER || nonce`
+6. Verifies the signature over the hash
+
+#### Web Client (No Verification)
+```typescript
+// webrtc.ts:105-141
+const tokenResponse = JSON.parse(tokenResponseRaw) as RTCTokenResponse;
+if (tokenResponse.status === "INVALID_SIGNATURE") {
+    console.error("Invalid signature");
+    return;
+}
+// Token is stored but NEVER verified
+console.log(`Received token: ${remoteToken}`);
+```
+
+The web client:
+1. Receives the token
+2. Checks only the status field
+3. Logs the token but does not verify it
+
+**Security Implications:**
+- The WebRTC data channel is encrypted via DTLS, so confidentiality is maintained
+- The gap affects identity verification, not data protection
+- A malicious actor who can intercept signaling could potentially impersonate a peer to a web client
+- Rust clients verify tokens, so they're protected even when communicating with web clients
+
+### C.3 File Transfer Flow Differences
+
+#### Rust Core (Sequential)
+```
+For each file:
+  1. Send RTCSendFileHeaderRequest
+  2. Send file data chunks
+  3. Wait for RTCSendFileResponse
+  4. Proceed to next file
+```
+
+#### Web Client (Pipelined)
+```
+For each file:
+  1. Send RTCSendFileHeaderRequest
+  2. Send file data chunks
+  3. Send NEXT file's RTCSendFileHeaderRequest (or delimiter)
+  4. Wait for RTCSendFileResponse for previous file
+```
+
+The web client sends the next file's header **before** receiving the status for the current file. This creates slight message reordering but improves throughput on high-latency connections.
+
+Both approaches are interoperable because:
+- The receiver processes messages in order
+- Headers and data are clearly distinguishable (string vs binary)
+- The delimiter marks the true end of transfers
+
+### C.4 PAIR Flow Handling
+
+The PAIR flow allows devices to establish trusted relationships for future connections.
+
+#### Rust Core
+```rust
+RTCFileListResponse::Pair { public_key } => {
+    // 1. Verify the token with provided public key
+    // 2. Prompt user for confirmation via channel
+    // 3. Send RTCPairResponse::Ok or RTCPairResponse::PairDeclined
+    // 4. Wait for new RTCFileListResponse
+}
+```
+
+#### Web Client
+```typescript
+if (fileListResponse.status === "PAIR") {
+    console.log("Pairing required. Reject...");
+    dataChannel.send(JSON.stringify({ status: "PAIR_DECLINED" }));
+    // Wait for sender to retry with normal file list
+    fileListResponseRaw = await receiveStringFromChunks(dataChannelStream);
+}
+```
+
+The web client automatically declines pairing requests. This is intentional—browser sessions are typically ephemeral, so persistent pairing makes less sense.
+
+### C.5 Crypto Algorithm Selection
+
+Both implementations support Ed25519 and RSA-PSS, but with different defaults:
+
+| Implementation | Default | Fallback |
+|----------------|---------|----------|
+| Rust Core | Ed25519 | N/A (fails if unsupported) |
+| Web Client | RSA-PSS | Ed25519 (if browser supports) |
+
+The web client defaults to RSA-PSS because older Chrome versions don't support Ed25519 in WebCrypto. It attempts to upgrade to Ed25519 on startup:
+
+```typescript
+export async function upgradeToEd25519IfSupported(): Promise<void> {
+    try {
+        await window.crypto.subtle.generateKey(
+            { name: "Ed25519" }, true, ["sign", "verify"]
+        );
+        selectedParams = cryptoParams.ed25519;
+    } catch (e) {
+        console.warn("Ed25519 not supported.");
+    }
+}
+```
+
+### C.6 Protocol Version Field
+
+Both implementations use `"2.3"` as the version string in client info:
+
+```json
+{
+    "alias": "Device Name",
+    "version": "2.3",
+    "deviceModel": "...",
+    "deviceType": "desktop",
+    "token": "..."
+}
+```
+
+This document refers to the protocol as "v3" because:
+- HTTP endpoints use `/api/localsend/v3/*`
+- This distinguishes it from the v2.1 LAN-only protocol
+- The `version` field represents client capability, not protocol version
+
+---
+
 ## References
 
-- [LocalSend Protocol v2.1](./localsend_protocol_v2_1.md)
+- [LocalSend Protocol v2.1 (Official)](https://github.com/localsend/protocol)
 - [Official Rust Implementation](https://github.com/localsend/localsend/tree/main/packages/core)
-- Source files analyzed:
+- [Official Web Implementation](https://github.com/localsend/localsend/tree/main/packages/web)
+- Rust source files analyzed:
   - `core/src/crypto/nonce.rs` - Nonce generation (32 bytes, valid 16-128)
   - `core/src/crypto/token.rs` - Token format, Ed25519 & RSA-PSS support, SPKI DER key format, timestamp tokens
   - `core/src/crypto/cert.rs` - Certificate verification
@@ -1338,6 +1584,12 @@ response = client.prepare_upload(
   - `core/src/webrtc/signaling.rs` - WebSocket signaling (3 unit tests)
   - `core/src/webrtc/webrtc.rs` - Data channel protocol, 16KB chunks, PIN handling (2 unit tests)
   - `core/src/main.rs` - Integration test examples
+- Web source files analyzed (as of 2024-12-30):
+  - `web/services/signaling.ts` - WebSocket signaling, keep-alive, message types
+  - `web/services/webrtc.ts` - Data channel protocol, file transfer, PIN handling
+  - `web/services/crypto.ts` - Token generation/verification, Ed25519/RSA-PSS support
+  - `web/utils/base64.ts` - URL-safe base64 encoding
+  - `web/utils/nonce.ts` - Nonce generation and validation
 
 ---
 
@@ -1345,8 +1597,15 @@ response = client.prepare_upload(
 
 | Date | Changes |
 |------|---------|
-| 2025-12-28 | Added SPKI DER format clarification for token hashing |
-| 2025-12-28 | Added timestamp-based tokens for discovery/HTTP |
-| 2025-12-28 | Added salt type distinction (nonces vs timestamps) |
-| 2025-12-28 | Added WebRTC ICE configuration section (port ranges, timeouts) |
-| 2025-12-28 | Updated test vectors with SPKI DER format notes |
+| 2024-12-30 | Added Appendix C: Implementation Differences (Rust vs Web) |
+| 2024-12-30 | Added Section 7.4: Keep-Alive mechanism (ping, token refresh) |
+| 2024-12-30 | Added Sections 10.6-10.8: ICE gathering, token generation, JS config |
+| 2024-12-30 | Updated Section 10.3: Buffer management with implementation comparison |
+| 2024-12-30 | Added warning note to Section 4.5 about token verification gap |
+| 2024-12-30 | Updated header to reference both Rust and Web implementations |
+| 2024-12-30 | Added version naming clarification (v3 endpoints vs "2.3" version field) |
+| 2024-12-28 | Added SPKI DER format clarification for token hashing |
+| 2024-12-28 | Added timestamp-based tokens for discovery/HTTP |
+| 2024-12-28 | Added salt type distinction (nonces vs timestamps) |
+| 2024-12-28 | Added WebRTC ICE configuration section (port ranges, timeouts) |
+| 2024-12-28 | Updated test vectors with SPKI DER format notes |

@@ -56,6 +56,11 @@ type RTCSender struct {
 	remoteNonce []byte
 	finalNonce  []byte
 
+	// Token verification (optional, requires PAIR flow for public key)
+	receiverPublicKey  crypto.VerifyingKey // Set via PAIR flow
+	strictVerification bool                 // If true, fail on invalid tokens
+	receiverToken      string               // Stored for verification
+
 	// Files
 	files       []FileMeta
 	fileTokens  map[string]string // fileId -> token from receiver
@@ -82,6 +87,18 @@ func NewRTCSender(sig *signaling.SignalingClient, key *crypto.SigningKey, pin st
 		declined:   make(chan struct{}, 1),
 		errors:     make(chan error, 1),
 	}
+}
+
+// SetReceiverPublicKey sets the receiver's public key for token verification.
+// This is typically obtained through the PAIR flow.
+func (s *RTCSender) SetReceiverPublicKey(key crypto.VerifyingKey) {
+	s.receiverPublicKey = key
+}
+
+// SetStrictVerification enables strict token verification mode.
+// When enabled, transfers will fail if token verification fails.
+func (s *RTCSender) SetStrictVerification(strict bool) {
+	s.strictVerification = strict
 }
 
 // Send initiates a file transfer to the target peer.
@@ -260,9 +277,14 @@ func (s *RTCSender) handleNonceResponse(msg interface{}, msgType string) {
 
 // handleTokenResponse processes the token response from receiver.
 func (s *RTCSender) handleTokenResponse(msg interface{}, msgType string, data []byte) {
-	// Status responses: OK, PIN_REQUIRED, TOO_MANY_ATTEMPTS
+	// Status responses: OK, PIN_REQUIRED, TOO_MANY_ATTEMPTS, INVALID_SIGNATURE
 	if msgType == "status_TOO_MANY_ATTEMPTS" {
 		s.errors <- fmt.Errorf("too many PIN attempts, receiver blocked transfer")
+		return
+	}
+
+	if msgType == "status_INVALID_SIGNATURE" {
+		s.errors <- fmt.Errorf("receiver rejected our token signature")
 		return
 	}
 
@@ -278,6 +300,24 @@ func (s *RTCSender) handleTokenResponse(msg interface{}, msgType string, data []
 	}
 
 	slog.Info("Token response received", "status", tokenResp.Status)
+
+	// Store receiver's token for verification
+	s.receiverToken = tokenResp.Token
+
+	// Optionally verify receiver's token if we have their public key
+	if s.receiverPublicKey != nil && tokenResp.Token != "" {
+		if err := crypto.VerifyTokenNonce(s.receiverPublicKey, tokenResp.Token, s.finalNonce); err != nil {
+			slog.Warn("Receiver token verification failed", "error", err)
+			if s.strictVerification {
+				s.errors <- fmt.Errorf("receiver token verification failed: %w", err)
+				return
+			}
+			// In lenient mode, log warning but continue
+			slog.Warn("Continuing despite token verification failure (strict mode disabled)")
+		} else {
+			slog.Info("Receiver token verified successfully")
+		}
+	}
 
 	if tokenResp.Status == "PIN_REQUIRED" {
 		if s.pin == "" {
@@ -344,7 +384,7 @@ func (s *RTCSender) sendFileList() {
 
 // handleFileAcceptance processes the file acceptance from receiver.
 func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []byte) {
-	if msgType != "status_OK" && msgType != "status_DECLINED" {
+	if msgType != "status_OK" && msgType != "status_DECLINED" && msgType != "status_PAIR" {
 		slog.Warn("Expected file acceptance, got", "type", msgType)
 		return
 	}
@@ -355,21 +395,46 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 		return
 	}
 
-	if resp.Status == "DECLINED" {
+	switch resp.Status {
+	case "DECLINED":
 		select {
 		case s.declined <- struct{}{}:
 		default:
 		}
 		return
-	}
 
-	// Files accepted
-	select {
-	case s.accepted <- resp.Files:
-	default:
-	}
+	case "PAIR":
+		// Receiver wants to pair - they've sent their public key
+		slog.Info("Receiver requested pairing", "hasPublicKey", resp.PublicKey != "")
 
-	s.state = senderStateSendingFiles
+		// For now, we auto-accept pairing by sending our public key back
+		// TODO: Add user confirmation callback (s.onPairRequest)
+		pairResponse := RTCPairResponse{
+			Status:    "OK",
+			PublicKey: s.signingKey.PublicKeyPEM(),
+		}
+		if err := s.sendJSONBinary(pairResponse); err != nil {
+			slog.Error("Failed to send PAIR response", "error", err)
+			return
+		}
+		if err := s.sendDelimiter(); err != nil {
+			slog.Error("Failed to send delimiter after PAIR response", "error", err)
+			return
+		}
+		slog.Info("Sent PAIR response with our public key")
+
+		// After PAIR, receiver will send a new file list response
+		// We stay in senderStateWaitFileAccept to receive it
+		return
+
+	case "OK":
+		// Files accepted
+		select {
+		case s.accepted <- resp.Files:
+		default:
+		}
+		s.state = senderStateSendingFiles
+	}
 }
 
 // SendFiles sends all accepted files.

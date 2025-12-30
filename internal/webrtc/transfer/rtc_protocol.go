@@ -62,6 +62,13 @@ type RTCFileListResponse struct {
 	PublicKey string            `json:"publicKey,omitempty"` // for PAIR
 }
 
+// RTCPairResponse is sent during the PAIR flow.
+// Used when responding to a PAIR request from the other peer.
+type RTCPairResponse struct {
+	Status    string `json:"status"`              // "OK", "PAIR_DECLINED", "INVALID_SIGNATURE"
+	PublicKey string `json:"publicKey,omitempty"` // Present if status == "OK"
+}
+
 // RTCSendFileHeader is sent before each file's binary data.
 type RTCSendFileHeader struct {
 	ID    string `json:"id"`
@@ -103,6 +110,17 @@ func ParseRTCMessage(data []byte) (interface{}, string, error) {
 					return &pinResp, "file_list", nil
 				}
 			}
+
+			// Check for pair response (has publicKey but NO files)
+			if _, hasPublicKey := generic["publicKey"]; hasPublicKey {
+				if _, hasFiles := generic["files"]; !hasFiles {
+					var pairResp RTCPairResponse
+					if err := json.Unmarshal(data, &pairResp); err == nil {
+						return &pairResp, "pair_response", nil
+					}
+				}
+			}
+
 			return generic, "status_" + status, nil
 		}
 	}

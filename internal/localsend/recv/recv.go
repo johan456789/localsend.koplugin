@@ -179,6 +179,10 @@ func (fr *FileReceiver) Start() error {
 	// V3 routes
 	server.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
 	server.Post(constants.RegisterPathV3, fr.registerV3Handler)
+	server.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
+	server.Post(constants.UploadPathV3, fr.uploadHandler)      // Same logic as v2
+	server.Post(constants.CancelPathV3, fr.cancelHandler)      // Same logic as v2
+	server.Get(constants.InfoPathV3, fr.infoV3Handler)
 
 	slog.Info("Waiting for files (Ctrl-C to terminate)")
 

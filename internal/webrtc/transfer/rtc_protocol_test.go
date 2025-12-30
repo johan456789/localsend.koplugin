@@ -429,3 +429,97 @@ func TestRustVectorChunkProcessing(t *testing.T) {
 	}
 }
 
+// TestRTCPairResponseSerialization tests JSON serialization of PAIR response.
+func TestRTCPairResponseSerialization(t *testing.T) {
+	tests := []struct {
+		name     string
+		response RTCPairResponse
+		expected string
+	}{
+		{
+			name:     "OK response with public key",
+			response: RTCPairResponse{Status: "OK", PublicKey: "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----"},
+			expected: `{"status":"OK","publicKey":"-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----"}`,
+		},
+		{
+			name:     "PAIR_DECLINED response",
+			response: RTCPairResponse{Status: "PAIR_DECLINED"},
+			expected: `{"status":"PAIR_DECLINED"}`,
+		},
+		{
+			name:     "INVALID_SIGNATURE response",
+			response: RTCPairResponse{Status: "INVALID_SIGNATURE"},
+			expected: `{"status":"INVALID_SIGNATURE"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.response)
+			if err != nil {
+				t.Fatalf("Failed to marshal: %v", err)
+			}
+			if string(data) != tt.expected {
+				t.Errorf("Serialized = %q; want %q", string(data), tt.expected)
+			}
+		})
+	}
+}
+
+// TestParseRTCMessagePairResponse tests parsing of PAIR response messages.
+func TestParseRTCMessagePairResponse(t *testing.T) {
+	// PAIR response has status and publicKey but NO files field
+	jsonData := `{"status":"OK","publicKey":"-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----"}`
+
+	msg, msgType, err := ParseRTCMessage([]byte(jsonData))
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if msgType != "pair_response" {
+		t.Errorf("msgType = %q; want 'pair_response'", msgType)
+	}
+
+	pairResp, ok := msg.(*RTCPairResponse)
+	if !ok {
+		t.Fatalf("msg is not *RTCPairResponse")
+	}
+
+	if pairResp.Status != "OK" {
+		t.Errorf("Status = %q; want 'OK'", pairResp.Status)
+	}
+	if pairResp.PublicKey == "" {
+		t.Error("PublicKey should not be empty")
+	}
+}
+
+// TestPairResponseVsFileListResponse ensures PAIR response is not confused with file list response.
+func TestPairResponseVsFileListResponse(t *testing.T) {
+	// File list from sender has status and files as array
+	fileListJSON := `{"status":"OK","files":[{"id":"0","fileName":"test.txt","size":100,"fileType":"text/plain"}]}`
+
+	// PAIR response has status and publicKey but NO files
+	pairRespJSON := `{"status":"OK","publicKey":"test-key"}`
+
+	// PAIR status with publicKey but no files
+	pairStatusJSON := `{"status":"PAIR","publicKey":"test-key"}`
+
+	// Test file list response
+	_, type1, _ := ParseRTCMessage([]byte(fileListJSON))
+	if type1 != "file_list" {
+		t.Errorf("File list response parsed as %q; want 'file_list'", type1)
+	}
+
+	// Test PAIR response (OK status with publicKey, no files)
+	_, type2, _ := ParseRTCMessage([]byte(pairRespJSON))
+	if type2 != "pair_response" {
+		t.Errorf("PAIR response parsed as %q; want 'pair_response'", type2)
+	}
+
+	// Test PAIR status (PAIR status with publicKey)
+	_, type3, _ := ParseRTCMessage([]byte(pairStatusJSON))
+	if type3 != "pair_response" {
+		t.Errorf("PAIR status parsed as %q; want 'pair_response'", type3)
+	}
+}
+

@@ -215,3 +215,104 @@ func (fr *FileReceiver) registerV3Handler(c *fiber.Ctx) error {
 
 	return c.JSON(&resp)
 }
+
+// preUploadV3Handler implements POST /api/localsend/v3/prepare-upload
+// This handles v3 prepare-upload with optional token verification using exchanged nonces.
+func (fr *FileReceiver) preUploadV3Handler(c *fiber.Ctx) error {
+	// check pin if it's set
+	if fr.expectedPin != "" {
+		pin := c.Query("pin")
+		if pin != fr.expectedPin {
+			return c.SendStatus(401)
+		}
+	}
+
+	// Per protocol spec Section 4.1: return 409 when blocked by another session
+	if fr.sessman.HasActiveSessions() {
+		slog.Info("Blocked upload request - another session is active", "remote", c.IP())
+		return c.SendStatus(409)
+	}
+
+	var metaReq models.PreUploadReq
+	err := c.BodyParser(&metaReq)
+	if err != nil {
+		return c.SendStatus(400)
+	}
+
+	// V3 token verification (optional - if nonces were exchanged)
+	clientID := c.IP()
+	if receivedNonce, ok := fr.receivedNonceCache.Get(clientID); ok {
+		if generatedNonce, ok := fr.generatedNonceCache.Get(clientID); ok {
+			// Combined nonce: client's nonce || our nonce
+			combinedNonce := append(receivedNonce, generatedNonce...)
+
+			// Token verification would happen here if we had the client's public key
+			// For now, log that nonce exchange was done
+			slog.Debug("V3 nonce available for token verification",
+				"remote", clientID,
+				"combinedNonceLen", len(combinedNonce))
+
+			// Clear nonces after use
+			fr.receivedNonceCache.Delete(clientID)
+			fr.generatedNonceCache.Delete(clientID)
+		}
+	}
+
+	// Filter files by extension if filter is enabled
+	if len(fr.allowedExtensions) > 0 {
+		filteredFiles := make(models.FileMetas)
+		rejectedFiles := []string{}
+
+		for id, fileMeta := range metaReq.Files {
+			if fr.IsExtensionAllowed(fileMeta.Filename) {
+				filteredFiles[id] = fileMeta
+			} else {
+				rejectedFiles = append(rejectedFiles, fileMeta.Filename)
+			}
+		}
+
+		// Log rejected files
+		if len(rejectedFiles) > 0 {
+			slog.Info("Rejected files due to extension filter", "files", rejectedFiles)
+		}
+
+		// If all files were rejected, return an error
+		if len(filteredFiles) == 0 {
+			slog.Warn("All files rejected by extension filter", "remote", c.IP())
+			return c.SendStatus(403)
+		}
+
+		// Replace the files with only the allowed ones
+		metaReq.Files = filteredFiles
+	}
+
+	// new session - store client IP for validation per protocol spec Section 4.2
+	sessionId, err := fr.sessman.NewSession(metaReq.Files, c.IP())
+	if err != nil {
+		slog.Error("preupload error", "error", err)
+		return c.SendStatus(500)
+	}
+
+	slog.Info("V3 Accepting file", "remote", c.IP(), "session", sessionId, "files", len(metaReq.Files))
+
+	resp, err := fr.sessman.GeneratePreUploadResp(sessionId)
+	if err != nil {
+		return c.SendStatus(500)
+	}
+
+	return c.JSON(&resp)
+}
+
+// infoV3Handler implements GET /api/localsend/v3/info
+// Returns device info in v3 format with SCREAMING_SNAKE_CASE device type.
+func (fr *FileReceiver) infoV3Handler(c *fiber.Ctx) error {
+	resp := models.RegisterResponseV3{
+		Alias:           fr.identity.Alias,
+		Version:         fr.identity.Version,
+		DeviceModel:     fr.identity.DeviceModel,
+		DeviceType:      constants.DeviceTypeToV3(fr.identity.DeviceType),
+		Token:           fr.identity.Token,
+		HasWebInterface: false,
+	}
+	return c.JSON(&resp)
+}

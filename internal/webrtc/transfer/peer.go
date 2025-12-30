@@ -67,8 +67,8 @@ func NewPeerConnection(config PeerConfig) (*PeerConnection, error) {
 	// Create peer connection with custom API
 	pc, err := api.NewPeerConnection(webrtc.Configuration{
 		ICEServers: iceServers,
-		// Use ICE candidate pool to speed up connectivity
-		ICECandidatePoolSize: 1,
+		// Use ICE candidate pool to speed up connectivity (spec recommends 2)
+		ICECandidatePoolSize: 2,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create peer connection: %w", err)

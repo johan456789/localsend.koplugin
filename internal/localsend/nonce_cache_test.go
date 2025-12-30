@@ -91,3 +91,56 @@ func TestNonceCacheLRUEviction(t *testing.T) {
 		}
 	}
 }
+
+func TestNonceCacheDelete(t *testing.T) {
+	cache := NewNonceCache(5)
+
+	// Add some entries
+	cache.Put("client1", []byte("nonce1"))
+	cache.Put("client2", []byte("nonce2"))
+	cache.Put("client3", []byte("nonce3"))
+
+	// Verify all exist
+	for _, id := range []string{"client1", "client2", "client3"} {
+		if _, found := cache.Get(id); !found {
+			t.Errorf("expected to find %s before delete", id)
+		}
+	}
+
+	// Delete client2
+	cache.Delete("client2")
+
+	// Verify client2 is gone
+	if _, found := cache.Get("client2"); found {
+		t.Error("client2 should have been deleted")
+	}
+
+	// Verify others still exist
+	if _, found := cache.Get("client1"); !found {
+		t.Error("client1 should still exist after deleting client2")
+	}
+	if _, found := cache.Get("client3"); !found {
+		t.Error("client3 should still exist after deleting client2")
+	}
+
+	// Delete non-existent key (should not panic)
+	cache.Delete("nonexistent")
+
+	// Delete already deleted key (should not panic)
+	cache.Delete("client2")
+
+	// Add new entry after deletion - capacity should not be affected
+	cache.Put("client4", []byte("nonce4"))
+	cache.Put("client5", []byte("nonce5"))
+
+	// We now have client1, client3, client4, client5 (4 entries, capacity 5)
+	if _, found := cache.Get("client1"); !found {
+		t.Error("client1 should still exist")
+	}
+	if _, found := cache.Get("client4"); !found {
+		t.Error("client4 should exist")
+	}
+	if _, found := cache.Get("client5"); !found {
+		t.Error("client5 should exist")
+	}
+}

@@ -62,6 +62,19 @@ func (k *SigningKey) ToVerifyingKey() VerifyingKey {
 	return &Ed25519VerifyingKey{publicKey: k.publicKey}
 }
 
+// PublicKeyPEM returns the public key encoded as PEM in PKIX format.
+func (k *SigningKey) PublicKeyPEM() string {
+	pubKeyDER, err := x509.MarshalPKIXPublicKey(k.publicKey)
+	if err != nil {
+		return ""
+	}
+	pemBlock := pem.EncodeToMemory(&pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: pubKeyDER,
+	})
+	return string(pemBlock)
+}
+
 // GenerateTokenTimestamp generates a token using current Unix timestamp as salt.
 // Format: sha256.{hash_base64}.{salt_base64}.ed25519.{signature_base64}
 func (k *SigningKey) GenerateTokenTimestamp() (string, error) {

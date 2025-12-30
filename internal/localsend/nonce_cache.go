@@ -77,3 +77,14 @@ func (nc *NonceCache) Get(clientID string) ([]byte, bool) {
 	nc.lru.MoveToFront(elem)
 	return elem.Value.(*cacheEntry).nonce, true
 }
+
+// Delete removes the nonce for the given clientID.
+func (nc *NonceCache) Delete(clientID string) {
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+
+	if elem, exists := nc.cache[clientID]; exists {
+		nc.lru.Remove(elem)
+		delete(nc.cache, clientID)
+	}
+}

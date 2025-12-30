@@ -23,6 +23,7 @@ const (
 	stateWaitToken
 	stateWaitPin
 	stateWaitFileList
+	stateWaitPairResponse // Waiting for sender's PAIR response
 	stateWaitFiles
 	stateReceivingFiles
 )
@@ -42,6 +43,12 @@ type RTCReceiver struct {
 	remoteNonce []byte
 	localNonce  []byte
 	finalNonce  []byte
+
+	// Token verification (optional, requires PAIR flow for public key)
+	senderPublicKey     crypto.VerifyingKey // Set via PAIR flow
+	strictVerification  bool                 // If true, fail on invalid tokens
+	requirePairing      bool                 // If true, require PAIR before accepting files
+	pendingFiles        []RTCFileDto         // Files pending while waiting for PAIR response
 
 	// Files
 	files       []RTCFileDto
@@ -82,6 +89,24 @@ func (r *RTCReceiver) OnSelectFiles(handler func([]RTCFileDto) []string) {
 // OnFileReceived sets the callback for when a file is received.
 func (r *RTCReceiver) OnFileReceived(handler func(filename string, size int64, sender string)) {
 	r.onFileReceived = handler
+}
+
+// SetSenderPublicKey sets the sender's public key for token verification.
+// This is typically obtained through the PAIR flow.
+func (r *RTCReceiver) SetSenderPublicKey(key crypto.VerifyingKey) {
+	r.senderPublicKey = key
+}
+
+// SetStrictVerification enables strict token verification mode.
+// When enabled, transfers will fail if token verification fails.
+func (r *RTCReceiver) SetStrictVerification(strict bool) {
+	r.strictVerification = strict
+}
+
+// SetRequirePairing enables pairing requirement.
+// When enabled, the receiver will request PAIR before accepting files from unknown senders.
+func (r *RTCReceiver) SetRequirePairing(require bool) {
+	r.requirePairing = require
 }
 
 // AcceptOffer accepts an incoming WebRTC offer.
@@ -219,6 +244,8 @@ func (r *RTCReceiver) handleMessage(data []byte) {
 		r.handlePin(msg, msgType)
 	case stateWaitFileList:
 		r.handleFileList(msg, msgType, data)
+	case stateWaitPairResponse:
+		r.handlePairResponse(msg, msgType, data)
 	case stateWaitFiles:
 		r.handleFileHeader(msg, msgType)
 	}
@@ -275,6 +302,23 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 		tokenPreview = tokenPreview[:30] + "..."
 	}
 	slog.Info("Received token from sender", "token", tokenPreview)
+
+	// Optionally verify sender's token if we have their public key
+	if r.senderPublicKey != nil {
+		if err := crypto.VerifyTokenNonce(r.senderPublicKey, tokenReq.Token, r.finalNonce); err != nil {
+			slog.Warn("Sender token verification failed", "error", err)
+			if r.strictVerification {
+				response := RTCTokenResponse{Status: "INVALID_SIGNATURE"}
+				r.sendJSON(response)
+				slog.Error("Rejecting sender due to invalid token signature")
+				return
+			}
+			// In lenient mode, log warning but continue
+			slog.Warn("Continuing despite token verification failure (strict mode disabled)")
+		} else {
+			slog.Info("Sender token verified successfully")
+		}
+	}
 
 	// Generate our token
 	token, err := r.signingKey.GenerateTokenWithNonce(r.finalNonce)
@@ -383,6 +427,29 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 		return
 	}
 
+	// Check if PAIR is required
+	if r.requirePairing && r.senderPublicKey == nil {
+		// Initiate PAIR flow
+		slog.Info("Initiating PAIR flow - sender not yet trusted")
+		r.pendingFiles = r.files // Store files for after PAIR completes
+
+		response := RTCFileListResponse{
+			Status:    "PAIR",
+			PublicKey: r.signingKey.PublicKeyPEM(),
+		}
+		if err := r.sendJSONBinary(response); err != nil {
+			slog.Error("Failed to send PAIR request", "error", err)
+			return
+		}
+		if err := r.sendDelimiter(); err != nil {
+			slog.Error("Failed to send delimiter after PAIR request", "error", err)
+			return
+		}
+		slog.Info("Sent PAIR request with our public key, waiting for sender's response")
+		r.state = stateWaitPairResponse
+		return
+	}
+
 	// Generate simple UUID tokens for each accepted file (matches official implementation)
 	fileTokens := make(map[string]string)
 	for _, id := range acceptedIDs {
@@ -425,6 +492,94 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 	}
 
 	slog.Info("Sent file acceptance and delimiter", "count", len(fileTokens))
+	r.state = stateWaitFiles
+}
+
+// handlePairResponse processes the PAIR response from sender.
+func (r *RTCReceiver) handlePairResponse(_ interface{}, msgType string, data []byte) {
+	if msgType != "pair_response" && msgType != "status_OK" && msgType != "status_PAIR_DECLINED" && msgType != "status_INVALID_SIGNATURE" {
+		slog.Warn("Expected pair response, got", "type", msgType)
+		return
+	}
+
+	var resp RTCPairResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		slog.Error("Failed to parse PAIR response", "error", err)
+		return
+	}
+
+	switch resp.Status {
+	case "OK":
+		slog.Info("PAIR accepted by sender", "hasPublicKey", resp.PublicKey != "")
+		if resp.PublicKey != "" {
+			// Parse and store sender's public key for future verification
+			key, err := crypto.ParsePublicKeyPEM(resp.PublicKey)
+			if err != nil {
+				slog.Error("Failed to parse sender's public key", "error", err)
+			} else {
+				r.senderPublicKey = key
+				slog.Info("Stored sender's public key for verification")
+			}
+		}
+
+		// Now proceed with accepting files - send OK response with file tokens
+		r.acceptFilesAfterPair()
+
+	case "PAIR_DECLINED":
+		slog.Warn("PAIR declined by sender")
+		// Fall back to normal acceptance without pairing
+		r.acceptFilesAfterPair()
+
+	case "INVALID_SIGNATURE":
+		slog.Error("Sender rejected our signature")
+		// Close the connection
+		return
+	}
+}
+
+// acceptFilesAfterPair sends the file acceptance response after PAIR flow completes.
+func (r *RTCReceiver) acceptFilesAfterPair() {
+	// Generate tokens for accepted files
+	fileTokens := make(map[string]string)
+	for _, id := range r.acceptedIDs {
+		token := fmt.Sprintf("%d", time.Now().UnixNano())
+		fileTokens[id] = token
+		r.fileTokens[id] = token
+
+		// Create file writer with unique path
+		for _, f := range r.files {
+			if f.ID == id {
+				path := session.FindUniquePath(r.saveDir, f.FileName)
+				file, err := os.Create(path)
+				if err != nil {
+					slog.Error("Failed to create file", "path", path, "error", err)
+					continue
+				}
+				r.fileWriters[id] = file
+				r.filePaths[id] = path
+				r.fileHashers[id] = sha256.New()
+				slog.Info("Ready to receive", "file", filepath.Base(path))
+				break
+			}
+		}
+	}
+
+	// Send acceptance with file tokens
+	response := RTCFileListResponse{
+		Status: "OK",
+		Files:  fileTokens,
+	}
+	if err := r.sendJSONBinary(response); err != nil {
+		slog.Error("Failed to send file acceptance after PAIR", "error", err)
+		return
+	}
+
+	if err := r.sendDelimiter(); err != nil {
+		slog.Error("Failed to send delimiter after PAIR acceptance", "error", err)
+		return
+	}
+
+	slog.Info("Sent file acceptance after PAIR", "count", len(fileTokens))
 	r.state = stateWaitFiles
 }
 

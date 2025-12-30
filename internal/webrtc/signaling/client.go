@@ -20,6 +20,9 @@ const (
 	// Ping interval to keep connection alive.
 	pingInterval = 2 * time.Minute
 
+	// Token refresh interval for long sessions (matches web client).
+	tokenRefreshInterval = 30 * time.Minute
+
 	// Write timeout for WebSocket messages.
 	writeTimeout = 10 * time.Second
 )
@@ -35,6 +38,10 @@ type SignalingClient struct {
 	done     chan struct{}
 	onAnswer map[string]func(WsServerMessage) // sessionID -> callback
 	answerMu sync.Mutex
+
+	// Token refresh support
+	baseInfo       ClientInfoWithoutID // Client info without token (for refresh)
+	tokenGenerator func() (string, error)
 }
 
 // Connect establishes a WebSocket connection to the signaling server.
@@ -44,7 +51,7 @@ func Connect(uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal client info: %w", err)
 	}
-	encodedInfo := base64.RawStdEncoding.EncodeToString(infoJSON)
+	encodedInfo := base64.RawURLEncoding.EncodeToString(infoJSON)
 
 	// Build WebSocket URL with query parameter
 	wsURL, err := url.Parse(uri)
@@ -70,6 +77,13 @@ func Connect(uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
 		sendChan: make(chan WsClientMessage, 16),
 		done:     make(chan struct{}),
 		onAnswer: make(map[string]func(WsServerMessage)),
+		baseInfo: ClientInfoWithoutID{
+			Alias:       info.Alias,
+			Version:     info.Version,
+			DeviceModel: info.DeviceModel,
+			DeviceType:  info.DeviceType,
+			// Token will be regenerated during refresh
+		},
 	}
 
 	// Wait for HELLO message
@@ -195,6 +209,50 @@ func (c *SignalingClient) pingLoop() {
 		case <-c.done:
 			return
 		}
+	}
+}
+
+// tokenRefreshLoop periodically refreshes the token for long sessions.
+// This matches the web client behavior of refreshing every 30 minutes.
+func (c *SignalingClient) tokenRefreshLoop() {
+	if c.tokenGenerator == nil {
+		return
+	}
+
+	ticker := time.NewTicker(tokenRefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			newToken, err := c.tokenGenerator()
+			if err != nil {
+				slog.Warn("Failed to generate refresh token", "error", err)
+				continue
+			}
+
+			// Create updated info with new token
+			info := c.baseInfo
+			info.Token = newToken
+
+			if err := c.SendUpdate(info); err != nil {
+				slog.Warn("Failed to send token refresh", "error", err)
+			} else {
+				slog.Debug("Token refreshed successfully")
+			}
+		case <-c.done:
+			return
+		}
+	}
+}
+
+// SetTokenGenerator sets a function to generate new tokens for refresh.
+// If set, the client will periodically refresh the token during long sessions.
+func (c *SignalingClient) SetTokenGenerator(gen func() (string, error)) {
+	c.tokenGenerator = gen
+	// Start the refresh loop if we have a generator
+	if gen != nil {
+		go c.tokenRefreshLoop()
 	}
 }
 

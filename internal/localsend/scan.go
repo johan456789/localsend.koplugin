@@ -24,7 +24,7 @@ const (
 
 var multicastDiscoveryAddr = &net.UDPAddr{
 	IP:   net.ParseIP("224.0.0.167"),
-	Port: 53317,
+	Port: constants.DefaultPort,
 }
 
 type Discoverier struct {
@@ -54,7 +54,7 @@ func NewDiscoverier(devInfo models.DeviceInfo, supportHttps bool) (*Discoverier,
 		mcastConn: conn,
 		selfAnno: &models.Announcement{
 			DeviceInfo: devInfo,
-			Port:       53317,
+			Port:       constants.DefaultPort,
 			Protocol:   protocol,
 			Announce:   true,
 		},
@@ -180,7 +180,7 @@ func (mcs *Discoverier) sendHTTPResponse(ip string, anno models.Announcement) {
 	}
 	port := anno.Port
 	if port == 0 {
-		port = 53317
+		port = constants.DefaultPort
 	}
 
 	remoteAddr := fmt.Sprintf("%s:%d", ip, port)
@@ -296,14 +296,56 @@ func (mcs *Discoverier) ScanSubnet(ctx context.Context) {
 }
 
 // httpClientForScan is a shared HTTP client for subnet scanning.
-// It's safe for concurrent use and configured with short timeouts.
+//
+// SECURITY NOTE: InsecureSkipVerify is set to true because LocalSend uses
+// self-signed certificates. The protocol handles trust via fingerprint
+// verification instead of CA-based PKI. See protocol spec Section 2.
+// This is intentional and matches the official LocalSend implementation.
 var httpClientForScan = &http.Client{
 	Timeout: 1 * time.Second,
 	Transport: &http.Transport{
+		// #nosec G402 - Self-signed certs expected per LocalSend protocol
 		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
 		MaxIdleConnsPerHost: 0, // Don't keep connections open
 		DisableKeepAlives:   true,
 	},
+}
+
+// tryScanIP attempts to discover a device at the given IP using the specified protocol.
+// Returns true if a device was found and registered.
+func (mcs *Discoverier) tryScanIP(ip, scheme string, bodyBytes []byte) bool {
+	remoteAddr := net.JoinHostPort(ip, constants.DefaultPortStr)
+	url := fmt.Sprintf("%s://%s%s", scheme, remoteAddr, constants.RegisterPath)
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClientForScan.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return false
+	}
+
+	var deviceInfo models.DeviceInfo
+	if err := json.NewDecoder(resp.Body).Decode(&deviceInfo); err != nil {
+		return false
+	}
+
+	deviceInfo.IP = ip
+	mcs.PutDiscovered(ip, models.Announcement{
+		DeviceInfo: deviceInfo,
+		Protocol:   scheme,
+		Port:       constants.DefaultPort,
+		Announce:   false,
+	})
+	return true
 }
 
 func (mcs *Discoverier) scanIP(ip string) {
@@ -315,39 +357,12 @@ func (mcs *Discoverier) scanIP(ip string) {
 	}
 
 	bodyBytes, _ := json.Marshal(regBody)
-	remoteAddr := net.JoinHostPort(ip, "53317")
 
 	// Try both HTTPS and HTTP as we don't know the receiver's preference
 	// Protocol spec 3.2 says to send to all local IP addresses.
-	protocols := []string{"https", "http"}
-	for _, scheme := range protocols {
-		url := fmt.Sprintf("%s://%s%s", scheme, remoteAddr, constants.RegisterPath)
-
-		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(bodyBytes))
-		if err != nil {
-			continue
+	for _, scheme := range []string{"https", "http"} {
+		if mcs.tryScanIP(ip, scheme, bodyBytes) {
+			return
 		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := httpClientForScan.Do(req)
-		if err != nil {
-			continue
-		}
-
-		if resp.StatusCode == 200 {
-			var deviceInfo models.DeviceInfo
-			if err := json.NewDecoder(resp.Body).Decode(&deviceInfo); err == nil {
-				deviceInfo.IP = ip
-				mcs.PutDiscovered(ip, models.Announcement{
-					DeviceInfo: deviceInfo,
-					Protocol:   scheme,
-					Port:       53317,
-					Announce:   false,
-				})
-				_ = resp.Body.Close()
-				return // Found and registered
-			}
-		}
-		_ = resp.Body.Close()
 	}
 }

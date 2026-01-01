@@ -1,8 +1,10 @@
 package recv
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -151,7 +153,7 @@ func (fr *FileReceiver) Init() error {
 	// ensure save directory exists
 	err = os.MkdirAll(fr.saveToDir, fs.ModePerm)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create save directory: %w", err)
 	}
 
 	if fr.supportHttps {
@@ -163,7 +165,7 @@ func (fr *FileReceiver) Init() error {
 		certFile := filepath.Join(os.TempDir(), "server.crt")
 		fr.cert, err = lsutils.LoadOrGenTLScert(privkeyFile, certFile)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to load or generate TLS certificate: %w", err)
 		}
 
 		// See https://github.com/localsend/protocol section. 2
@@ -173,10 +175,13 @@ func (fr *FileReceiver) Init() error {
 	// start advertisement
 	fr.discoverier, err = localsend.NewDiscoverier(fr.identity, fr.supportHttps)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create discoverer: %w", err)
 	}
 
-	return err
+	// start session cleanup task
+	fr.sessman.Start()
+
+	return nil
 }
 
 func (fr *FileReceiver) Start() error {
@@ -203,11 +208,7 @@ func (fr *FileReceiver) Start() error {
 
 	go func() { _ = fr.advertise() }() // let others know we are here
 
-	if fr.supportHttps {
-		return fr.webServer.ListenTLSWithCertificate("0.0.0.0:53317", fr.cert)
-	}
-
-	return fr.webServer.Listen("0.0.0.0:53317")
+	return lsutils.ListenWithTLS(fr.webServer, constants.DefaultListenAddr, fr.cert, fr.supportHttps)
 }
 
 func (fr *FileReceiver) advertise() error {
@@ -217,6 +218,12 @@ func (fr *FileReceiver) advertise() error {
 func (fr *FileReceiver) Stop() error {
 	slog.Info("Stop receiving")
 
+	fr.sessman.Stop()
 	_ = fr.discoverier.Shutdown()
-	return fr.webServer.Shutdown()
+
+	// Graceful shutdown with 5 second timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	return fr.webServer.ShutdownWithContext(ctx)
 }

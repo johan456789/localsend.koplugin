@@ -7,6 +7,7 @@ import (
 	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/localsend/send"
 	"localsend-cli/internal/models"
+	"localsend-cli/internal/utils"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -29,15 +30,12 @@ func normalizeDeviceType(deviceType string) string {
 }
 
 func GetDeviceInfo(ip string, https bool) (models.DeviceInfo, error) {
-	remoteAddr := net.JoinHostPort(ip, "53317")
+	remoteAddr := net.JoinHostPort(ip, constants.DefaultPortStr)
 
 	agent := fiber.AcquireAgent()
 	defer fiber.ReleaseAgent(agent)
 
-	scheme := "http"
-	if https {
-		scheme = "https"
-	}
+	scheme := utils.GetProtocolScheme(https)
 
 	req := agent.Request()
 	req.URI().SetScheme(scheme)

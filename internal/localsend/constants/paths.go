@@ -3,6 +3,15 @@ package constants
 import "strings"
 
 const (
+	// DefaultPort is the standard LocalSend port per protocol specification.
+	DefaultPort = 53317
+	// DefaultPortStr is the string representation of DefaultPort.
+	DefaultPortStr = "53317"
+	// DefaultListenAddr is the default address to listen on.
+	DefaultListenAddr = "0.0.0.0:53317"
+)
+
+const (
 	// v2 paths
 	UploadPath      = "/api/localsend/v2/upload"
 	PreuploadPath   = "/api/localsend/v2/prepare-upload"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
 )
 
@@ -18,7 +19,7 @@ func TestFingerprintSelfDiscovery(t *testing.T) {
 	anno := models.Announcement{
 		DeviceInfo: devInfo,
 		Protocol:   "http",
-		Port:       53317,
+		Port:       constants.DefaultPort,
 		Announce:   true,
 	}
 

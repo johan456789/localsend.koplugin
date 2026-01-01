@@ -1,6 +1,7 @@
 package signaling
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -17,10 +18,11 @@ const (
 	// DefaultSignalingServer is the public LocalSend signaling server.
 	DefaultSignalingServer = "wss://public.localsend.org/v1/ws"
 
-	// Ping interval to keep connection alive.
+	// Ping interval to keep connection alive (matches web client: 120 seconds).
 	pingInterval = 2 * time.Minute
 
-	// Token refresh interval for long sessions (matches web client).
+	// Token refresh interval for long sessions (matches web client: 30 minutes).
+	// Tokens are valid for 1 hour, so refreshing at 30 minutes provides margin.
 	tokenRefreshInterval = 30 * time.Minute
 
 	// Write timeout for WebSocket messages.
@@ -46,6 +48,11 @@ type SignalingClient struct {
 
 // Connect establishes a WebSocket connection to the signaling server.
 func Connect(uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
+	return ConnectWithContext(context.Background(), uri, info)
+}
+
+// ConnectWithContext establishes a WebSocket connection with context for cancellation.
+func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
 	// Encode client info as base64 JSON in query parameter
 	infoJSON, err := json.Marshal(info)
 	if err != nil {
@@ -64,8 +71,9 @@ func Connect(uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
 
 	slog.Debug("Connecting to signaling server", "url", wsURL.String())
 
-	// Connect to WebSocket
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
+	// Connect to WebSocket with context
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.DialContext(ctx, wsURL.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to signaling server: %w", err)
 	}

@@ -54,9 +54,9 @@ func (fsp *ForwardSender) preUploadReq() error {
 
 	if fsp.https {
 		// check fingerprint if https mode (See https://github.com/localsend/protocol section.2)
-		certs, err := utils.FetchX509Cert(net.JoinHostPort(fsp.remote.IP, "53317"))
+		certs, err := utils.FetchX509Cert(net.JoinHostPort(fsp.remote.IP, constants.DefaultPortStr))
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to fetch certificate: %w", err)
 		}
 		fingerprint := utils.SHA256ofCert(certs[0]) // only check the first cert
 		if fingerprint != fsp.remote.Fingerprint {
@@ -72,7 +72,7 @@ func (fsp *ForwardSender) preUploadReq() error {
 	var meta models.PreUploadReq
 	meta.Info = &models.SenderInfo{
 		DeviceInfo: *fsp.local,
-		Port:       53317,
+		Port:       constants.DefaultPort,
 		Protocol:   protocol,
 	}
 	meta.Files = fsp.files
@@ -86,13 +86,13 @@ func (fsp *ForwardSender) preUploadReq() error {
 	}
 	err := agent.Parse()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse request: %w", err)
 	}
 
 	// make request
 	status, b, errs := agent.InsecureSkipVerify().JSON(&meta).Bytes()
 	if len(errs) != 0 {
-		return errs[0]
+		return fmt.Errorf("pre-upload request failed: %w", errs[0])
 	}
 
 	// parse error from http status
@@ -105,7 +105,7 @@ func (fsp *ForwardSender) preUploadReq() error {
 	var respMeta models.PreUploadResp
 	err = json.Unmarshal(b, &respMeta)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to decode pre-upload response: %w", err)
 	}
 
 	fsp.session = respMeta.SessionId
@@ -136,20 +136,20 @@ func (fsp *ForwardSender) sendFile(fid string, ftoken string) error {
 	req.URI().QueryArgs().Add("fileId", fid)
 	err := agent.Parse()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse upload request: %w", err)
 	}
 
 	// open file
 	fd, err := os.Open(fmeta.FullPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open file %s: %w", fmeta.Filename, err)
 	}
 	defer func() { _ = fd.Close() }()
 
 	// send file
 	status, _, errs := agent.InsecureSkipVerify().BodyStream(fd, int(fmeta.Size)).Bytes()
 	if len(errs) != 0 {
-		return errs[0]
+		return fmt.Errorf("failed to upload file: %w", errs[0])
 	}
 
 	return constants.ParseError(status)
@@ -158,7 +158,7 @@ func (fsp *ForwardSender) sendFile(fid string, ftoken string) error {
 func (fsp *ForwardSender) Start() error {
 	err := fsp.preUploadReq()
 	if err != nil {
-		return fmt.Errorf("PreUpload %v", err)
+		return fmt.Errorf("pre-upload failed: %w", err)
 	}
 
 	for fid, ftoken := range fsp.tokens {
@@ -199,7 +199,7 @@ func (fsp *ForwardSender) Cancel() error {
 }
 
 func (fsp *ForwardSender) prepareUri(req *fasthttp.Request, path string) {
-	remoteAddr := net.JoinHostPort(fsp.remote.IP, "53317")
+	remoteAddr := net.JoinHostPort(fsp.remote.IP, constants.DefaultPortStr)
 
 	req.Header.SetUserAgent("localsend-cli")
 	req.URI().SetPath(path)

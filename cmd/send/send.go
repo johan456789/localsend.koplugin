@@ -123,26 +123,14 @@ func sendViaWebRTC() error {
 		return fmt.Errorf("invalid target ID: %w", err)
 	}
 
-	// Generate signing key
-	key, err := crypto.GenerateKeyPair()
+	// Generate signing key and token
+	key, token, err := crypto.GenerateKeyPairWithToken()
 	if err != nil {
-		return fmt.Errorf("failed to generate key pair: %w", err)
-	}
-
-	// Generate token
-	token, err := key.GenerateTokenTimestamp()
-	if err != nil {
-		return fmt.Errorf("failed to generate token: %w", err)
+		return fmt.Errorf("failed to generate key pair with token: %w", err)
 	}
 
 	// Connect to signaling server
-	info := signaling.ClientInfoWithoutID{
-		Alias:       lsutils.GenAlias(),
-		Version:     "2.1",
-		DeviceModel: "LocalSend-CLI",
-		DeviceType:  "headless",
-		Token:       token,
-	}
+	info := signaling.NewClientInfo(lsutils.GenAlias(), token)
 
 	slog.Info("Connecting to WebRTC signaling server")
 	client, err := signaling.Connect(signaling.DefaultSignalingServer, info)

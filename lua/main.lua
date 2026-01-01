@@ -15,6 +15,26 @@ local json = require("json")
 
 local GITHUB_RELEASE_URL = "https://api.github.com/repos/kaikozlov/localsend.koplugin/releases/latest"
 
+-- Shell escape utility to prevent command injection
+-- Wraps string in single quotes and escapes any embedded single quotes
+local function shellEscape(str)
+    if str == nil then return "''" end
+    -- Single quote escape: replace ' with '\''
+    return "'" .. str:gsub("'", "'\\''") .. "'"
+end
+
+-- Validate that a path is safe for shell operations
+local function isValidPath(path)
+    if path == nil or path == "" then return false end
+    -- Reject paths with null bytes
+    if path:find("%z") then return false end
+    -- Must be absolute path
+    if not path:match("^/") then return false end
+    -- No command substitution patterns
+    if path:find("`") or path:find("%$%(") then return false end
+    return true
+end
+
 local data_dir = DataStorage:getFullDataDir()
 local plugin_path = data_dir .. "/plugins/localsend.koplugin"
 local plugin_meta = dofile(plugin_path .. "/_meta.lua")
@@ -67,10 +87,19 @@ function LocalSend:init()
     self:onDispatcherRegisterActions()
 end
 
+-- Cleanup when plugin is unloaded or KOReader is closed
+function LocalSend:onCloseWidget()
+    if self:isRunning() then
+        -- Force stop to ensure clean shutdown
+        self:stopServer(true)
+        logger.dbg("[LocalSend] Server stopped on plugin unload")
+    end
+end
+
 function LocalSend:setupCertificates()
     -- Ensure cert storage directory exists
     if not util.pathExists(cert_storage_path) then
-        os.execute("mkdir -p " .. cert_storage_path)
+        os.execute("mkdir -p " .. shellEscape(cert_storage_path))
     end
 
     local stored_key = cert_storage_path .. "/server.key.pem"
@@ -80,8 +109,8 @@ function LocalSend:setupCertificates()
 
     -- If we have stored certs, symlink them to /tmp where localsend expects them
     if util.pathExists(stored_key) and util.pathExists(stored_cert) then
-        os.execute("ln -sf " .. stored_key .. " " .. tmp_key)
-        os.execute("ln -sf " .. stored_cert .. " " .. tmp_cert)
+        os.execute("ln -sf " .. shellEscape(stored_key) .. " " .. shellEscape(tmp_key))
+        os.execute("ln -sf " .. shellEscape(stored_cert) .. " " .. shellEscape(tmp_cert))
         logger.dbg("[LocalSend] Using stored certificates")
         return true
     end
@@ -98,8 +127,8 @@ function LocalSend:saveCertificates()
 
     if util.pathExists(tmp_key) and util.pathExists(tmp_cert) then
         if not util.pathExists(stored_key) then
-            os.execute("cp " .. tmp_key .. " " .. stored_key)
-            os.execute("cp " .. tmp_cert .. " " .. stored_cert)
+            os.execute("cp " .. shellEscape(tmp_key) .. " " .. shellEscape(stored_key))
+            os.execute("cp " .. shellEscape(tmp_cert) .. " " .. shellEscape(stored_cert))
             logger.dbg("[LocalSend] Saved certificates for future use")
         end
     end
@@ -163,21 +192,26 @@ function LocalSend:validateDeviceName(name)
         return false, _("Device name is too long (max 64 characters).")
     end
 
-    -- Only allow alphanumeric, spaces, hyphens, underscores
+    -- Only allow alphanumeric, spaces, hyphens, underscores, and apostrophes (straight and curly)
     -- This matches the style of generated aliases (e.g., "Special Pineapple")
     -- and avoids shell injection and JSON encoding issues
-    if not name:match("^[%w%s%-_]+$") then
-        return false, _("Device name can only contain letters, numbers, spaces, hyphens, and underscores.")
+    if not name:match("^[%w%s%-_'’‘]+$") then
+        return false, _("Device name can only contain letters, numbers, spaces, hyphens, underscores, and apostrophes.")
     end
 
     return true
 end
 
 function LocalSend:validateSaveDir(path)
+    -- Validate path is safe for shell operations
+    if not isValidPath(path) then
+        return false, _("Invalid path: must be an absolute path without special characters.")
+    end
+
     -- Check if path exists
     if not util.pathExists(path) then
         -- Try to create it
-        local result = os.execute("mkdir -p " .. path)
+        local result = os.execute("mkdir -p " .. shellEscape(path))
         if result ~= 0 then
             return false, _("Directory does not exist and could not be created.")
         end
@@ -294,20 +328,18 @@ function LocalSend:start()
     -- Clear old transfer log and reset count
     self:clearTransferLog()
 
-    -- Build command
-    local cmd = string.format("%s recv -d '%s' -l '%s'",
-        binary_path,
-        self.save_dir,
-        transfer_log_file)
+    -- Build command with proper shell escaping
+    local cmd = string.format("%s recv -d %s -l %s",
+        shellEscape(binary_path),
+        shellEscape(self.save_dir),
+        shellEscape(transfer_log_file))
 
     if self.device_name ~= "" then
-        -- Escape single quotes for shell: replace ' with '\''
-        local escaped_name = self.device_name:gsub("'", "'\\''")
-        cmd = string.format("%s -n '%s'", cmd, escaped_name)
+        cmd = string.format("%s -n %s", cmd, shellEscape(self.device_name))
     end
 
     if self.pin ~= "" then
-        cmd = string.format("%s -p '%s'", cmd, self.pin)
+        cmd = string.format("%s -p %s", cmd, shellEscape(self.pin))
     end
 
     -- Determine accept_ext based on routing or manual setting
@@ -326,7 +358,7 @@ function LocalSend:start()
     end
 
     if effective_accept_ext ~= "" then
-        cmd = string.format("%s -a '%s'", cmd, effective_accept_ext)
+        cmd = string.format("%s -a %s", cmd, shellEscape(effective_accept_ext))
     end
 
     if not self.use_https then
@@ -340,25 +372,32 @@ function LocalSend:start()
     -- Export and apply extension routing config if configured
     local routing_path = self:exportExtRouting()
     if routing_path then
-        cmd = string.format("%s --ext-routing '%s'", cmd, routing_path)
+        cmd = string.format("%s --ext-routing %s", cmd, shellEscape(routing_path))
     end
 
     -- Open firewall before starting
     self:openFirewall()
 
     -- Run in background and save PID
-    cmd = string.format("(%s) & echo $! > %s", cmd, pid_file)
+    cmd = string.format("(%s) & echo $! > %s", cmd, shellEscape(pid_file))
 
     logger.dbg("[LocalSend] Starting server: ", cmd)
 
     local result = os.execute(cmd)
 
     if result == 0 then
-        -- Give it a moment to start and generate certs
-        ffiutil.sleep(2)
+        -- Poll for server readiness (max 5 seconds)
+        local ready = false
+        for _ = 1, 50 do  -- 50 * 100ms = 5 seconds
+            ffiutil.usleep(100000)  -- 100ms
+            if self:isRunning() then
+                ready = true
+                break
+            end
+        end
 
         -- Verify it actually started
-        if self:isRunning() then
+        if ready then
             self:saveCertificates()
 
             -- Start checking for new transfers
@@ -378,7 +417,7 @@ function LocalSend:start()
             self:closeFirewall()
             UIManager:show(InfoMessage:new{
                 icon = "notice-warning",
-                text = _("LocalSend process exited unexpectedly. Check if the binary works."),
+                text = _("LocalSend process failed to start within 5 seconds. Check if the binary works."),
             })
         end
     else
@@ -396,17 +435,27 @@ function LocalSend:isRunning()
         return false
     end
 
-    -- Also verify the process is actually alive
-    local f = io.open(pid_file, "r")
-    if not f then return false end
-    local pid = f:read("*l")
-    f:close()
+    -- Helper to check PID validity
+    local function checkPID()
+        local f = io.open(pid_file, "r")
+        if not f then return false end
+        local pid = f:read("*l")
+        f:close()
 
-    if pid and tonumber(pid) then
-        return util.pathExists("/proc/" .. pid)
+        if pid and tonumber(pid) then
+            return util.pathExists("/proc/" .. pid)
+        end
+        return false
     end
 
-    return false
+    -- Check twice with small delay to handle race conditions
+    -- (PID file might be written but process not yet fully started,
+    -- or process might exit between reading PID and checking /proc)
+    if checkPID() then
+        return true
+    end
+    ffiutil.usleep(10000)  -- 10ms
+    return checkPID()
 end
 
 function LocalSend:stopServer(force)
@@ -974,10 +1023,10 @@ end
 
 function LocalSend:rotateCertificates()
     -- Remove stored certificates so new ones will be generated
-    os.execute("rm -f " .. cert_storage_path .. "/server.key.pem")
-    os.execute("rm -f " .. cert_storage_path .. "/server.crt")
-    os.execute("rm -f /tmp/server.key.pem")
-    os.execute("rm -f /tmp/server.crt")
+    os.execute("rm -f " .. shellEscape(cert_storage_path .. "/server.key.pem"))
+    os.execute("rm -f " .. shellEscape(cert_storage_path .. "/server.crt"))
+    os.execute("rm -f " .. shellEscape("/tmp/server.key.pem"))
+    os.execute("rm -f " .. shellEscape("/tmp/server.crt"))
 
     UIManager:show(InfoMessage:new{
         text = _("Certificates cleared. New certificates will be generated on next start."),

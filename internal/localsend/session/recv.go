@@ -51,14 +51,15 @@ func (sess *RecvSession) AcceptFile(fileId string, fileMeta models.FileMeta) err
 	}
 
 	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
 	// store the file metadata
 	sess.fileMetas[fileId] = fileMeta
 
 	// generate file token
 	sess.fileTokens[fileId] = uuid.NewString()
-	sess.mu.Unlock()
 
-	// increment files count
+	// increment files count (inside lock to prevent race condition)
 	atomic.AddInt64(&sess.filesCount, 1)
 
 	return nil
@@ -68,14 +69,18 @@ func (sess *RecvSession) Start() {
 	sess.started.Store(true)
 }
 
+// maxUniquePathAttempts is the maximum number of attempts to find a unique filename
+const maxUniquePathAttempts = 10000
+
 // FindUniquePath returns a unique file path by appending a counter if the file already exists.
 // For example: "file.txt" -> "file (1).txt" -> "file (2).txt"
-func FindUniquePath(dir, filename string) string {
+// Returns an error if a unique path cannot be found after maxUniquePathAttempts.
+func FindUniquePath(dir, filename string) (string, error) {
 	path := filepath.Join(dir, filename)
 
 	// If file doesn't exist, use the original name
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return path
+		return path, nil
 	}
 
 	// Split filename into name and extension
@@ -83,13 +88,15 @@ func FindUniquePath(dir, filename string) string {
 	name := strings.TrimSuffix(filename, ext)
 
 	// Try incrementing counter until we find a unique name
-	for i := 1; ; i++ {
+	for i := 1; i <= maxUniquePathAttempts; i++ {
 		newFilename := fmt.Sprintf("%s (%d)%s", name, i, ext)
 		path = filepath.Join(dir, newFilename)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return path
+			return path, nil
 		}
 	}
+
+	return "", fmt.Errorf("could not find unique path after %d attempts for %s", maxUniquePathAttempts, filename)
 }
 
 func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string, clientIP string, fileData io.Reader) (string, error) {
@@ -119,7 +126,11 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	}
 
 	// write the file data to disk while calculating checksum simultaneously
-	saveAs := FindUniquePath(saveToDir, expectedMeta.Filename)
+	saveAs, err := FindUniquePath(saveToDir, expectedMeta.Filename)
+	if err != nil {
+		slog.Error("Failed to find unique path", "error", err)
+		return "", lserrors.ErrFileIO
+	}
 
 	// Ensure the directory exists (for extension routing to new directories)
 	if err := os.MkdirAll(saveToDir, 0755); err != nil {
@@ -167,7 +178,12 @@ func (sess *RecvSession) FileTokens() models.FileTokens {
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
-	return sess.fileTokens
+	// Return a copy to prevent external modification
+	result := make(models.FileTokens, len(sess.fileTokens))
+	for k, v := range sess.fileTokens {
+		result[k] = v
+	}
+	return result
 }
 
 func (sess *RecvSession) GetFileMeta(fileId string) (models.FileMeta, bool) {

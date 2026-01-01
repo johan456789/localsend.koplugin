@@ -102,28 +102,15 @@ var Cmd = &cobra.Command{
 }
 
 func discoverViaSignaling(ctx context.Context) []signaling.ClientInfo {
-	// Generate signing key for token
-	key, err := crypto.GenerateKeyPair()
+	// Generate signing key and token
+	_, token, err := crypto.GenerateKeyPairWithToken()
 	if err != nil {
-		slog.Error("Failed to generate key pair", "error", err)
-		return nil
-	}
-
-	// Generate token
-	token, err := key.GenerateTokenTimestamp()
-	if err != nil {
-		slog.Error("Failed to generate token", "error", err)
+		slog.Error("Failed to generate key pair with token", "error", err)
 		return nil
 	}
 
 	// Connect to signaling server
-	info := signaling.ClientInfoWithoutID{
-		Alias:       utils.GenAlias(),
-		Version:     "2.1",
-		DeviceModel: "LocalSend-CLI",
-		DeviceType:  "headless",
-		Token:       token,
-	}
+	info := signaling.NewClientInfo(utils.GenAlias(), token)
 
 	client, err := signaling.Connect(signaling.DefaultSignalingServer, info)
 	if err != nil {

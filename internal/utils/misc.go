@@ -4,10 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"math/rand"
+	"log/slog"
+	"math/rand/v2"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -68,8 +70,51 @@ func GetMyIPv4Addr() ([]net.IP, error) {
 	return res, nil
 }
 
+// RandChoice returns a random element from the slice.
+// Uses math/rand/v2 which is automatically seeded with a cryptographically
+// secure seed in Go 1.22+. Safe for non-cryptographic randomness.
 func RandChoice[T any](l []T) T {
-	randIndex := rand.Intn(len(l))
+	if len(l) == 0 {
+		var zero T
+		return zero
+	}
+	randIndex := rand.IntN(len(l))
 
 	return l[randIndex]
+}
+
+// GetProtocolScheme returns "https" or "http" based on the useHTTPS flag.
+func GetProtocolScheme(useHTTPS bool) string {
+	if useHTTPS {
+		return "https"
+	}
+	return "http"
+}
+
+// ParseExtensionList parses a comma-separated list of file extensions,
+// normalizes them to lowercase and trims whitespace.
+// Returns nil if input is empty.
+func ParseExtensionList(extString string) []string {
+	if extString == "" {
+		return nil
+	}
+	parts := strings.Split(extString, ",")
+	result := make([]string, 0, len(parts))
+	for _, ext := range parts {
+		ext = strings.TrimSpace(strings.ToLower(ext))
+		if ext != "" {
+			result = append(result, ext)
+		}
+	}
+	return result
+}
+
+// EnsureDirectory creates a directory if it doesn't exist.
+// Returns nil if the directory already exists or was created successfully.
+func EnsureDirectory(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Error("Failed to create directory", "dir", dir, "error", err)
+		return err
+	}
+	return nil
 }

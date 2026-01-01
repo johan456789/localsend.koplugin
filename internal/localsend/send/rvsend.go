@@ -134,16 +134,13 @@ func (rs *ReverseSender) Start() error {
 		return err
 	}
 
-	scheme := "http"
-	if rs.https {
-		scheme = "https"
-	}
+	scheme := utils.GetProtocolScheme(rs.https)
 
 	slog.Info("Start reverse sending server", "https", rs.https)
 
 	// build downloads list
 	for idx := range ip {
-		host := net.JoinHostPort(ip[idx].String(), "53317")
+		host := net.JoinHostPort(ip[idx].String(), constants.DefaultPortStr)
 
 		for fileId, fileMeta := range rs.files {
 			rs.downloads = append(rs.downloads, DownloadEntry{
@@ -156,10 +153,7 @@ func (rs *ReverseSender) Start() error {
 		_, _ = fmt.Fprintf(os.Stdout, "Visit %s://%s to download files\n", scheme, host)
 	}
 
-	if rs.https {
-		return server.ListenTLSWithCertificate("0.0.0.0:53317", rs.cert)
-	}
-	return server.Listen("0.0.0.0:53317")
+	return lsutils.ListenWithTLS(server, constants.DefaultListenAddr, rs.cert, rs.https)
 }
 
 func (rs *ReverseSender) Cancel() error {

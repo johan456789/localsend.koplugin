@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -117,6 +118,15 @@ func (r *RTCReceiver) SetRequirePairing(require bool) {
 // Keys should be lowercase extensions without dots (e.g., "epub", "pdf").
 func (r *RTCReceiver) SetExtensionRoutes(routes map[string]string) {
 	r.extRoutes = routes
+}
+
+// sendError sends an error response to the peer.
+func (r *RTCReceiver) sendError(message string) {
+	if r.peer == nil {
+		return
+	}
+	errResp := RTCErrorResponse{Error: message}
+	_ = r.peer.SendJSON(errResp)
 }
 
 // getSaveDir returns the appropriate save directory for a filename.
@@ -298,6 +308,7 @@ func (r *RTCReceiver) handleNonce(msg interface{}, msgType string) {
 	remoteNonce, err := crypto.DecodeNonce(nonceMsg.Nonce)
 	if err != nil {
 		slog.Error("Failed to decode remote nonce", "error", err)
+		r.sendError("invalid nonce format")
 		return
 	}
 	r.remoteNonce = remoteNonce
@@ -306,17 +317,21 @@ func (r *RTCReceiver) handleNonce(msg interface{}, msgType string) {
 	localNonce, err := crypto.GenerateNonce()
 	if err != nil {
 		slog.Error("Failed to generate nonce", "error", err)
+		r.sendError("internal error: nonce generation failed")
 		return
 	}
 	r.localNonce = localNonce
 
 	// Final nonce = sender_nonce || receiver_nonce
-	r.finalNonce = append(r.remoteNonce, r.localNonce...)
+	// Use explicit allocation to avoid modifying underlying arrays
+	r.finalNonce = make([]byte, len(r.remoteNonce)+len(r.localNonce))
+	copy(r.finalNonce, r.remoteNonce)
+	copy(r.finalNonce[len(r.remoteNonce):], r.localNonce)
 
 	response := RTCNonceMessage{
 		Nonce: crypto.EncodeNonce(localNonce),
 	}
-	if err := r.sendJSON(response); err != nil {
+	if err := r.peer.SendJSON(response); err != nil {
 		slog.Error("Failed to send nonce response", "error", err)
 		return
 	}
@@ -345,7 +360,7 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 			slog.Warn("Sender token verification failed", "error", err)
 			if r.strictVerification {
 				response := RTCTokenResponse{Status: "INVALID_SIGNATURE"}
-				_ = r.sendJSON(response)
+				_ = r.peer.SendJSON(response)
 				slog.Error("Rejecting sender due to invalid token signature")
 				return
 			}
@@ -360,6 +375,7 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 	token, err := r.signingKey.GenerateTokenWithNonce(r.finalNonce)
 	if err != nil {
 		slog.Error("Failed to generate token", "error", err)
+		r.sendError("internal error: token generation failed")
 		return
 	}
 
@@ -371,9 +387,7 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 		response = RTCTokenResponse{Status: "OK", Token: token}
 	}
 
-	_ = r.sendJSON(response)
-
-	slog.Info("Token exchange complete", "status", response.Status)
+	_ = r.peer.SendJSON(response)
 
 	slog.Info("Token exchange complete", "status", response.Status)
 	if response.Status == "PIN_REQUIRED" {
@@ -396,7 +410,7 @@ func (r *RTCReceiver) handlePin(msg interface{}, msgType string) {
 	if pinMsg.Pin == r.pin {
 		slog.Info("PIN correct")
 		response := RTCPinReceivingResponse{Status: "OK"}
-		_ = r.sendJSON(response)
+		_ = r.peer.SendJSON(response)
 		r.state = stateWaitFileList
 		return
 	}
@@ -407,13 +421,13 @@ func (r *RTCReceiver) handlePin(msg interface{}, msgType string) {
 	if r.pinAttempts >= 3 {
 		slog.Error("Too many PIN attempts, closing connection")
 		response := RTCPinReceivingResponse{Status: "TOO_MANY_ATTEMPTS"}
-		_ = r.sendJSON(response)
+		_ = r.peer.SendJSON(response)
 		_ = r.Close()
 		return
 	}
 
 	response := RTCPinReceivingResponse{Status: "PIN_REQUIRED"}
-	_ = r.sendJSON(response)
+	_ = r.peer.SendJSON(response)
 }
 
 // handleFileList processes the file list from sender.
@@ -452,10 +466,10 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 
 	if len(acceptedIDs) == 0 {
 		response := RTCFileListResponse{Status: "DECLINED"}
-		if err := r.sendJSONBinary(response); err != nil {
+		if err := r.peer.SendJSONBinary(response); err != nil {
 			slog.Error("Failed to send decline response", "error", err)
 		}
-		if err := r.sendDelimiter(); err != nil {
+		if err := r.peer.SendDelimiter(); err != nil {
 			slog.Error("Failed to send delimiter", "error", err)
 		}
 		slog.Info("Declined all files")
@@ -472,11 +486,11 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 			Status:    "PAIR",
 			PublicKey: r.signingKey.PublicKeyPEM(),
 		}
-		if err := r.sendJSONBinary(response); err != nil {
+		if err := r.peer.SendJSONBinary(response); err != nil {
 			slog.Error("Failed to send PAIR request", "error", err)
 			return
 		}
-		if err := r.sendDelimiter(); err != nil {
+		if err := r.peer.SendDelimiter(); err != nil {
 			slog.Error("Failed to send delimiter after PAIR request", "error", err)
 			return
 		}
@@ -501,7 +515,11 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 					slog.Error("Failed to create save directory", "dir", saveDir, "error", err)
 					continue
 				}
-				path := session.FindUniquePath(saveDir, f.FileName)
+				path, err := session.FindUniquePath(saveDir, f.FileName)
+				if err != nil {
+					slog.Error("Failed to find unique path", "error", err)
+					continue
+				}
 				file, err := os.Create(path)
 				if err != nil {
 					slog.Error("Failed to create file", "path", path, "error", err)
@@ -521,13 +539,13 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 		Status: "OK",
 		Files:  fileTokens,
 	}
-	if err := r.sendJSONBinary(response); err != nil {
+	if err := r.peer.SendJSONBinary(response); err != nil {
 		slog.Error("Failed to send file acceptance", "error", err)
 		return
 	}
 
 	// Send delimiter to signal end of our response (required by protocol)
-	if err := r.sendDelimiter(); err != nil {
+	if err := r.peer.SendDelimiter(); err != nil {
 		slog.Error("Failed to send delimiter", "error", err)
 		return
 	}
@@ -596,7 +614,11 @@ func (r *RTCReceiver) acceptFilesAfterPair() {
 					slog.Error("Failed to create save directory", "dir", saveDir, "error", err)
 					continue
 				}
-				path := session.FindUniquePath(saveDir, f.FileName)
+				path, err := session.FindUniquePath(saveDir, f.FileName)
+				if err != nil {
+					slog.Error("Failed to find unique path", "error", err)
+					continue
+				}
 				file, err := os.Create(path)
 				if err != nil {
 					slog.Error("Failed to create file", "path", path, "error", err)
@@ -616,12 +638,12 @@ func (r *RTCReceiver) acceptFilesAfterPair() {
 		Status: "OK",
 		Files:  fileTokens,
 	}
-	if err := r.sendJSONBinary(response); err != nil {
+	if err := r.peer.SendJSONBinary(response); err != nil {
 		slog.Error("Failed to send file acceptance after PAIR", "error", err)
 		return
 	}
 
-	if err := r.sendDelimiter(); err != nil {
+	if err := r.peer.SendDelimiter(); err != nil {
 		slog.Error("Failed to send delimiter after PAIR acceptance", "error", err)
 		return
 	}
@@ -721,36 +743,11 @@ func (r *RTCReceiver) finishCurrentFile() {
 		Success: success,
 		Error:   errorMsg,
 	}
-	if err := r.sendJSON(response); err != nil {
+	if err := r.peer.SendJSON(response); err != nil {
 		slog.Error("Failed to send file response", "error", err)
 	}
 
 	r.currentFileID = ""
-}
-
-// sendJSON sends a JSON message through the data channel as text (for simple responses).
-func (r *RTCReceiver) sendJSON(v interface{}) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	slog.Info("Sending message", "content", string(data))
-	return r.peer.SendText(string(data))
-}
-
-// sendJSONBinary sends JSON as binary data (for chunked protocol responses).
-func (r *RTCReceiver) sendJSONBinary(v interface{}) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	slog.Info("Sending binary message", "content", string(data))
-	return r.peer.Send(data)
-}
-
-// sendDelimiter sends the delimiter to signal end of chunked message.
-func (r *RTCReceiver) sendDelimiter() error {
-	return r.peer.SendText("0")
 }
 
 // Close closes the receiver.
@@ -765,11 +762,32 @@ func (r *RTCReceiver) Close() error {
 }
 
 // ListenForOffers listens for incoming WebRTC offers.
+// Deprecated: Use ListenForOffersWithContext for cancellation support.
 func (r *RTCReceiver) ListenForOffers(onOffer func(offer signaling.WsServerMessage)) {
 	go func() {
 		for msg := range r.signaling.Messages() {
 			if msg.Type == "OFFER" {
 				onOffer(msg)
+			}
+		}
+	}()
+}
+
+// ListenForOffersWithContext listens for incoming WebRTC offers with context support.
+// The listener stops when the context is cancelled or the signaling channel closes.
+func (r *RTCReceiver) ListenForOffersWithContext(ctx context.Context, onOffer func(offer signaling.WsServerMessage)) {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-r.signaling.Messages():
+				if !ok {
+					return
+				}
+				if msg.Type == "OFFER" {
+					onOffer(msg)
+				}
 			}
 		}
 	}()

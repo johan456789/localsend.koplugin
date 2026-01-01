@@ -12,11 +12,13 @@ import (
 
 type RecvSessManager struct {
 	sessions *sync.Map
+	done     chan struct{}
 }
 
 func NewRecvSessManager() *RecvSessManager {
 	return &RecvSessManager{
 		sessions: &sync.Map{},
+		done:     make(chan struct{}),
 	}
 }
 
@@ -24,22 +26,31 @@ func (rsm *RecvSessManager) Start() {
 	go rsm.vacuumTask()
 }
 
+func (rsm *RecvSessManager) Stop() {
+	close(rsm.done)
+}
+
 func (rsm *RecvSessManager) vacuumTask() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		rsm.sessions.Range(func(key, value any) bool {
-			sessionId := key.(string)
-			session := value.(*RecvSession)
+	for {
+		select {
+		case <-rsm.done:
+			return
+		case <-ticker.C:
+			rsm.sessions.Range(func(key, value any) bool {
+				sessionId := key.(string)
+				session := value.(*RecvSession)
 
-			if session.Stopped() {
-				slog.Info("Cleanup stopped session", "session", sessionId)
-				rsm.sessions.Delete(sessionId)
-			}
+				if session.Stopped() {
+					slog.Info("Cleanup stopped session", "session", sessionId)
+					rsm.sessions.Delete(sessionId)
+				}
 
-			return true
-		})
+				return true
+			})
+		}
 	}
 }
 

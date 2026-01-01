@@ -68,12 +68,9 @@ var Cmd = &cobra.Command{
 		}
 
 		// Set allowed extensions if provided
-		if acceptExt != "" {
-			extensions := strings.Split(acceptExt, ",")
-			for i, ext := range extensions {
-				extensions[i] = strings.TrimSpace(strings.ToLower(ext))
-			}
-			recver.SetAllowedExtensions(extensions)
+		allowedExts := utils.ParseExtensionList(acceptExt)
+		if len(allowedExts) > 0 {
+			recver.SetAllowedExtensions(allowedExts)
 		}
 
 		if err := recver.Init(); err != nil {
@@ -92,16 +89,6 @@ var Cmd = &cobra.Command{
 			}
 		}()
 
-		// WebRTC receiver (enabled by default as v3 is the future)
-		// Parse extensions for WebRTC receiver too
-		var allowedExts []string
-		if acceptExt != "" {
-			allowedExts = strings.Split(acceptExt, ",")
-			for i, ext := range allowedExts {
-				allowedExts[i] = strings.TrimSpace(strings.ToLower(ext))
-			}
-		}
-
 		if webrtcMode {
 			wg.Add(1)
 			go func() {
@@ -118,28 +105,15 @@ var Cmd = &cobra.Command{
 }
 
 func startWebRTCReceiver(deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string)) {
-	// Generate signing key for token
-	key, err := crypto.GenerateKeyPair()
+	// Generate signing key and token
+	key, token, err := crypto.GenerateKeyPairWithToken()
 	if err != nil {
-		slog.Error("Failed to generate key pair", "error", err)
-		return
-	}
-
-	// Generate token
-	token, err := key.GenerateTokenTimestamp()
-	if err != nil {
-		slog.Error("Failed to generate token", "error", err)
+		slog.Error("Failed to generate key pair with token", "error", err)
 		return
 	}
 
 	// Connect to signaling server
-	info := signaling.ClientInfoWithoutID{
-		Alias:       deviceName,
-		Version:     "2.1",
-		DeviceModel: "LocalSend-CLI",
-		DeviceType:  "headless",
-		Token:       token,
-	}
+	info := signaling.NewClientInfo(deviceName, token)
 
 	client, err := signaling.Connect(signaling.DefaultSignalingServer, info)
 	if err != nil {
@@ -147,6 +121,12 @@ func startWebRTCReceiver(deviceName, saveDir, pin string, allowedExts []string, 
 		return
 	}
 	defer func() { _ = client.Close() }()
+
+	// Set up token refresh for long-running sessions (matches web client behavior)
+	// Tokens are valid for 1 hour; refresh every 30 minutes to maintain validity
+	client.SetTokenGenerator(func() (string, error) {
+		return key.GenerateTokenTimestamp()
+	})
 
 	slog.Info("WebRTC receiver listening", "id", client.ClientID())
 

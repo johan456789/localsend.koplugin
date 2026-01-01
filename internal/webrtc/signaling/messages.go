@@ -45,6 +45,18 @@ type ClientInfoWithoutID struct {
 	Token       string `json:"token"`
 }
 
+// NewClientInfo creates a ClientInfoWithoutID with standard CLI defaults.
+// This is the common pattern used by recv, scan, and send commands.
+func NewClientInfo(alias, token string) ClientInfoWithoutID {
+	return ClientInfoWithoutID{
+		Alias:       alias,
+		Version:     "2.1",
+		DeviceModel: "LocalSend-CLI",
+		DeviceType:  "headless",
+		Token:       token,
+	}
+}
+
 // ToAnnouncement converts ClientInfo to a models.Announcement for display.
 func (c *ClientInfo) ToAnnouncement() models.Announcement {
 	return models.Announcement{

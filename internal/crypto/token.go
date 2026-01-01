@@ -52,6 +52,23 @@ func GenerateKeyPair() (*SigningKey, error) {
 	}, nil
 }
 
+// GenerateKeyPairWithToken creates a new key pair and generates an initial token.
+// This is a convenience function for the common pattern of generating a key pair
+// and immediately creating a timestamp-based token for WebRTC signaling.
+func GenerateKeyPairWithToken() (key *SigningKey, token string, err error) {
+	key, err = GenerateKeyPair()
+	if err != nil {
+		return nil, "", err
+	}
+
+	token, err = key.GenerateTokenTimestamp()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate token: %w", err)
+	}
+
+	return key, token, nil
+}
+
 // PublicKey returns the public key component.
 func (k *SigningKey) PublicKey() ed25519.PublicKey {
 	return k.publicKey

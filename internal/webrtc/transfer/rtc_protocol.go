@@ -82,6 +82,11 @@ type RTCSendFileResponse struct {
 	Error   *string `json:"error,omitempty"`
 }
 
+// RTCErrorResponse is sent when an error occurs during handshake.
+type RTCErrorResponse struct {
+	Error string `json:"error"`
+}
+
 // ParseRTCMessage tries to detect what type of message this is.
 func ParseRTCMessage(data []byte) (interface{}, string, error) {
 	// Try each message type

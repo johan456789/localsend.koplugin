@@ -198,7 +198,7 @@ func (s *RTCSender) startNonceExchange() {
 
 	// Send nonce
 	msg := RTCNonceMessage{Nonce: crypto.EncodeNonce(nonce)}
-	if err := s.sendJSON(msg); err != nil {
+	if err := s.peer.SendJSON(msg); err != nil {
 		s.errors <- fmt.Errorf("failed to send nonce: %w", err)
 		return
 	}
@@ -267,7 +267,7 @@ func (s *RTCSender) handleNonceResponse(msg interface{}, msgType string) {
 	}
 
 	tokenMsg := RTCTokenRequest{Token: token}
-	if err := s.sendJSON(tokenMsg); err != nil {
+	if err := s.peer.SendJSON(tokenMsg); err != nil {
 		slog.Error("Failed to send token", "error", err)
 		return
 	}
@@ -335,7 +335,7 @@ func (s *RTCSender) handleTokenResponse(msg interface{}, msgType string, data []
 
 		// Send PIN message
 		pinMsg := RTCPinMessage{Pin: s.pin}
-		if err := s.sendJSON(pinMsg); err != nil {
+		if err := s.peer.SendJSON(pinMsg); err != nil {
 			s.errors <- fmt.Errorf("failed to send PIN: %w", err)
 			return
 		}
@@ -369,11 +369,11 @@ func (s *RTCSender) sendFileList() {
 	}
 
 	// Send as binary + delimiter
-	if err := s.sendJSONBinary(fileList); err != nil {
+	if err := s.peer.SendJSONBinary(fileList); err != nil {
 		slog.Error("Failed to send file list", "error", err)
 		return
 	}
-	if err := s.sendDelimiter(); err != nil {
+	if err := s.peer.SendDelimiter(); err != nil {
 		slog.Error("Failed to send delimiter", "error", err)
 		return
 	}
@@ -413,11 +413,11 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 			Status:    "OK",
 			PublicKey: s.signingKey.PublicKeyPEM(),
 		}
-		if err := s.sendJSONBinary(pairResponse); err != nil {
+		if err := s.peer.SendJSONBinary(pairResponse); err != nil {
 			slog.Error("Failed to send PAIR response", "error", err)
 			return
 		}
-		if err := s.sendDelimiter(); err != nil {
+		if err := s.peer.SendDelimiter(); err != nil {
 			slog.Error("Failed to send delimiter after PAIR response", "error", err)
 			return
 		}
@@ -467,7 +467,7 @@ func (s *RTCSender) SendFiles() error {
 
 		// Send file header
 		header := RTCSendFileHeader{ID: id, Token: token}
-		if err := s.sendJSON(header); err != nil {
+		if err := s.peer.SendJSON(header); err != nil {
 			_ = f.Close()
 			return fmt.Errorf("failed to send file header: %w", err)
 		}
@@ -495,7 +495,7 @@ func (s *RTCSender) SendFiles() error {
 	}
 
 	// Send final delimiter to signal end of all files
-	if err := s.sendDelimiter(); err != nil {
+	if err := s.peer.SendDelimiter(); err != nil {
 		return fmt.Errorf("failed to send final delimiter: %w", err)
 	}
 
@@ -509,31 +509,6 @@ func (s *RTCSender) SendFiles() error {
 
 	s.state = senderStateDone
 	return nil
-}
-
-// sendJSON sends a JSON message as text.
-func (s *RTCSender) sendJSON(v interface{}) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	slog.Debug("Sending message", "len", len(data))
-	return s.peer.SendText(string(data))
-}
-
-// sendJSONBinary sends JSON as binary data.
-func (s *RTCSender) sendJSONBinary(v interface{}) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	slog.Debug("Sending binary message", "len", len(data))
-	return s.peer.Send(data)
-}
-
-// sendDelimiter sends the delimiter to signal end of chunk.
-func (s *RTCSender) sendDelimiter() error {
-	return s.peer.SendText("0")
 }
 
 // Close closes the sender and peer connection.

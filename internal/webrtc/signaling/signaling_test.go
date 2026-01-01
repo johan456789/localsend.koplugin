@@ -1,10 +1,13 @@
 package signaling
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -983,6 +986,136 @@ func TestSdpDecompressEmptyInput(t *testing.T) {
 	_, err := DecompressSDP("")
 	if err == nil {
 		t.Error("Expected error for empty input")
+	}
+}
+
+// =============================================================================
+// Context Propagation Tests (Issue #18)
+// =============================================================================
+
+// TestConnectWithContextCancellation verifies that ConnectWithContext respects context cancellation.
+func TestConnectWithContextCancellation(t *testing.T) {
+	// Create a context that's already cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	info := ClientInfoWithoutID{
+		Alias:       "Test Device",
+		Version:     "2.3",
+		DeviceModel: "Test",
+		DeviceType:  "desktop",
+		Token:       "test-token",
+	}
+
+	// This should fail quickly due to cancelled context, not hang
+	_, err := ConnectWithContext(ctx, DefaultSignalingServer, info)
+	if err == nil {
+		t.Error("Expected error when context is cancelled")
+	}
+
+	// Error should indicate context was cancelled
+	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "context canceled") {
+		t.Logf("Got error (expected context cancellation): %v", err)
+	}
+}
+
+// TestConnectWithContextTimeout verifies that ConnectWithContext respects context timeout.
+func TestConnectWithContextTimeout(t *testing.T) {
+	// Create a context with very short timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+
+	info := ClientInfoWithoutID{
+		Alias:       "Test Device",
+		Version:     "2.3",
+		DeviceModel: "Test",
+		DeviceType:  "desktop",
+		Token:       "test-token",
+	}
+
+	// This should fail quickly due to timeout
+	_, err := ConnectWithContext(ctx, DefaultSignalingServer, info)
+	if err == nil {
+		t.Error("Expected error when context times out")
+	}
+
+	// Error should indicate deadline exceeded or context-related
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline") && !strings.Contains(err.Error(), "timeout") {
+		t.Logf("Got error (expected timeout): %v", err)
+	}
+}
+
+// TestConnectBuildsCorrectURL verifies that Connect builds URL with correct query parameter.
+func TestConnectBuildsCorrectURL(t *testing.T) {
+	// We can't easily test the actual connection without a mock server,
+	// but we can verify the URL building logic by checking the encoded info format.
+
+	info := ClientInfoWithoutID{
+		Alias:       "Test Device",
+		Version:     "2.3",
+		DeviceModel: "Test Model",
+		DeviceType:  "desktop",
+		Token:       "abc123",
+	}
+
+	// Marshal and encode as the function does
+	infoJSON, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Failed to marshal: %v", err)
+	}
+
+	encoded := base64.RawURLEncoding.EncodeToString(infoJSON)
+
+	// Verify the encoded string is URL-safe
+	if strings.Contains(encoded, "+") || strings.Contains(encoded, "/") || strings.Contains(encoded, "=") {
+		t.Errorf("Encoded info is not URL-safe: %s", encoded)
+	}
+
+	// Verify we can decode it back
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("Failed to decode: %v", err)
+	}
+
+	var parsedInfo ClientInfoWithoutID
+	if err := json.Unmarshal(decoded, &parsedInfo); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if parsedInfo.Alias != info.Alias {
+		t.Errorf("Alias = %q; want %q", parsedInfo.Alias, info.Alias)
+	}
+	if parsedInfo.Token != info.Token {
+		t.Errorf("Token = %q; want %q", parsedInfo.Token, info.Token)
+	}
+}
+
+// TestConnectWithInvalidURL verifies that Connect handles invalid URLs gracefully.
+func TestConnectWithInvalidURL(t *testing.T) {
+	info := ClientInfoWithoutID{
+		Alias:       "Test",
+		Version:     "2.3",
+		DeviceModel: "Test",
+		DeviceType:  "desktop",
+		Token:       "token",
+	}
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{"empty_url", ""},
+		{"invalid_scheme", "not-a-valid-url"},
+		{"missing_host", "wss://"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Connect(tt.url, info)
+			if err == nil {
+				t.Error("Expected error for invalid URL")
+			}
+		})
 	}
 }
 

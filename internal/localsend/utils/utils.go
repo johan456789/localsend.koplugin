@@ -137,14 +137,14 @@ func GenAndSaveTLScert(privKeyFile, certFile string) (tls.Certificate, error) {
 		Bytes: certBytes,
 	})
 
-	// save certificate
-	err = os.WriteFile(certFile, certPem, 0o640)
+	// save certificate (public, can be group-readable)
+	err = os.WriteFile(certFile, certPem, 0o644)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
 
-	// save private key
-	err = os.WriteFile(privKeyFile, certPrivKeyPem, 0o640)
+	// save private key (restricted permissions - owner only)
+	err = os.WriteFile(privKeyFile, certPrivKeyPem, 0o600)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
@@ -189,4 +189,13 @@ func NewWebServer(withTemplateEngine ...bool) *fiber.App {
 	}
 
 	return fiber.New(config)
+}
+
+// ListenWithTLS starts the fiber server with optional TLS support.
+// If useHTTPS is true, it uses ListenTLSWithCertificate, otherwise Listen.
+func ListenWithTLS(server *fiber.App, addr string, cert tls.Certificate, useHTTPS bool) error {
+	if useHTTPS {
+		return server.ListenTLSWithCertificate(addr, cert)
+	}
+	return server.Listen(addr)
 }

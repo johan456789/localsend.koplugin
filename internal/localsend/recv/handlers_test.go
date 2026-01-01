@@ -255,7 +255,7 @@ func TestRegisterV3Handler_ValidRequest(t *testing.T) {
 		DeviceModel: "iPhone",
 		DeviceType:  "MOBILE",
 		Token:       "sender-token",
-		Port:        53317,
+		Port:        constants.DefaultPort,
 		Protocol:    "https",
 	})
 	req := httptest.NewRequest("POST", constants.RegisterPathV3, bytes.NewReader(body))

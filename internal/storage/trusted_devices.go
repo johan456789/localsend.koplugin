@@ -1,3 +1,24 @@
+// Package storage provides persistent storage for LocalSend CLI.
+//
+// TrustedDeviceStore manages trusted devices for the PAIR flow defined in
+// the LocalSend protocol specification (Section 6: Device Pairing).
+// When pairing is enabled, devices exchange Ed25519 public keys and store
+// them for future authentication. This allows skipping PIN verification
+// for previously paired devices.
+//
+// Integration Status: TrustedDeviceStore is currently not integrated into
+// the main application commands. WebRTC receiver (internal/webrtc/transfer/receiver.go)
+// has partial PAIR flow support that can be connected to this store.
+//
+// Usage:
+//
+//	store, err := storage.NewTrustedDeviceStore(configDir)
+//	if err != nil {
+//	    // handle error
+//	}
+//	if store.IsTrusted(senderPublicKey) {
+//	    // Skip PIN verification
+//	}
 package storage
 
 import (

@@ -2,12 +2,21 @@ package transfer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/pion/webrtc/v3"
+)
+
+// Connection close wait parameters
+const (
+	// closeWaitIterations is the number of intervals to wait for connection to close
+	closeWaitIterations = 20
+	// closeWaitInterval is the time between close state checks
+	closeWaitInterval = 100 * time.Millisecond
 )
 
 // Default STUN servers for ICE.
@@ -329,13 +338,13 @@ func (p *PeerConnection) Close() error {
 		return err
 	}
 
-	// Wait for connection state to become closed (up to 2 seconds)
-	for i := 0; i < 20; i++ {
+	// Wait for connection state to become closed
+	for i := 0; i < closeWaitIterations; i++ {
 		state := p.pc.ConnectionState()
 		if state == webrtc.PeerConnectionStateClosed {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(closeWaitInterval)
 	}
 
 	return nil
@@ -349,4 +358,27 @@ func (p *PeerConnection) ConnectionState() webrtc.PeerConnectionState {
 // IsConnected returns true if the connection is established.
 func (p *PeerConnection) IsConnected() bool {
 	return p.pc.ConnectionState() == webrtc.PeerConnectionStateConnected
+}
+
+// SendJSON sends a JSON-encoded message as text through the data channel.
+func (p *PeerConnection) SendJSON(v interface{}) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return p.SendText(string(data))
+}
+
+// SendJSONBinary sends a JSON-encoded message as binary data through the data channel.
+func (p *PeerConnection) SendJSONBinary(v interface{}) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return p.Send(data)
+}
+
+// SendDelimiter sends the "0" delimiter to signal end of a chunked message.
+func (p *PeerConnection) SendDelimiter() error {
+	return p.SendText("0")
 }

@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"net"
 
-	"github.com/0w0mewo/localsend-cli/internal/localsend/constants"
-	"github.com/0w0mewo/localsend-cli/internal/localsend/send"
-	"github.com/0w0mewo/localsend-cli/internal/models"
+	"localsend-cli/internal/localsend/constants"
+	"localsend-cli/internal/localsend/send"
+	"localsend-cli/internal/models"
 	"github.com/gofiber/fiber/v2"
 )
 

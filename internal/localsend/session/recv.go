@@ -12,8 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	lserrors "github.com/0w0mewo/localsend-cli/internal/localsend/constants"
-	"github.com/0w0mewo/localsend-cli/internal/models"
+	lserrors "localsend-cli/internal/localsend/constants"
+	"localsend-cli/internal/models"
 	"github.com/google/uuid"
 )
 

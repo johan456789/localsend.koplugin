@@ -4,7 +4,7 @@ import (
 	"io/fs"
 	"path/filepath"
 
-	"github.com/0w0mewo/localsend-cli/internal/models"
+	"localsend-cli/internal/models"
 )
 
 type FileSender interface {

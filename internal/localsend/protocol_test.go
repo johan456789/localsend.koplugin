@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/0w0mewo/localsend-cli/internal/models"
+	"localsend-cli/internal/models"
 )
 
 func TestFingerprintSelfDiscovery(t *testing.T) {

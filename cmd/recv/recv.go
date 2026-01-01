@@ -8,12 +8,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/0w0mewo/localsend-cli/internal/crypto"
-	lsrecv "github.com/0w0mewo/localsend-cli/internal/localsend/recv"
-	lsutils "github.com/0w0mewo/localsend-cli/internal/localsend/utils"
-	"github.com/0w0mewo/localsend-cli/internal/utils"
-	"github.com/0w0mewo/localsend-cli/internal/webrtc/signaling"
-	"github.com/0w0mewo/localsend-cli/internal/webrtc/transfer"
+	"localsend-cli/internal/crypto"
+	lsrecv "localsend-cli/internal/localsend/recv"
+	lsutils "localsend-cli/internal/localsend/utils"
+	"localsend-cli/internal/utils"
+	"localsend-cli/internal/webrtc/signaling"
+	"localsend-cli/internal/webrtc/transfer"
 	"github.com/spf13/cobra"
 )
 

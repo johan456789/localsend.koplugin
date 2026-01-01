@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/0w0mewo/localsend-cli/internal/crypto"
-	"github.com/0w0mewo/localsend-cli/internal/localsend/session"
-	"github.com/0w0mewo/localsend-cli/internal/webrtc/signaling"
+	"localsend-cli/internal/crypto"
+	"localsend-cli/internal/localsend/session"
+	"localsend-cli/internal/webrtc/signaling"
 )
 
 // Receiver handshake states

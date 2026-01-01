@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/0w0mewo/localsend-cli/internal/utils"
+	"localsend-cli/internal/utils"
 	"github.com/google/uuid"
 )
 

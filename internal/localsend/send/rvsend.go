@@ -8,11 +8,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/0w0mewo/localsend-cli/internal/localsend/constants"
-	lsutils "github.com/0w0mewo/localsend-cli/internal/localsend/utils"
-	"github.com/0w0mewo/localsend-cli/internal/models"
-	"github.com/0w0mewo/localsend-cli/internal/utils"
-	"github.com/0w0mewo/localsend-cli/templates"
+	"localsend-cli/internal/localsend/constants"
+	lsutils "localsend-cli/internal/localsend/utils"
+	"localsend-cli/internal/models"
+	"localsend-cli/internal/utils"
+	"localsend-cli/templates"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )

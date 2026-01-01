@@ -1,4 +1,4 @@
-module github.com/0w0mewo/localsend-cli
+module localsend-cli
 
 go 1.23.0
 

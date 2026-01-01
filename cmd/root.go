@@ -4,9 +4,9 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/0w0mewo/localsend-cli/cmd/recv"
-	"github.com/0w0mewo/localsend-cli/cmd/scan"
-	"github.com/0w0mewo/localsend-cli/cmd/send"
+	"localsend-cli/cmd/recv"
+	"localsend-cli/cmd/scan"
+	"localsend-cli/cmd/send"
 	"github.com/spf13/cobra"
 )
 

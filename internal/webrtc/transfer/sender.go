@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/0w0mewo/localsend-cli/internal/crypto"
-	"github.com/0w0mewo/localsend-cli/internal/webrtc/signaling"
+	"localsend-cli/internal/crypto"
+	"localsend-cli/internal/webrtc/signaling"
 	"github.com/google/uuid"
 )
 

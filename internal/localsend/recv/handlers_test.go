@@ -7,12 +7,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/0w0mewo/localsend-cli/internal/crypto"
-	"github.com/0w0mewo/localsend-cli/internal/localsend"
-	"github.com/0w0mewo/localsend-cli/internal/localsend/constants"
-	sess "github.com/0w0mewo/localsend-cli/internal/localsend/session"
-	lsutils "github.com/0w0mewo/localsend-cli/internal/localsend/utils"
-	"github.com/0w0mewo/localsend-cli/internal/models"
+	"localsend-cli/internal/crypto"
+	"localsend-cli/internal/localsend"
+	"localsend-cli/internal/localsend/constants"
+	sess "localsend-cli/internal/localsend/session"
+	lsutils "localsend-cli/internal/localsend/utils"
+	"localsend-cli/internal/models"
 	"github.com/gofiber/fiber/v2"
 )
 

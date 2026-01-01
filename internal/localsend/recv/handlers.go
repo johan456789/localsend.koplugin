@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"log/slog"
 
-	"github.com/0w0mewo/localsend-cli/internal/crypto"
-	"github.com/0w0mewo/localsend-cli/internal/localsend/constants"
-	"github.com/0w0mewo/localsend-cli/internal/models"
+	"localsend-cli/internal/crypto"
+	"localsend-cli/internal/localsend/constants"
+	"localsend-cli/internal/models"
 	"github.com/gofiber/fiber/v2"
 )
 

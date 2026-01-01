@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/0w0mewo/localsend-cli/internal/localsend/constants"
-	"github.com/0w0mewo/localsend-cli/internal/models"
-	"github.com/0w0mewo/localsend-cli/internal/utils"
+	"localsend-cli/internal/localsend/constants"
+	"localsend-cli/internal/models"
+	"localsend-cli/internal/utils"
 	"github.com/gofiber/fiber/v2"
 )
 

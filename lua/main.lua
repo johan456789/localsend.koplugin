@@ -301,7 +301,9 @@ function LocalSend:start()
         transfer_log_file)
 
     if self.device_name ~= "" then
-        cmd = string.format("%s -n '%s'", cmd, self.device_name)
+        -- Escape single quotes for shell: replace ' with '\''
+        local escaped_name = self.device_name:gsub("'", "'\\''")
+        cmd = string.format("%s -n '%s'", cmd, escaped_name)
     end
 
     if self.pin ~= "" then

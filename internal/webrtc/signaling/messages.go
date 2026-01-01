@@ -1,7 +1,7 @@
 package signaling
 
 import (
-	"github.com/0w0mewo/localsend-cli/internal/models"
+	"localsend-cli/internal/models"
 	"github.com/google/uuid"
 )
 

@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/0w0mewo/localsend-cli/internal/localsend/constants"
-	"github.com/0w0mewo/localsend-cli/internal/models"
+	"localsend-cli/internal/localsend/constants"
+	"localsend-cli/internal/models"
 	"github.com/google/uuid"
 )
 

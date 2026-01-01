@@ -13,8 +13,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/0w0mewo/localsend-cli/internal/utils"
-	"github.com/0w0mewo/localsend-cli/templates"
+	"localsend-cli/internal/utils"
+	"localsend-cli/templates"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/template/html/v2"
 	"github.com/google/uuid"

@@ -89,10 +89,10 @@ Tested on Kindle Paperwhite 12 (armv7). Should work on other devices supported b
 
 ### Which architecture do I need?
 
-| Architecture | Devices                                                |
-| ------------ | ------------------------------------------------------ |
-| **armv7**    | Kindle, Kobo (all models), reMarkable 2, PocketBook    |
-| **arm64**    | reMarkable Paper Pro                                   |
+| Architecture | Devices                                             |
+| ------------ | --------------------------------------------------- |
+| **armv7**    | Kindle, Kobo (all models), reMarkable 2, PocketBook |
+| **arm64**    | reMarkable Paper Pro                                |
 
 > **Kindle users:** This plugin works best with firmware 5.16.3 or newer. Older firmware versions may also work as of v1.0.7 — give it a try!
 
@@ -109,6 +109,7 @@ armv7 devices:
 - Kindle Basic 10th Gen
 - Kindle Oasis
 - Kindle Colorsoft 32GB
+- Kindle Scribe 1st Gen
 - Kobo Clara Colour
 - Kobo Forma
 - Kobo Libra Colour

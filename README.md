@@ -44,6 +44,7 @@ A KOReader plugin that enables receiving files from other devices using the [Loc
 | Save directory      | Destination folder for received files           |
 | Device name         | Display name on the network (e.g., "My Kindle") |
 | Allowed extensions  | Comma-separated list of accepted file types     |
+| File type routing   | Route files to different directories by type    |
 | PIN code            | Required PIN for incoming transfers (optional)  |
 | Use HTTPS           | Enable TLS encryption (recommended)             |
 | Use WebRTC          | Enable v3 protocol for latest LocalSend apps    |
@@ -118,3 +119,91 @@ armv7 devices:
 ### License
 
 MIT License
+
+---
+
+## Standalone CLI Usage
+
+The backend can also be used as a standalone command-line tool without KOReader.
+
+### Building
+
+```bash
+go build -o localsend
+```
+
+### Receiving Files
+
+```bash
+# Basic receive mode
+./localsend recv -d ~/Downloads
+
+# With device name and PIN
+./localsend recv -d ~/Downloads -n "My Server" -p 1234
+
+# Filter by file type
+./localsend recv -d ~/Downloads -a epub,pdf,mobi
+
+# With extension routing (route files to different directories)
+./localsend recv -d ~/Downloads --ext-routing routing.json
+```
+
+### CLI Flags
+
+| Flag             | Description                                      |
+| ---------------- | ------------------------------------------------ |
+| `-d, --dir`      | Save directory for received files                |
+| `-n, --devname`  | Device name advertised on the network            |
+| `-p, --pin`      | PIN code required for transfers                  |
+| `-a, --accept-ext` | Comma-separated list of allowed extensions     |
+| `--ext-routing`  | Path to extension routing config (JSON)          |
+| `--https`        | Enable HTTPS (default: true)                     |
+| `-w, --webrtc`   | Enable WebRTC/v3 protocol (default: true)        |
+| `-l, --log`      | Path to transfer log file (JSON lines format)    |
+
+### Extension Routing
+
+Extension routing lets you save different file types to different directories. Create a JSON file with extension-to-directory mappings:
+
+```json
+{
+  "epub": "/home/user/Books",
+  "pdf": "/home/user/Documents",
+  "mobi": "/home/user/Books",
+  "cbz": "/home/user/Comics",
+  "default": "/home/user/Downloads"
+}
+```
+
+**Format:**
+- Keys are lowercase file extensions (without the dot)
+- Values are absolute directory paths
+- The special `"default"` key specifies where unrouted files go
+- If `"default"` is omitted, unrouted files are rejected
+
+**Usage:**
+```bash
+./localsend recv -d ~/Downloads --ext-routing ~/routing.json
+```
+
+**Example configurations:**
+
+*E-reader focused (strict - only accept specific types):*
+```json
+{
+  "epub": "/mnt/us/documents/Books",
+  "pdf": "/mnt/us/documents/PDFs",
+  "mobi": "/mnt/us/documents/Books",
+  "azw3": "/mnt/us/documents/Books"
+}
+```
+
+*General purpose (accept all, route specific types):*
+```json
+{
+  "epub": "/home/user/Books",
+  "pdf": "/home/user/Documents",
+  "mp3": "/home/user/Music",
+  "default": "/home/user/Downloads"
+}
+```

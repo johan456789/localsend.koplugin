@@ -28,8 +28,9 @@ type FileReceiver struct {
 	saveToDir         string
 	discoverier       *localsend.Discoverier
 	expectedPin       string
-	allowedExtensions []string // New field for extension filtering
-	transferLogPath   string   // Path to transfer log file
+	allowedExtensions []string          // New field for extension filtering
+	transferLogPath   string            // Path to transfer log file
+	router            *ExtensionRouter  // Routes files to different dirs by extension
 
 	// V3 nonce caches for token verification
 	receivedNonceCache  *localsend.NonceCache // nonces received from clients
@@ -102,6 +103,20 @@ func (fr *FileReceiver) SetAllowedExtensions(extensions []string) {
 	if len(extensions) > 0 {
 		slog.Info("File extension filter enabled", "allowed", extensions)
 	}
+}
+
+// SetExtensionRouter sets the router for extension-based directory routing.
+func (fr *FileReceiver) SetExtensionRouter(router *ExtensionRouter) {
+	fr.router = router
+}
+
+// GetSaveDir returns the appropriate save directory for a file.
+// Uses the router if configured, otherwise falls back to the default saveToDir.
+func (fr *FileReceiver) GetSaveDir(filename string) string {
+	if fr.router != nil {
+		return fr.router.GetSaveDir(filename)
+	}
+	return fr.saveToDir
 }
 
 // IsExtensionAllowed checks if a filename has an allowed extension.

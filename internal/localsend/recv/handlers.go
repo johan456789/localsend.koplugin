@@ -95,11 +95,14 @@ func (fr *FileReceiver) uploadHandler(c *fiber.Ctx) error {
 		return c.SendStatus(403) // Invalid session = rejected per protocol spec
 	}
 
-	// Get file metadata for logging
+	// Get file metadata for logging and routing
 	fileMeta, _ := session.GetFileMeta(fileId)
 
+	// Determine save directory (may be routed based on extension)
+	saveDir := fr.GetSaveDir(fileMeta.Filename)
+
 	// Pass client IP for validation per protocol spec Section 4.2
-	savedFilename, err := session.SaveFile(fr.saveToDir, fileId, token, c.IP(), bytes.NewReader(c.Body()))
+	savedFilename, err := session.SaveFile(saveDir, fileId, token, c.IP(), bytes.NewReader(c.Body()))
 	if err != nil {
 		slog.Error("Upload error", "remote", c.IP(), "session", sessionId, "error", err)
 		return c.SendStatus(constants.Status(err))

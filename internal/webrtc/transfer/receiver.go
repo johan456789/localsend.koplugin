@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +38,9 @@ type RTCReceiver struct {
 	pinAttempts int
 	saveDir     string
 	mu          sync.Mutex
+
+	// Extension routing
+	extRoutes map[string]string // lowercase ext -> directory
 
 	// Handshake state
 	state       int
@@ -107,6 +111,38 @@ func (r *RTCReceiver) SetStrictVerification(strict bool) {
 // When enabled, the receiver will request PAIR before accepting files from unknown senders.
 func (r *RTCReceiver) SetRequirePairing(require bool) {
 	r.requirePairing = require
+}
+
+// SetExtensionRoutes sets extension-to-directory routing.
+// Keys should be lowercase extensions without dots (e.g., "epub", "pdf").
+func (r *RTCReceiver) SetExtensionRoutes(routes map[string]string) {
+	r.extRoutes = routes
+}
+
+// getSaveDir returns the appropriate save directory for a filename.
+func (r *RTCReceiver) getSaveDir(filename string) string {
+	if r.extRoutes == nil {
+		return r.saveDir
+	}
+
+	ext := filepath.Ext(filename)
+	if ext == "" {
+		return r.saveDir
+	}
+
+	// Remove leading dot and lowercase
+	ext = strings.ToLower(ext[1:])
+
+	if dir, ok := r.extRoutes[ext]; ok {
+		return dir
+	}
+
+	// Check for "default" route
+	if dir, ok := r.extRoutes["default"]; ok {
+		return dir
+	}
+
+	return r.saveDir
 }
 
 // AcceptOffer accepts an incoming WebRTC offer.
@@ -459,7 +495,13 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 		// Create file writer with unique path
 		for _, f := range r.files {
 			if f.ID == id {
-				path := session.FindUniquePath(r.saveDir, f.FileName)
+				saveDir := r.getSaveDir(f.FileName)
+				// Ensure directory exists
+				if err := os.MkdirAll(saveDir, 0755); err != nil {
+					slog.Error("Failed to create save directory", "dir", saveDir, "error", err)
+					continue
+				}
+				path := session.FindUniquePath(saveDir, f.FileName)
 				file, err := os.Create(path)
 				if err != nil {
 					slog.Error("Failed to create file", "path", path, "error", err)
@@ -548,7 +590,13 @@ func (r *RTCReceiver) acceptFilesAfterPair() {
 		// Create file writer with unique path
 		for _, f := range r.files {
 			if f.ID == id {
-				path := session.FindUniquePath(r.saveDir, f.FileName)
+				saveDir := r.getSaveDir(f.FileName)
+				// Ensure directory exists
+				if err := os.MkdirAll(saveDir, 0755); err != nil {
+					slog.Error("Failed to create save directory", "dir", saveDir, "error", err)
+					continue
+				}
+				path := session.FindUniquePath(saveDir, f.FileName)
 				file, err := os.Create(path)
 				if err != nil {
 					slog.Error("Failed to create file", "path", path, "error", err)

@@ -54,6 +54,9 @@ function LocalSend:init()
     self.pin = G_reader_settings:readSetting("LocalSend_pin") or ""
     self.accept_ext = G_reader_settings:readSetting("LocalSend_accept_ext") or ""
     self.use_webrtc = G_reader_settings:isTrue("LocalSend_use_webrtc") -- Experimental, off by default
+    self.ext_dirs = G_reader_settings:readSetting("LocalSend_ext_dirs") or {} -- Extension routing: ext -> dir
+    self.routing_accept_all = G_reader_settings:isTrue("LocalSend_routing_accept_all") -- Accept unrouted files to default dir
+    self.routing_enabled = G_reader_settings:isTrue("LocalSend_routing_enabled") -- Whether routing is active
     self.last_transfer_count = 0
 
     if self.autostart then
@@ -305,8 +308,23 @@ function LocalSend:start()
         cmd = string.format("%s -p '%s'", cmd, self.pin)
     end
 
-    if self.accept_ext ~= "" then
-        cmd = string.format("%s -a '%s'", cmd, self.accept_ext)
+    -- Determine accept_ext based on routing or manual setting
+    local effective_accept_ext = self.accept_ext
+    if self.routing_enabled and next(self.ext_dirs) then
+        -- Routing is active: accept only routed extensions (unless accept_all is enabled)
+        if not self.routing_accept_all then
+            local exts = {}
+            for ext, _ in pairs(self.ext_dirs) do
+                table.insert(exts, ext)
+            end
+            effective_accept_ext = table.concat(exts, ",")
+        else
+            effective_accept_ext = "" -- Accept all
+        end
+    end
+
+    if effective_accept_ext ~= "" then
+        cmd = string.format("%s -a '%s'", cmd, effective_accept_ext)
     end
 
     if not self.use_https then
@@ -315,6 +333,12 @@ function LocalSend:start()
 
     if not self.use_webrtc then
         cmd = string.format("%s -w=false", cmd)
+    end
+
+    -- Export and apply extension routing config if configured
+    local routing_path = self:exportExtRouting()
+    if routing_path then
+        cmd = string.format("%s --ext-routing '%s'", cmd, routing_path)
     end
 
     -- Open firewall before starting
@@ -668,6 +692,250 @@ function LocalSend:buildExtensionPresetsMenu()
     return menu
 end
 
+-- Extension routing functions
+function LocalSend:exportExtRouting()
+    -- Export extension routing config to JSON file for CLI
+    if not self.routing_enabled or not next(self.ext_dirs) then
+        return nil -- Routing disabled or no routes configured
+    end
+
+    local config = {}
+    for ext, dir in pairs(self.ext_dirs) do
+        config[ext] = dir
+    end
+
+    -- Only include default if "accept all" is enabled
+    if self.routing_accept_all then
+        config["default"] = self.save_dir
+    end
+
+    local path = plugin_path .. "/ext_routing.json"
+    local f = io.open(path, "w")
+    if f then
+        f:write(json.encode(config))
+        f:close()
+        logger.dbg("[LocalSend] Exported extension routing config to", path)
+        return path
+    end
+    return nil
+end
+
+function LocalSend:addExtensionRoute(ext, dir)
+    ext = string.lower(ext)
+    -- Auto-enable routing when adding first route
+    if not next(self.ext_dirs) and not self.routing_enabled then
+        self.routing_enabled = true
+        G_reader_settings:saveSetting("LocalSend_routing_enabled", true)
+    end
+    self.ext_dirs[ext] = dir
+    G_reader_settings:saveSetting("LocalSend_ext_dirs", self.ext_dirs)
+end
+
+function LocalSend:removeExtensionRoute(ext)
+    ext = string.lower(ext)
+    self.ext_dirs[ext] = nil
+    G_reader_settings:saveSetting("LocalSend_ext_dirs", self.ext_dirs)
+end
+
+function LocalSend:showAddExtensionRouteDialog(touchmenu_instance)
+    -- Common extension presets for e-readers
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local ext_presets = {
+        { "epub", "PDF", "mobi" },
+        { "azw3", "cbz", "cbr" },
+    }
+
+    local buttons = {}
+    for _, row in ipairs(ext_presets) do
+        local button_row = {}
+        for _, ext in ipairs(row) do
+            table.insert(button_row, {
+                text = ext,
+                callback = function()
+                    UIManager:close(self.ext_preset_dialog)
+                    self:showExtensionDirPicker(ext, touchmenu_instance)
+                end,
+            })
+        end
+        table.insert(buttons, button_row)
+    end
+
+    -- Add custom option
+    table.insert(buttons, {
+        {
+            text = _("Custom..."),
+            callback = function()
+                UIManager:close(self.ext_preset_dialog)
+                self:showCustomExtensionDialog(touchmenu_instance)
+            end,
+        },
+    })
+
+    self.ext_preset_dialog = ButtonDialog:new{
+        title = _("Select extension to route"),
+        buttons = buttons,
+    }
+    UIManager:show(self.ext_preset_dialog)
+end
+
+function LocalSend:showCustomExtensionDialog(touchmenu_instance)
+    self.custom_ext_dialog = InputDialog:new{
+        title = _("Extension to route"),
+        description = _("Enter file extension (without dot)"),
+        input = "",
+        input_hint = "epub",
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        UIManager:close(self.custom_ext_dialog)
+                    end,
+                },
+                {
+                    text = _("Next"),
+                    is_enter_default = true,
+                    callback = function()
+                        local ext = self.custom_ext_dialog:getInputText()
+                        if ext and ext ~= "" then
+                            ext = string.lower(ext:gsub("^%.", "")) -- Remove leading dot if present
+                            UIManager:close(self.custom_ext_dialog)
+                            self:showExtensionDirPicker(ext, touchmenu_instance)
+                        end
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(self.custom_ext_dialog)
+    self.custom_ext_dialog:onShowKeyboard()
+end
+
+function LocalSend:showExtensionDirPicker(ext, touchmenu_instance)
+    local start_path = self:getPickerStartPath(self.ext_dirs[ext] or self.save_dir)
+    local path_chooser = PathChooser:new{
+        title = T(_("Select directory for .%1 files"), ext),
+        select_directory = true,
+        select_file = false,
+        path = start_path,
+        onConfirm = function(path)
+            local valid, err = self:validateSaveDir(path)
+            if valid then
+                self:addExtensionRoute(ext, path)
+                if touchmenu_instance then
+                    touchmenu_instance:updateItems()
+                end
+                UIManager:show(InfoMessage:new{
+                    text = T(_(".%1 files will be saved to:\n%2"), ext, path),
+                    timeout = 3,
+                })
+            else
+                UIManager:show(InfoMessage:new{
+                    icon = "notice-warning",
+                    text = T(_("Cannot use this directory: %1"), err),
+                })
+            end
+        end,
+    }
+    UIManager:show(path_chooser)
+end
+
+function LocalSend:buildExtensionRoutingMenu()
+    local menu = {}
+
+    -- Enable/disable toggle (shown first when routes exist)
+    local has_routes = next(self.ext_dirs) ~= nil
+    if has_routes then
+        table.insert(menu, {
+            text = _("Enable file type routing"),
+            checked_func = function()
+                return self.routing_enabled
+            end,
+            callback = function()
+                self.routing_enabled = not self.routing_enabled
+                G_reader_settings:flipNilOrFalse("LocalSend_routing_enabled")
+            end,
+            help_text = _("When enabled, files are routed to directories based on their extension. When disabled, all files go to the main save directory."),
+        })
+        table.insert(menu, { text = "---" })
+    end
+
+    -- Show existing routes
+    for ext, dir in pairs(self.ext_dirs) do
+        local captured_ext = ext -- Capture for closure
+        table.insert(menu, {
+            text = T(_(".%1 → %2"), ext, dir),
+            keep_menu_open = true,
+            callback = function(touchmenu_instance)
+                -- Show options: change directory or remove
+                local ButtonDialog = require("ui/widget/buttondialog")
+                self.route_action_dialog = ButtonDialog:new{
+                    title = T(_("Route for .%1"), captured_ext),
+                    buttons = {
+                        {
+                            {
+                                text = _("Change directory"),
+                                callback = function()
+                                    UIManager:close(self.route_action_dialog)
+                                    self:showExtensionDirPicker(captured_ext, touchmenu_instance)
+                                end,
+                            },
+                        },
+                        {
+                            {
+                                text = _("Remove route"),
+                                callback = function()
+                                    UIManager:close(self.route_action_dialog)
+                                    self:removeExtensionRoute(captured_ext)
+                                    if touchmenu_instance then
+                                        touchmenu_instance:updateItems()
+                                    end
+                                    UIManager:show(InfoMessage:new{
+                                        text = T(_("Route for .%1 removed"), captured_ext),
+                                        timeout = 2,
+                                    })
+                                end,
+                            },
+                        },
+                    },
+                }
+                UIManager:show(self.route_action_dialog)
+            end,
+        })
+    end
+
+    if has_routes then
+        table.insert(menu, { text = "---" })
+    end
+
+    -- Add new route option
+    table.insert(menu, {
+        text = _("Add extension route..."),
+        keep_menu_open = true,
+        callback = function(touchmenu_instance)
+            self:showAddExtensionRouteDialog(touchmenu_instance)
+        end,
+    })
+
+    -- Only show "accept all" option when routes exist
+    if has_routes then
+        table.insert(menu, {
+            text = _("Accept other files → main directory"),
+            checked_func = function()
+                return self.routing_accept_all
+            end,
+            callback = function()
+                self.routing_accept_all = not self.routing_accept_all
+                G_reader_settings:flipNilOrFalse("LocalSend_routing_accept_all")
+            end,
+            help_text = _("When enabled, files without a specific route are saved to the main save directory. When disabled, only routed file types are accepted."),
+        })
+    end
+
+    return menu
+end
+
 function LocalSend:showRecentTransfers()
     local transfers = self:getTransferLog()
 
@@ -875,15 +1143,40 @@ function LocalSend:addToMainMenu(menu_items)
                     },
                     {
                         text_func = function()
-                            if self.accept_ext ~= "" then
+                            if self.routing_enabled and next(self.ext_dirs) then
+                                return _("Allowed extensions (using routing)")
+                            elseif self.accept_ext ~= "" then
                                 return T(_("Allowed extensions (%1)"), self.accept_ext)
                             else
                                 return _("Allowed extensions (all)")
                             end
                         end,
+                        enabled_func = function()
+                            return not (self.routing_enabled and next(self.ext_dirs)) -- Disabled when routing is enabled
+                        end,
                         sub_item_table_func = function()
                             return self:buildExtensionPresetsMenu()
                         end,
+                        help_text = _("When file type routing is enabled, allowed extensions are determined by the routing rules."),
+                    },
+                    {
+                        text_func = function()
+                            local count = 0
+                            for _ in pairs(self.ext_dirs) do count = count + 1 end
+                            if count > 0 then
+                                if self.routing_enabled then
+                                    return T(_("File type routing (%1 rules)"), count)
+                                else
+                                    return T(_("File type routing (disabled, %1 rules)"), count)
+                                end
+                            else
+                                return _("File type routing")
+                            end
+                        end,
+                        sub_item_table_func = function()
+                            return self:buildExtensionRoutingMenu()
+                        end,
+                        help_text = _("Route different file types to different directories (e.g., EPUBs to Books folder, PDFs to Documents)."),
                     },
                     {
                         text_func = function()

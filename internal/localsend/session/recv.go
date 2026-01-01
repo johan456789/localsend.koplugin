@@ -120,6 +120,13 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 
 	// write the file data to disk while calculating checksum simultaneously
 	saveAs := FindUniquePath(saveToDir, expectedMeta.Filename)
+
+	// Ensure the directory exists (for extension routing to new directories)
+	if err := os.MkdirAll(saveToDir, 0755); err != nil {
+		slog.Error("Failed to create save directory", "dir", saveToDir, "error", err)
+		return "", lserrors.ErrFileIO
+	}
+
 	hasher := sha256.New()
 	file, err := os.Create(saveAs)
 	if err != nil {

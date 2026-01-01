@@ -1,7 +1,9 @@
 package recv
 
 import (
+	"encoding/json"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -23,6 +25,7 @@ var (
 	acceptExt    string
 	logFile      string
 	webrtcMode   bool
+	extRouting   string
 )
 
 var Cmd = &cobra.Command{
@@ -32,10 +35,37 @@ var Cmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		var wg sync.WaitGroup
 
+		// Load extension routing config if provided
+		var router *lsrecv.ExtensionRouter
+		var extRoutes map[string]string
+		if extRouting != "" {
+			router = lsrecv.NewExtensionRouter(savetodir)
+			if err := router.LoadFromFile(extRouting); err != nil {
+				slog.Error("Failed to load extension routing config", "error", err)
+				return
+			}
+			if err := router.EnsureDirectories(); err != nil {
+				slog.Warn("Failed to create some routing directories", "error", err)
+			}
+			slog.Info("Extension routing enabled", "config", extRouting)
+
+			// Also extract routes for WebRTC receiver
+			extRoutes = make(map[string]string)
+			// Re-read the config to get the raw routes
+			if data, err := os.ReadFile(extRouting); err == nil {
+				_ = json.Unmarshal(data, &extRoutes)
+			}
+		}
+
 		// HTTP receiver (always start unless webrtc-only)
 		recver := lsrecv.NewFileReceiver(devname, savetodir, supportHttps)
 		recver.SetPIN(pin)
 		recver.SetTransferLog(logFile)
+
+		// Set extension router if configured
+		if router != nil {
+			recver.SetExtensionRouter(router)
+		}
 
 		// Set allowed extensions if provided
 		if acceptExt != "" {
@@ -76,7 +106,7 @@ var Cmd = &cobra.Command{
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				startWebRTCReceiver(devname, savetodir, pin, allowedExts, recver.LogTransfer)
+				startWebRTCReceiver(devname, savetodir, pin, allowedExts, extRoutes, recver.LogTransfer)
 			}()
 		}
 
@@ -87,7 +117,7 @@ var Cmd = &cobra.Command{
 	},
 }
 
-func startWebRTCReceiver(deviceName, saveDir, pin string, allowedExts []string, logTransfer func(filename string, size int64, sender string)) {
+func startWebRTCReceiver(deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string)) {
 	// Generate signing key for token
 	key, err := crypto.GenerateKeyPair()
 	if err != nil {
@@ -123,6 +153,11 @@ func startWebRTCReceiver(deviceName, saveDir, pin string, allowedExts []string, 
 	// Create receiver
 	receiver := transfer.NewRTCReceiver(client, key, pin, saveDir)
 	defer func() { _ = receiver.Close() }()
+
+	// Set extension routing if configured
+	if len(extRoutes) > 0 {
+		receiver.SetExtensionRoutes(extRoutes)
+	}
 
 	// Set up file received handler for transfer logging
 	if logTransfer != nil {
@@ -179,4 +214,5 @@ func init() {
 	Cmd.PersistentFlags().StringVarP(&acceptExt, "accept-ext", "a", "", "Comma-separated list of allowed file extensions (e.g., epub,pdf,mobi). Empty means accept all.")
 	Cmd.PersistentFlags().StringVarP(&logFile, "log", "l", "", "Path to transfer log file (JSON lines format)")
 	Cmd.PersistentFlags().BoolVarP(&webrtcMode, "webrtc", "w", true, "Listen for WebRTC offers via signaling server (v3 protocol)")
+	Cmd.PersistentFlags().StringVar(&extRouting, "ext-routing", "", "Path to extension routing config (JSON). Routes files to different directories by extension.")
 }

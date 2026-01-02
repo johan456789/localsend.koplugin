@@ -32,6 +32,7 @@ type FileReceiver struct {
 	allowedExtensions []string          // New field for extension filtering
 	transferLogPath   string            // Path to transfer log file
 	router            *ExtensionRouter  // Routes files to different dirs by extension
+	listenAddr        string            // Custom listen address (defaults to constants.DefaultListenAddr)
 
 	// V3 nonce caches for token verification
 	receivedNonceCache  *localsend.NonceCache // nonces received from clients
@@ -54,6 +55,7 @@ func NewFileReceiver(devname string, saveToDir string, supportHttps bool) *FileR
 		saveToDir:           saveToDir,
 		sessman:             sess.NewRecvSessManager(),
 		allowedExtensions:   nil, // nil means accept all
+		listenAddr:          constants.DefaultListenAddr,
 		receivedNonceCache:  localsend.NewNonceCache(200),
 		generatedNonceCache: localsend.NewNonceCache(200),
 	}
@@ -61,6 +63,17 @@ func NewFileReceiver(devname string, saveToDir string, supportHttps bool) *FileR
 
 func (fr *FileReceiver) SetPIN(pin string) {
 	fr.expectedPin = pin
+}
+
+// SetListenAddr sets a custom listen address (e.g., "127.0.0.1:0" for random port).
+// Must be called before Start().
+func (fr *FileReceiver) SetListenAddr(addr string) {
+	fr.listenAddr = addr
+}
+
+// ListenAddr returns the configured listen address.
+func (fr *FileReceiver) ListenAddr() string {
+	return fr.listenAddr
 }
 
 func (fr *FileReceiver) SetTransferLog(path string) {
@@ -127,25 +140,6 @@ func (fr *FileReceiver) IsExtensionAllowed(filename string) bool {
 	return utils.IsExtensionAllowed(filename, fr.allowedExtensions)
 }
 
-// FilterFilesByExtension filters a file list, returning only files with allowed extensions.
-// If allowedExtensions is empty, returns all files unchanged.
-// Returns filtered files and a list of rejected filenames for logging.
-func FilterFilesByExtension(files models.FileMetas, allowedExtensions []string) (filtered models.FileMetas, rejected []string) {
-	if len(allowedExtensions) == 0 {
-		return files, nil
-	}
-
-	filtered = make(models.FileMetas)
-	for id, fileMeta := range files {
-		if utils.IsExtensionAllowed(fileMeta.Filename, allowedExtensions) {
-			filtered[id] = fileMeta
-		} else {
-			rejected = append(rejected, fileMeta.Filename)
-		}
-	}
-	return filtered, rejected
-}
-
 func (fr *FileReceiver) Init() error {
 	var err error
 
@@ -207,7 +201,7 @@ func (fr *FileReceiver) Start() error {
 
 	go func() { _ = fr.advertise() }() // let others know we are here
 
-	return lsutils.ListenWithTLS(fr.webServer, constants.DefaultListenAddr, fr.cert, fr.supportHttps)
+	return lsutils.ListenWithTLS(fr.webServer, fr.listenAddr, fr.cert, fr.supportHttps)
 }
 
 func (fr *FileReceiver) advertise() error {

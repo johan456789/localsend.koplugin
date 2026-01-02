@@ -18,10 +18,11 @@ import (
 
 type ForwardSender struct {
 	baseSender
-	local  *models.DeviceInfo
-	remote *models.DeviceInfo
-	https  bool
-	abort  atomic.Bool
+	local      *models.DeviceInfo
+	remote     *models.DeviceInfo
+	remotePort string // Custom port (defaults to constants.DefaultPortStr)
+	https      bool
+	abort      atomic.Bool
 }
 
 func NewForwardSender() *ForwardSender {
@@ -30,6 +31,7 @@ func NewForwardSender() *ForwardSender {
 			files:  make(map[string]models.FileMeta),
 			tokens: make(map[string]string),
 		},
+		remotePort: constants.DefaultPortStr,
 	}
 }
 
@@ -46,6 +48,12 @@ func (fsp *ForwardSender) Init(target *models.DeviceInfo, https bool) error {
 	fsp.reset()
 
 	return nil
+}
+
+// SetRemotePort sets a custom port for the remote receiver.
+// Must be called after Init() if you want to override the default port.
+func (fsp *ForwardSender) SetRemotePort(port string) {
+	fsp.remotePort = port
 }
 
 func (fsp *ForwardSender) preUploadReq() error {
@@ -199,7 +207,7 @@ func (fsp *ForwardSender) Cancel() error {
 }
 
 func (fsp *ForwardSender) prepareUri(req *fasthttp.Request, path string) {
-	remoteAddr := net.JoinHostPort(fsp.remote.IP, constants.DefaultPortStr)
+	remoteAddr := net.JoinHostPort(fsp.remote.IP, fsp.remotePort)
 
 	req.Header.SetUserAgent("localsend-cli")
 	req.URI().SetPath(path)

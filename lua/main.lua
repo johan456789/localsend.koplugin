@@ -202,24 +202,11 @@ function LocalSend:closeFirewall()
 end
 
 function LocalSend:validateDeviceName(name)
-    -- Empty name is valid (will use random name)
-    if name == "" then
-        return true
+    local valid, err = utils.validateDeviceName(name)
+    if not valid and err then
+        return false, _(err)
     end
-
-    -- Check length (reasonable limit)
-    if #name > 64 then
-        return false, _("Device name is too long (max 64 characters).")
-    end
-
-    -- Only allow alphanumeric, spaces, hyphens, underscores, and apostrophes (straight and curly)
-    -- This matches the style of generated aliases (e.g., "Special Pineapple")
-    -- and avoids shell injection and JSON encoding issues
-    if not name:match("^[%w%s%-_'’‘]+$") then
-        return false, _("Device name can only contain letters, numbers, spaces, hyphens, underscores, and apostrophes.")
-    end
-
-    return true
+    return valid
 end
 
 function LocalSend:validateSaveDir(path)

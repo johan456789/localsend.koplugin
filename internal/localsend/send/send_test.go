@@ -1,0 +1,587 @@
+package send
+
+import (
+	"encoding/json"
+	"io"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"localsend-cli/internal/models"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/valyala/fasthttp"
+)
+
+// =============================================================================
+// baseSender Tests
+// =============================================================================
+
+func TestBaseSender_SetPIN(t *testing.T) {
+	sender := &baseSender{}
+
+	sender.SetPIN("1234")
+	if sender.pin != "1234" {
+		t.Errorf("expected pin '1234', got '%s'", sender.pin)
+	}
+
+	sender.SetPIN("")
+	if sender.pin != "" {
+		t.Errorf("expected empty pin, got '%s'", sender.pin)
+	}
+}
+
+func TestBaseSender_AddFile(t *testing.T) {
+	// Create a temporary file for testing
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "testfile.txt")
+	if err := os.WriteFile(testFile, []byte("test content"), 0644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	t.Run("adds file successfully", func(t *testing.T) {
+		sender := &baseSender{}
+
+		err := sender.AddFile(testFile)
+		if err != nil {
+			t.Fatalf("AddFile failed: %v", err)
+		}
+
+		if len(sender.files) != 1 {
+			t.Errorf("expected 1 file, got %d", len(sender.files))
+		}
+
+		// Verify file metadata
+		for _, meta := range sender.files {
+			if meta.Filename != "testfile.txt" {
+				t.Errorf("expected filename 'testfile.txt', got '%s'", meta.Filename)
+			}
+			if meta.Size != 12 { // "test content" = 12 bytes
+				t.Errorf("expected size 12, got %d", meta.Size)
+			}
+			if meta.FullPath != testFile {
+				t.Errorf("expected fullPath '%s', got '%s'", testFile, meta.FullPath)
+			}
+		}
+	})
+
+	t.Run("initializes nil map", func(t *testing.T) {
+		sender := &baseSender{files: nil}
+
+		err := sender.AddFile(testFile)
+		if err != nil {
+			t.Fatalf("AddFile failed: %v", err)
+		}
+
+		if sender.files == nil {
+			t.Error("files map should be initialized")
+		}
+	})
+
+	t.Run("fails for non-existent file", func(t *testing.T) {
+		sender := &baseSender{}
+
+		err := sender.AddFile("/nonexistent/path/file.txt")
+		if err == nil {
+			t.Error("expected error for non-existent file")
+		}
+	})
+
+	t.Run("adds multiple files", func(t *testing.T) {
+		sender := &baseSender{}
+
+		testFile2 := filepath.Join(tmpDir, "testfile2.txt")
+		if err := os.WriteFile(testFile2, []byte("more content"), 0644); err != nil {
+			t.Fatalf("failed to create test file 2: %v", err)
+		}
+
+		_ = sender.AddFile(testFile)
+		_ = sender.AddFile(testFile2)
+
+		if len(sender.files) != 2 {
+			t.Errorf("expected 2 files, got %d", len(sender.files))
+		}
+	})
+}
+
+func TestBaseSender_AddDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create directory structure
+	subDir := filepath.Join(tmpDir, "subdir")
+	if err := os.Mkdir(subDir, 0755); err != nil {
+		t.Fatalf("failed to create subdir: %v", err)
+	}
+
+	// Create files
+	files := []string{
+		filepath.Join(tmpDir, "file1.txt"),
+		filepath.Join(tmpDir, "file2.pdf"),
+		filepath.Join(subDir, "nested.txt"),
+	}
+	for _, f := range files {
+		if err := os.WriteFile(f, []byte("content"), 0644); err != nil {
+			t.Fatalf("failed to create file %s: %v", f, err)
+		}
+	}
+
+	t.Run("adds all files in directory recursively", func(t *testing.T) {
+		sender := &baseSender{files: make(map[string]models.FileMeta)}
+
+		err := sender.AddDir(tmpDir)
+		if err != nil {
+			t.Fatalf("AddDir failed: %v", err)
+		}
+
+		if len(sender.files) != 3 {
+			t.Errorf("expected 3 files, got %d", len(sender.files))
+		}
+
+		// Verify filenames
+		filenames := make(map[string]bool)
+		for _, meta := range sender.files {
+			filenames[meta.Filename] = true
+		}
+
+		expectedNames := []string{"file1.txt", "file2.pdf", "nested.txt"}
+		for _, name := range expectedNames {
+			if !filenames[name] {
+				t.Errorf("expected file '%s' not found", name)
+			}
+		}
+	})
+
+	t.Run("fails for non-existent directory", func(t *testing.T) {
+		sender := &baseSender{files: make(map[string]models.FileMeta)}
+
+		err := sender.AddDir("/nonexistent/directory")
+		if err == nil {
+			t.Error("expected error for non-existent directory")
+		}
+	})
+
+	t.Run("handles empty directory", func(t *testing.T) {
+		emptyDir := filepath.Join(tmpDir, "empty")
+		if err := os.Mkdir(emptyDir, 0755); err != nil {
+			t.Fatalf("failed to create empty dir: %v", err)
+		}
+
+		sender := &baseSender{files: make(map[string]models.FileMeta)}
+
+		err := sender.AddDir(emptyDir)
+		if err != nil {
+			t.Fatalf("AddDir failed: %v", err)
+		}
+
+		if len(sender.files) != 0 {
+			t.Errorf("expected 0 files for empty dir, got %d", len(sender.files))
+		}
+	})
+}
+
+func TestBaseSender_Reset(t *testing.T) {
+	sender := &baseSender{
+		tokens: map[string]string{"id1": "token1", "id2": "token2"},
+		files: map[string]models.FileMeta{
+			"id1": {Id: "id1", Filename: "file1.txt"},
+			"id2": {Id: "id2", Filename: "file2.txt"},
+		},
+	}
+
+	sender.reset()
+
+	if len(sender.tokens) != 0 {
+		t.Errorf("expected tokens to be empty, got %d items", len(sender.tokens))
+	}
+	if len(sender.files) != 0 {
+		t.Errorf("expected files to be empty, got %d items", len(sender.files))
+	}
+}
+
+// =============================================================================
+// ForwardSender Tests
+// =============================================================================
+
+func TestNewForwardSender(t *testing.T) {
+	sender := NewForwardSender()
+
+	if sender == nil {
+		t.Fatal("NewForwardSender returned nil")
+	}
+
+	if sender.files == nil {
+		t.Error("files map should be initialized")
+	}
+
+	if sender.tokens == nil {
+		t.Error("tokens map should be initialized")
+	}
+}
+
+func TestForwardSender_Init(t *testing.T) {
+	sender := NewForwardSender()
+
+	// Add some files and tokens to verify reset
+	sender.files["old"] = models.FileMeta{Id: "old"}
+	sender.tokens["old"] = "oldtoken"
+	sender.session = "oldsession"
+	sender.abort.Store(true)
+
+	target := &models.DeviceInfo{
+		Alias:       "TestDevice",
+		IP:          "192.168.1.100",
+		Fingerprint: "abc123",
+	}
+
+	err := sender.Init(target, true)
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Verify state was reset
+	if sender.abort.Load() != false {
+		t.Error("abort should be false after Init")
+	}
+	if sender.session != "" {
+		t.Error("session should be empty after Init")
+	}
+	if sender.remote != target {
+		t.Error("remote should be set to target")
+	}
+	if sender.https != true {
+		t.Error("https should be true")
+	}
+	if sender.local == nil {
+		t.Error("local should be initialized")
+	}
+	if len(sender.files) != 0 {
+		t.Error("files should be reset")
+	}
+	if len(sender.tokens) != 0 {
+		t.Error("tokens should be reset")
+	}
+}
+
+func TestForwardSender_PrepareUri(t *testing.T) {
+	sender := NewForwardSender()
+	sender.remote = &models.DeviceInfo{IP: "192.168.1.50"}
+
+	t.Run("https scheme", func(t *testing.T) {
+		sender.https = true
+		req := &fasthttp.Request{}
+
+		sender.prepareUri(req, "/api/v2/upload")
+
+		uri := req.URI()
+		if string(uri.Scheme()) != "https" {
+			t.Errorf("expected scheme 'https', got '%s'", string(uri.Scheme()))
+		}
+		if string(uri.Path()) != "/api/v2/upload" {
+			t.Errorf("expected path '/api/v2/upload', got '%s'", string(uri.Path()))
+		}
+		if string(uri.Host()) != "192.168.1.50:53317" {
+			t.Errorf("expected host '192.168.1.50:53317', got '%s'", string(uri.Host()))
+		}
+		if string(req.Header.UserAgent()) != "localsend-cli" {
+			t.Errorf("expected user-agent 'localsend-cli', got '%s'", string(req.Header.UserAgent()))
+		}
+	})
+
+	t.Run("http scheme", func(t *testing.T) {
+		sender.https = false
+		req := &fasthttp.Request{}
+
+		sender.prepareUri(req, "/api/v2/preupload")
+
+		uri := req.URI()
+		if string(uri.Scheme()) != "http" {
+			t.Errorf("expected scheme 'http', got '%s'", string(uri.Scheme()))
+		}
+	})
+}
+
+// =============================================================================
+// ReverseSender Tests
+// =============================================================================
+
+func TestNewReverseSender(t *testing.T) {
+	sender := NewReverseSender()
+
+	if sender == nil {
+		t.Fatal("NewReverseSender returned nil")
+	}
+
+	if sender.files == nil {
+		t.Error("files map should be initialized")
+	}
+
+	if sender.tokens == nil {
+		t.Error("tokens map should be initialized")
+	}
+
+	if sender.webServer == nil {
+		t.Error("webServer should be initialized")
+	}
+
+	if sender.downloads == nil {
+		t.Error("downloads should be initialized")
+	}
+}
+
+func TestReverseSender_Init(t *testing.T) {
+	t.Run("http mode", func(t *testing.T) {
+		sender := NewReverseSender()
+
+		// Add old state to verify reset
+		sender.files["old"] = models.FileMeta{Id: "old"}
+		sender.tokens["old"] = "oldtoken"
+
+		target := &models.DeviceInfo{
+			Alias: "TestDevice",
+			IP:    "192.168.1.100",
+		}
+
+		err := sender.Init(target, false)
+		if err != nil {
+			t.Fatalf("Init failed: %v", err)
+		}
+
+		if sender.local != target {
+			t.Error("local should be set to target")
+		}
+		if sender.https != false {
+			t.Error("https should be false")
+		}
+		if sender.session == "" {
+			t.Error("session should be generated")
+		}
+		if !sender.local.Download {
+			t.Error("Download flag should be true")
+		}
+		if len(sender.files) != 0 {
+			t.Error("files should be reset")
+		}
+		if len(sender.tokens) != 0 {
+			t.Error("tokens should be reset")
+		}
+	})
+
+	t.Run("https mode generates certificate", func(t *testing.T) {
+		sender := NewReverseSender()
+
+		target := &models.DeviceInfo{
+			Alias: "TestDevice",
+			IP:    "192.168.1.100",
+		}
+
+		err := sender.Init(target, true)
+		if err != nil {
+			t.Fatalf("Init failed: %v", err)
+		}
+
+		if sender.https != true {
+			t.Error("https should be true")
+		}
+		if sender.local.Fingerprint == "" {
+			t.Error("fingerprint should be generated for https")
+		}
+	})
+}
+
+// =============================================================================
+// ReverseSender Handler Tests
+// =============================================================================
+
+func TestReverseSender_PredownloadHandler(t *testing.T) {
+	t.Run("returns files and session", func(t *testing.T) {
+		sender := NewReverseSender()
+		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}
+		_ = sender.Init(target, false)
+
+		// Add a file
+		sender.files["file1"] = models.FileMeta{
+			Id:       "file1",
+			Filename: "test.txt",
+			Size:     100,
+		}
+
+		// Setup Fiber app for testing
+		app := fiber.New()
+		app.Post("/api/localsend/v2/prepare-download", sender.predownloadHandler)
+
+		req := httptest.NewRequest("POST", "/api/localsend/v2/prepare-download", nil)
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+
+		if resp.StatusCode != 200 {
+			t.Errorf("expected status 200, got %d", resp.StatusCode)
+		}
+
+		// Parse response
+		var predownloadResp models.PreDownloadResp
+		body, _ := io.ReadAll(resp.Body)
+		if err := json.Unmarshal(body, &predownloadResp); err != nil {
+			t.Fatalf("failed to parse response: %v", err)
+		}
+
+		if predownloadResp.SessionId != sender.session {
+			t.Errorf("expected sessionId '%s', got '%s'", sender.session, predownloadResp.SessionId)
+		}
+		if len(predownloadResp.Files) != 1 {
+			t.Errorf("expected 1 file, got %d", len(predownloadResp.Files))
+		}
+	})
+
+	t.Run("requires correct PIN", func(t *testing.T) {
+		sender := NewReverseSender()
+		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}
+		_ = sender.Init(target, false)
+		sender.SetPIN("1234")
+
+		app := fiber.New()
+		app.Post("/api/localsend/v2/prepare-download", sender.predownloadHandler)
+
+		// Wrong PIN
+		req := httptest.NewRequest("POST", "/api/localsend/v2/prepare-download?pin=wrong", nil)
+		resp, _ := app.Test(req)
+		if resp.StatusCode != 401 {
+			t.Errorf("expected status 401 for wrong PIN, got %d", resp.StatusCode)
+		}
+
+		// Correct PIN
+		req = httptest.NewRequest("POST", "/api/localsend/v2/prepare-download?pin=1234", nil)
+		resp, _ = app.Test(req)
+		if resp.StatusCode != 200 {
+			t.Errorf("expected status 200 for correct PIN, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("validates session ID if provided", func(t *testing.T) {
+		sender := NewReverseSender()
+		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}
+		_ = sender.Init(target, false)
+
+		app := fiber.New()
+		app.Post("/api/localsend/v2/prepare-download", sender.predownloadHandler)
+
+		// Wrong session ID
+		req := httptest.NewRequest("POST", "/api/localsend/v2/prepare-download?sessionId=wrong-session", nil)
+		resp, _ := app.Test(req)
+		if resp.StatusCode != 403 {
+			t.Errorf("expected status 403 for wrong session, got %d", resp.StatusCode)
+		}
+
+		// Correct session ID
+		req = httptest.NewRequest("POST", "/api/localsend/v2/prepare-download?sessionId="+sender.session, nil)
+		resp, _ = app.Test(req)
+		if resp.StatusCode != 200 {
+			t.Errorf("expected status 200 for correct session, got %d", resp.StatusCode)
+		}
+	})
+}
+
+func TestReverseSender_DownloadHandler(t *testing.T) {
+	// Create a temporary file for download
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "download.txt")
+	testContent := []byte("file content for download")
+	if err := os.WriteFile(testFile, testContent, 0644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	t.Run("downloads file successfully", func(t *testing.T) {
+		sender := NewReverseSender()
+		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}
+		_ = sender.Init(target, false)
+
+		sender.files["file1"] = models.FileMeta{
+			Id:       "file1",
+			Filename: "download.txt",
+			Size:     int64(len(testContent)),
+			FullPath: testFile,
+		}
+
+		app := fiber.New()
+		app.Get("/api/localsend/v2/download", sender.downloadHandler)
+
+		req := httptest.NewRequest("GET",
+			"/api/localsend/v2/download?sessionId="+sender.session+"&fileId=file1", nil)
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+
+		if resp.StatusCode != 200 {
+			t.Errorf("expected status 200, got %d", resp.StatusCode)
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		if string(body) != string(testContent) {
+			t.Errorf("expected content '%s', got '%s'", string(testContent), string(body))
+		}
+
+		// Check Content-Disposition header
+		cd := resp.Header.Get("Content-Disposition")
+		if cd == "" {
+			t.Error("expected Content-Disposition header")
+		}
+	})
+
+	t.Run("requires sessionId and fileId", func(t *testing.T) {
+		sender := NewReverseSender()
+		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}
+		_ = sender.Init(target, false)
+
+		app := fiber.New()
+		app.Get("/api/localsend/v2/download", sender.downloadHandler)
+
+		// Missing both
+		req := httptest.NewRequest("GET", "/api/localsend/v2/download", nil)
+		resp, _ := app.Test(req)
+		if resp.StatusCode != 400 {
+			t.Errorf("expected status 400 for missing params, got %d", resp.StatusCode)
+		}
+
+		// Missing fileId
+		req = httptest.NewRequest("GET", "/api/localsend/v2/download?sessionId="+sender.session, nil)
+		resp, _ = app.Test(req)
+		if resp.StatusCode != 400 {
+			t.Errorf("expected status 400 for missing fileId, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("validates session", func(t *testing.T) {
+		sender := NewReverseSender()
+		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}
+		_ = sender.Init(target, false)
+
+		app := fiber.New()
+		app.Get("/api/localsend/v2/download", sender.downloadHandler)
+
+		req := httptest.NewRequest("GET",
+			"/api/localsend/v2/download?sessionId=wrong&fileId=file1", nil)
+		resp, _ := app.Test(req)
+		if resp.StatusCode != 403 {
+			t.Errorf("expected status 403 for wrong session, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("returns 404 for unknown file", func(t *testing.T) {
+		sender := NewReverseSender()
+		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}
+		_ = sender.Init(target, false)
+
+		app := fiber.New()
+		app.Get("/api/localsend/v2/download", sender.downloadHandler)
+
+		req := httptest.NewRequest("GET",
+			"/api/localsend/v2/download?sessionId="+sender.session+"&fileId=nonexistent", nil)
+		resp, _ := app.Test(req)
+		if resp.StatusCode != 404 {
+			t.Errorf("expected status 404 for unknown file, got %d", resp.StatusCode)
+		}
+	})
+}

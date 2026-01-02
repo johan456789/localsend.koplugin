@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-go:
+    name: Go Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: Run unit tests
+        run: go test ./... -v -count=1
+
+      - name: Run integration tests
+        run: go test ./internal/localsend/... -tags=integration -v -count=1
+
+  test-lua:
+    name: Lua Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lua and Busted
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.3 liblua5.3-dev luarocks
+          sudo luarocks install busted
+
+      - name: Run Lua tests
+        working-directory: lua
+        run: |
+          export LUA_PATH="./?.lua;./?/init.lua;$LUA_PATH"
+          busted spec/

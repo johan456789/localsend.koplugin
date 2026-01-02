@@ -750,18 +750,6 @@ func (r *RTCReceiver) Close() error {
 	return nil
 }
 
-// ListenForOffers listens for incoming WebRTC offers.
-// Deprecated: Use ListenForOffersWithContext for cancellation support.
-func (r *RTCReceiver) ListenForOffers(onOffer func(offer signaling.WsServerMessage)) {
-	go func() {
-		for msg := range r.signaling.Messages() {
-			if msg.Type == "OFFER" {
-				onOffer(msg)
-			}
-		}
-	}()
-}
-
 // ListenForOffersWithContext listens for incoming WebRTC offers with context support.
 // The listener stops when the context is cancelled or the signaling channel closes.
 func (r *RTCReceiver) ListenForOffersWithContext(ctx context.Context, onOffer func(offer signaling.WsServerMessage)) {

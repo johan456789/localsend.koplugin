@@ -64,3 +64,13 @@ func (fsp *baseSender) reset() {
 		delete(fsp.files, k)
 	}
 }
+
+// FileCount returns the number of files added to the sender.
+func (fsp *baseSender) FileCount() int {
+	return len(fsp.files)
+}
+
+// Files returns a copy of the files map for inspection.
+func (fsp *baseSender) Files() models.FileMetas {
+	return fsp.files
+}

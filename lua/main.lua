@@ -15,36 +15,11 @@ local json = require("json")
 
 local GITHUB_RELEASE_URL = "https://api.github.com/repos/kaikozlov/localsend.koplugin/releases/latest"
 
--- Shell escape utility to prevent command injection
--- Wraps string in single quotes and escapes any embedded single quotes
-local function shellEscape(str)
-    if str == nil then return "''" end
-    -- Single quote escape: replace ' with '\''
-    return "'" .. str:gsub("'", "'\\''") .. "'"
-end
-
--- Validate that a path is safe for shell operations
-local function isValidPath(path)
-    if path == nil or path == "" then return false end
-    -- Reject paths with null bytes
-    if path:find("%z") then return false end
-    -- Must be absolute path
-    if not path:match("^/") then return false end
-    -- No command substitution patterns
-    if path:find("`") or path:find("%$%(") then return false end
-    return true
-end
-
--- Validate that a port number is safe for shell operations
-local function isValidPort(port)
-    if port == nil then return false end
-    local num = tonumber(port)
-    if num == nil then return false end
-    if num < 1 or num > 65535 then return false end
-    -- Ensure it's an integer
-    if num ~= math.floor(num) then return false end
-    return true
-end
+-- Import utility functions (extracted for testability)
+local utils = require("localsend_utils")
+local shellEscape = utils.shellEscape
+local isValidPath = utils.isValidPath
+local isValidPort = utils.isValidPort
 
 -- Check if an iptables rule exists (returns true if rule exists)
 local function iptablesRuleExists(rule)
@@ -1094,26 +1069,6 @@ function LocalSend:rotateCertificates()
     })
 end
 
-function LocalSend:compareVersions(v1, v2)
-    -- Compare semantic versions, returns:
-    -- -1 if v1 < v2, 0 if equal, 1 if v1 > v2
-    local function parseVersion(v)
-        local parts = {}
-        for num in string.gmatch(v:gsub("^v", ""), "(%d+)") do
-            table.insert(parts, tonumber(num) or 0)
-        end
-        return parts
-    end
-
-    local p1, p2 = parseVersion(v1), parseVersion(v2)
-    for i = 1, math.max(#p1, #p2) do
-        local n1, n2 = p1[i] or 0, p2[i] or 0
-        if n1 < n2 then return -1 end
-        if n1 > n2 then return 1 end
-    end
-    return 0
-end
-
 function LocalSend:getDeviceArch()
     -- Detect device architecture for selecting the right binary
     local handle = io.popen("uname -m")
@@ -1124,24 +1079,19 @@ function LocalSend:getDeviceArch()
     if not arch then return nil end
 
     -- Map uname output to our asset naming
+    -- arm64/aarch64: 64-bit ARM (newer devices)
+    -- armv7: 32-bit ARM with hardware float (most Kindles PW1+, returns "armv7l")
+    -- armv5: legacy 32-bit ARM with soft float (K3, K4, older devices)
     if arch:match("^aarch64") or arch:match("^arm64") then
         return "arm64"
-    elseif arch:match("^armv7") or arch:match("^armv6") or arch:match("^arm") then
+    elseif arch:match("^armv7") then
         return "armv7"
+    elseif arch:match("^armv[56]") or arch:match("^arm") then
+        -- armv5, armv6, or generic "arm" -> use legacy armv5 binary
+        return "arm-legacy"
     end
 
     return nil
-end
-
-function LocalSend:findAssetForArch(assets, arch)
-    -- Find the download URL for our architecture
-    local pattern = "localsend%-koplugin%-" .. arch .. "%.zip$"
-    for _, asset in ipairs(assets) do
-        if asset.name and asset.name:match(pattern) then
-            return asset.browser_download_url, asset.name
-        end
-    end
-    return nil, nil
 end
 
 function LocalSend:performUpdate(download_url, asset_name, new_version)
@@ -1337,7 +1287,7 @@ function LocalSend:checkForUpdates()
     local latest_version = release.tag_name:gsub("^v", "")
     local current_version = PLUGIN_VERSION:gsub("^v", "")
 
-    if self:compareVersions(current_version, latest_version) >= 0 then
+    if utils.compareVersions(current_version, latest_version) >= 0 then
         UIManager:show(InfoMessage:new{
             text = T(_("You're up to date!\n\nCurrent version: %1\nLatest version: %2"), PLUGIN_VERSION, release.tag_name),
             timeout = 5,
@@ -1348,7 +1298,7 @@ function LocalSend:checkForUpdates()
         local download_url, asset_name
 
         if arch and release.assets then
-            download_url, asset_name = self:findAssetForArch(release.assets, arch)
+            download_url, asset_name = utils.findAssetForArch(release.assets, arch)
         end
 
         local release_notes = release.body or _("No release notes available.")

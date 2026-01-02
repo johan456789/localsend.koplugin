@@ -31,7 +31,7 @@ done
 
 # Check for existing binaries if package-only mode
 if $PACKAGE_ONLY; then
-    if [[ ! -f "$BIN_DIR/localsend-armv7" ]] || [[ ! -f "$BIN_DIR/localsend-arm64" ]]; then
+    if [[ ! -f "$BIN_DIR/localsend-armv-legacy" ]] || [[ ! -f "$BIN_DIR/localsend-armv7" ]] || [[ ! -f "$BIN_DIR/localsend-arm64" ]]; then
         echo "Error: Binaries not found. Run a full build first."
         exit 1
     fi
@@ -51,19 +51,29 @@ mkdir -p "$BUILD_DIR/$PLUGIN_NAME"
 # Copy plugin source files to build directory
 cp "$PLUGIN_SRC/main.lua" "$BUILD_DIR/$PLUGIN_NAME/"
 cp "$PLUGIN_SRC/_meta.lua" "$BUILD_DIR/$PLUGIN_NAME/"
-# Note: localsend_utils.lua is only for tests, not shipped in the plugin
+cp "$PLUGIN_SRC/localsend_utils.lua" "$BUILD_DIR/$PLUGIN_NAME/"
 
 if ! $PACKAGE_ONLY; then
+    # Build for armv5 (soft-float, legacy devices like K3)
+    echo "Building for armv5 (legacy)..."
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-arm-legacy" .
+    echo "armv5: $(ls -lh "$BIN_DIR/localsend-arm-legacy" | awk '{print $5}')"
+
     # Build for armv7 (32-bit ARM)
     echo "Building for armv7..."
-    GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-armv7" .
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-armv7" .
     echo "armv7: $(ls -lh "$BIN_DIR/localsend-armv7" | awk '{print $5}')"
 
     # Build for arm64 (64-bit ARM)
     echo "Building for arm64..."
-    GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-arm64" .
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-arm64" .
     echo "arm64: $(ls -lh "$BIN_DIR/localsend-arm64" | awk '{print $5}')"
 fi
+
+# Create armv5 zip (legacy)
+echo "Creating armv5 zip..."
+cp "$BIN_DIR/localsend-arm-legacy" "$BUILD_DIR/$PLUGIN_NAME/localsend"
+(cd "$BUILD_DIR" && zip -r "localsend-koplugin-arm-legacy.zip" "$PLUGIN_NAME")
 
 # Create armv7 zip
 echo "Creating armv7 zip..."

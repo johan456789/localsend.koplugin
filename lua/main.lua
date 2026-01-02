@@ -15,11 +15,100 @@ local json = require("json")
 
 local GITHUB_RELEASE_URL = "https://api.github.com/repos/kaikozlov/localsend.koplugin/releases/latest"
 
--- Import utility functions (extracted for testability)
-local utils = require("localsend_utils")
-local shellEscape = utils.shellEscape
-local isValidPath = utils.isValidPath
-local isValidPort = utils.isValidPort
+-- Utility functions (inlined for backwards compatibility with older self-update)
+-- Also available in localsend_utils.lua for testing
+
+-- Shell escape utility to prevent command injection
+-- Wraps string in single quotes and escapes any embedded single quotes
+local function shellEscape(str)
+    if str == nil then return "''" end
+    -- Single quote escape: replace ' with '\''
+    return "'" .. str:gsub("'", "'\\''" ) .. "'"
+end
+
+-- Validate that a path is safe for shell operations
+local function isValidPath(path)
+    if path == nil or path == "" then return false end
+    -- Reject paths with null bytes
+    if path:find("%z") then return false end
+    -- Must be absolute path
+    if not path:match("^/") then return false end
+    -- No command substitution patterns
+    if path:find("`") or path:find("%$%(") then return false end
+    return true
+end
+
+-- Validate that a port number is safe for shell operations
+local function isValidPort(port)
+    if port == nil then return false end
+    local num = tonumber(port)
+    if num == nil then return false end
+    if num < 1 or num > 65535 then return false end
+    -- Ensure it's an integer
+    if num ~= math.floor(num) then return false end
+    return true
+end
+
+-- Compare semantic versions
+-- Returns: -1 if v1 < v2, 0 if equal, 1 if v1 > v2
+local function compareVersions(v1, v2)
+    local function parseVersion(v)
+        local parts = {}
+        for num in string.gmatch(v:gsub("^v", ""), "(%d+)") do
+            table.insert(parts, tonumber(num) or 0)
+        end
+        return parts
+    end
+
+    local p1, p2 = parseVersion(v1), parseVersion(v2)
+    for i = 1, math.max(#p1, #p2) do
+        local n1, n2 = p1[i] or 0, p2[i] or 0
+        if n1 < n2 then return -1 end
+        if n1 > n2 then return 1 end
+    end
+    return 0
+end
+
+-- Find download asset URL for given architecture
+local function findAssetForArch(assets, arch)
+    local pattern = "localsend%-koplugin%-" .. arch .. "%.zip$"
+    for _, asset in ipairs(assets) do
+        if asset.name and asset.name:match(pattern) then
+            return asset.browser_download_url, asset.name
+        end
+    end
+    return nil, nil
+end
+
+-- Normalize curly quotes to straight quotes
+local function normalizeApostrophes(str)
+    if str == nil then return nil end
+    -- Replace curly single quotes (U+2018, U+2019) with straight quote
+    return str:gsub("\xe2\x80\x98", "'"):gsub("\xe2\x80\x99", "'")
+end
+
+-- Validate device name for LocalSend
+local function validateDeviceName(name)
+    -- Empty name is valid (will use random name)
+    if name == "" then
+        return true
+    end
+
+    -- Check length (reasonable limit)
+    if #name > 64 then
+        return false, "Device name is too long (max 64 characters)."
+    end
+
+    -- Normalize curly quotes to straight for validation
+    local normalized = normalizeApostrophes(name)
+
+    -- Only allow alphanumeric, spaces, hyphens, underscores, and apostrophes
+    if not normalized:match("^[%w%s%-_']+$") then
+        return false, "Device name can only contain letters, numbers, spaces, hyphens, underscores, and apostrophes."
+    end
+
+    return true
+end
 
 -- Check if an iptables rule exists (returns true if rule exists)
 local function iptablesRuleExists(rule)
@@ -202,7 +291,7 @@ function LocalSend:closeFirewall()
 end
 
 function LocalSend:validateDeviceName(name)
-    local valid, err = utils.validateDeviceName(name)
+    local valid, err = validateDeviceName(name)
     if not valid and err then
         return false, _(err)
     end
@@ -1292,7 +1381,7 @@ function LocalSend:checkForUpdates()
     local latest_version = release.tag_name:gsub("^v", "")
     local current_version = PLUGIN_VERSION:gsub("^v", "")
 
-    if utils.compareVersions(current_version, latest_version) >= 0 then
+    if compareVersions(current_version, latest_version) >= 0 then
         UIManager:show(InfoMessage:new{
             text = T(_("You're up to date!\n\nCurrent version: %1\nLatest version: %2"), PLUGIN_VERSION, release.tag_name),
             timeout = 5,
@@ -1303,7 +1392,7 @@ function LocalSend:checkForUpdates()
         local download_url, asset_name
 
         if arch and release.assets then
-            download_url, asset_name = utils.findAssetForArch(release.assets, arch)
+            download_url, asset_name = findAssetForArch(release.assets, arch)
         end
 
         local release_notes = release.body or _("No release notes available.")

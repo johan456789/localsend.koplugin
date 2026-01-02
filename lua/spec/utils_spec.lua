@@ -221,8 +221,8 @@ describe("LocalSend Utils", function()
 
         it("accepts names with apostrophes", function()
             assert.is_true(lsutils.validateDeviceName("Kai's Kindle"))
-            assert.is_true(lsutils.validateDeviceName("Kai's Kindle")) -- curly
-            assert.is_true(lsutils.validateDeviceName("Kai's Kindle")) -- another curly
+            assert.is_true(lsutils.validateDeviceName("Kai\xe2\x80\x99s Kindle")) -- right curly
+            assert.is_true(lsutils.validateDeviceName("Kai\xe2\x80\x98s Kindle")) -- left curly
         end)
 
         it("rejects names that are too long", function()

@@ -65,6 +65,13 @@ function M.findAssetForArch(assets, arch)
     return nil, nil
 end
 
+-- Normalize curly quotes to straight quotes
+function M.normalizeApostrophes(str)
+    if str == nil then return nil end
+    -- Replace curly single quotes (U+2018, U+2019) with straight quote
+    return str:gsub("\xe2\x80\x98", "'"):gsub("\xe2\x80\x99", "'")
+end
+
 -- Validate device name for LocalSend
 function M.validateDeviceName(name)
     -- Empty name is valid (will use random name)
@@ -77,8 +84,11 @@ function M.validateDeviceName(name)
         return false, "Device name is too long (max 64 characters)."
     end
 
-    -- Only allow alphanumeric, spaces, hyphens, underscores, and apostrophes (straight and curly)
-    if not name:match("^[%w%s%-_''']+$") then
+    -- Normalize curly quotes to straight for validation
+    local normalized = M.normalizeApostrophes(name)
+
+    -- Only allow alphanumeric, spaces, hyphens, underscores, and apostrophes
+    if not normalized:match("^[%w%s%-_']+$") then
         return false, "Device name can only contain letters, numbers, spaces, hyphens, underscores, and apostrophes."
     end
 

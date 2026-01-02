@@ -246,7 +246,11 @@ func (s *RTCSender) handleNonceResponse(msg interface{}, msgType string) {
 		return
 	}
 
-	nonceMsg := msg.(*RTCNonceMessage)
+	nonceMsg, ok := msg.(*RTCNonceMessage)
+	if !ok {
+		slog.Error("Invalid message type for nonce", "got", fmt.Sprintf("%T", msg))
+		return
+	}
 	remoteNonce, err := crypto.DecodeNonce(nonceMsg.Nonce)
 	if err != nil {
 		slog.Error("Failed to decode remote nonce", "error", err)

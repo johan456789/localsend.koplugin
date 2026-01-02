@@ -38,6 +38,7 @@ type SignalingClient struct {
 	msgChan  chan WsServerMessage
 	sendChan chan WsClientMessage
 	done     chan struct{}
+	closeOnce sync.Once // Ensures Close() is only executed once
 	onAnswer map[string]func(WsServerMessage) // sessionID -> callback
 	answerMu sync.Mutex
 
@@ -291,8 +292,12 @@ func (c *SignalingClient) handlePeerUpdate(msg WsServerMessage) {
 
 // Close closes the signaling connection.
 func (c *SignalingClient) Close() error {
-	close(c.done)
-	return c.conn.Close()
+	var closeErr error
+	c.closeOnce.Do(func() {
+		close(c.done)
+		closeErr = c.conn.Close()
+	})
+	return closeErr
 }
 
 // ClientID returns our client ID assigned by the server.

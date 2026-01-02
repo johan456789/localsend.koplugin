@@ -20,6 +20,9 @@ import (
 
 const (
 	advInterval = 3 * time.Second
+	// maxConcurrentScans limits the number of concurrent subnet scan goroutines
+	// to prevent resource exhaustion on constrained devices (e.g., Raspberry Pi, e-readers)
+	maxConcurrentScans = 50
 )
 
 var multicastDiscoveryAddr = &net.UDPAddr{
@@ -267,6 +270,9 @@ func (mcs *Discoverier) ScanSubnet(ctx context.Context) {
 	}
 
 	var wg sync.WaitGroup
+	// Semaphore to limit concurrent scans and prevent resource exhaustion
+	sem := make(chan struct{}, maxConcurrentScans)
+
 	for _, ip := range ips {
 		// Only scan /24 subnets for simplicity and common home network usage
 		ipv4 := ip.To4()
@@ -280,9 +286,18 @@ func (mcs *Discoverier) ScanSubnet(ctx context.Context) {
 				continue
 			}
 
+			// Acquire semaphore slot (blocks if at capacity)
+			select {
+			case <-ctx.Done():
+				wg.Wait()
+				return
+			case sem <- struct{}{}:
+			}
+
 			wg.Add(1)
 			go func(targetIP net.IP) {
 				defer wg.Done()
+				defer func() { <-sem }() // Release semaphore slot
 				select {
 				case <-ctx.Done():
 					return

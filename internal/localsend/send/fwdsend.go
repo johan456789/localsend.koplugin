@@ -66,6 +66,9 @@ func (fsp *ForwardSender) preUploadReq() error {
 		if err != nil {
 			return fmt.Errorf("failed to fetch certificate: %w", err)
 		}
+		if len(certs) == 0 {
+			return fmt.Errorf("no certificates returned from server")
+		}
 		fingerprint := utils.SHA256ofCert(certs[0]) // only check the first cert
 		if fingerprint != fsp.remote.Fingerprint {
 			return constants.ErrFingerprint

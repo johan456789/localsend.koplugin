@@ -40,8 +40,14 @@ func (rsm *RecvSessManager) vacuumTask() {
 			return
 		case <-ticker.C:
 			rsm.sessions.Range(func(key, value any) bool {
-				sessionId := key.(string)
-				session := value.(*RecvSession)
+				sessionId, ok := key.(string)
+				if !ok {
+					return true // skip invalid entry
+				}
+				session, ok := value.(*RecvSession)
+				if !ok {
+					return true // skip invalid entry
+				}
 
 				if session.Stopped() {
 					slog.Info("Cleanup stopped session", "session", sessionId)
@@ -94,7 +100,10 @@ func (rsm *RecvSessManager) KillSession(sessionId string) {
 	if !exist {
 		return
 	}
-	sess := v.(*RecvSession)
+	sess, ok := v.(*RecvSession)
+	if !ok {
+		return
+	}
 	sess.End()
 }
 
@@ -103,7 +112,10 @@ func (rsm *RecvSessManager) GetSession(sessionId string) (*RecvSession, error) {
 	if !exist {
 		return nil, constants.ErrNotFound
 	}
-	session := v.(*RecvSession)
+	session, ok := v.(*RecvSession)
+	if !ok {
+		return nil, constants.ErrNotFound
+	}
 
 	return session, nil
 }
@@ -113,7 +125,10 @@ func (rsm *RecvSessManager) GetSession(sessionId string) (*RecvSession, error) {
 func (rsm *RecvSessManager) HasActiveSessions() bool {
 	hasActive := false
 	rsm.sessions.Range(func(key, value any) bool {
-		session := value.(*RecvSession)
+		session, ok := value.(*RecvSession)
+		if !ok {
+			return true // skip invalid entry
+		}
 		if !session.Stopped() {
 			hasActive = true
 			return false // stop iteration

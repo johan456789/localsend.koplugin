@@ -357,7 +357,12 @@ func (r *RTCReceiver) handleNonce(msg interface{}, msgType string) {
 		return
 	}
 
-	nonceMsg := msg.(*RTCNonceMessage)
+	nonceMsg, ok := msg.(*RTCNonceMessage)
+	if !ok {
+		slog.Error("Invalid message type for nonce", "got", fmt.Sprintf("%T", msg))
+		r.sendError("internal error: message type mismatch")
+		return
+	}
 	remoteNonce, err := crypto.DecodeNonce(nonceMsg.Nonce)
 	if err != nil {
 		slog.Error("Failed to decode remote nonce", "error", err)
@@ -400,7 +405,12 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 		return
 	}
 
-	tokenReq := msg.(*RTCTokenRequest)
+	tokenReq, ok := msg.(*RTCTokenRequest)
+	if !ok {
+		slog.Error("Invalid message type for token_request", "got", fmt.Sprintf("%T", msg))
+		r.sendError("internal error: message type mismatch")
+		return
+	}
 	tokenPreview := tokenReq.Token
 	if len(tokenPreview) > 30 {
 		tokenPreview = tokenPreview[:30] + "..."
@@ -457,7 +467,12 @@ func (r *RTCReceiver) handlePin(msg interface{}, msgType string) {
 		return
 	}
 
-	pinMsg := msg.(*RTCPinMessage)
+	pinMsg, ok := msg.(*RTCPinMessage)
+	if !ok {
+		slog.Error("Invalid message type for pin", "got", fmt.Sprintf("%T", msg))
+		r.sendError("internal error: message type mismatch")
+		return
+	}
 	slog.Info("Received PIN challenge")
 
 	if pinMsg.Pin == r.pin {
@@ -648,7 +663,11 @@ func (r *RTCReceiver) handleFileHeader(msg interface{}, msgType string) {
 		return
 	}
 
-	header := msg.(*RTCSendFileHeader)
+	header, ok := msg.(*RTCSendFileHeader)
+	if !ok {
+		slog.Error("Invalid message type for file_header", "got", fmt.Sprintf("%T", msg))
+		return
+	}
 	slog.Info("Receiving file", "id", header.ID)
 	r.currentFileID = header.ID
 	r.state = stateReceivingFiles

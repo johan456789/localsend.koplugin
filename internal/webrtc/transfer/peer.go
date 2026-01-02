@@ -17,6 +17,8 @@ const (
 	closeWaitIterations = 20
 	// closeWaitInterval is the time between close state checks
 	closeWaitInterval = 100 * time.Millisecond
+	// iceGatheringTimeout is the maximum time to wait for ICE gathering
+	iceGatheringTimeout = 30 * time.Second
 )
 
 // Default STUN servers for ICE.
@@ -192,8 +194,13 @@ func (p *PeerConnection) CreateOffer() (string, error) {
 		return "", fmt.Errorf("failed to set local description: %w", err)
 	}
 
-	// Wait for ICE gathering to complete
-	<-webrtc.GatheringCompletePromise(p.pc)
+	// Wait for ICE gathering to complete with timeout
+	select {
+	case <-webrtc.GatheringCompletePromise(p.pc):
+		// ICE gathering completed
+	case <-time.After(iceGatheringTimeout):
+		slog.Warn("ICE gathering timed out, proceeding with available candidates")
+	}
 
 	return p.pc.LocalDescription().SDP, nil
 }
@@ -218,8 +225,13 @@ func (p *PeerConnection) AcceptOffer(sdp string) (string, error) {
 		return "", fmt.Errorf("failed to set local description: %w", err)
 	}
 
-	// Wait for ICE gathering to complete
-	<-webrtc.GatheringCompletePromise(p.pc)
+	// Wait for ICE gathering to complete with timeout
+	select {
+	case <-webrtc.GatheringCompletePromise(p.pc):
+		// ICE gathering completed
+	case <-time.After(iceGatheringTimeout):
+		slog.Warn("ICE gathering timed out, proceeding with available candidates")
+	}
 
 	return p.pc.LocalDescription().SDP, nil
 }

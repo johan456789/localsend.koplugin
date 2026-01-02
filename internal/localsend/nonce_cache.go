@@ -40,7 +40,9 @@ func (nc *NonceCache) Put(clientID string, nonce []byte) {
 	// If entry exists, update it and move to front
 	if elem, exists := nc.cache[clientID]; exists {
 		nc.lru.MoveToFront(elem)
-		elem.Value.(*cacheEntry).nonce = nonce
+		if entry, ok := elem.Value.(*cacheEntry); ok {
+			entry.nonce = nonce
+		}
 		return
 	}
 
@@ -57,7 +59,9 @@ func (nc *NonceCache) Put(clientID string, nonce []byte) {
 		oldest := nc.lru.Back()
 		if oldest != nil {
 			nc.lru.Remove(oldest)
-			delete(nc.cache, oldest.Value.(*cacheEntry).clientID)
+			if entry, ok := oldest.Value.(*cacheEntry); ok {
+				delete(nc.cache, entry.clientID)
+			}
 		}
 	}
 }
@@ -75,7 +79,10 @@ func (nc *NonceCache) Get(clientID string) ([]byte, bool) {
 	}
 
 	nc.lru.MoveToFront(elem)
-	return elem.Value.(*cacheEntry).nonce, true
+	if entry, ok := elem.Value.(*cacheEntry); ok {
+		return entry.nonce, true
+	}
+	return nil, false
 }
 
 // Delete removes the nonce for the given clientID.

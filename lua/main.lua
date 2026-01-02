@@ -1102,6 +1102,158 @@ function LocalSend:compareVersions(v1, v2)
     return 0
 end
 
+function LocalSend:getDeviceArch()
+    -- Detect device architecture for selecting the right binary
+    local handle = io.popen("uname -m")
+    if not handle then return nil end
+    local arch = handle:read("*l")
+    handle:close()
+
+    if not arch then return nil end
+
+    -- Map uname output to our asset naming
+    if arch:match("^aarch64") or arch:match("^arm64") then
+        return "arm64"
+    elseif arch:match("^armv7") or arch:match("^armv6") or arch:match("^arm") then
+        return "armv7"
+    end
+
+    return nil
+end
+
+function LocalSend:findAssetForArch(assets, arch)
+    -- Find the download URL for our architecture
+    local pattern = "localsend%-koplugin%-" .. arch .. "%.zip$"
+    for _, asset in ipairs(assets) do
+        if asset.name and asset.name:match(pattern) then
+            return asset.browser_download_url, asset.name
+        end
+    end
+    return nil, nil
+end
+
+function LocalSend:performUpdate(download_url, asset_name, new_version)
+    -- Stop server if running
+    if self:isRunning() then
+        self:stopServer(true)
+    end
+
+    UIManager:show(InfoMessage:new{
+        text = _("Downloading update..."),
+        timeout = 2,
+    })
+
+    -- Give UI time to show the message
+    UIManager:scheduleIn(0.5, function()
+        self:doPerformUpdate(download_url, asset_name, new_version)
+    end)
+end
+
+function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
+    local tmp_zip = "/tmp/localsend_update.zip"
+    local tmp_extract = "/tmp/localsend_update_extract"
+
+    -- Clean up any previous update attempt
+    os.remove(tmp_zip)
+    os.execute("rm -rf " .. shellEscape(tmp_extract))
+
+    -- Download the zip
+    local cmd = string.format(
+        "curl -L -s -o %s -w '%%{http_code}' --connect-timeout 30 --max-time 120 %s",
+        shellEscape(tmp_zip), shellEscape(download_url))
+
+    local handle = io.popen(cmd)
+    local http_code = handle:read("*a")
+    handle:close()
+
+    if http_code ~= "200" then
+        UIManager:show(InfoMessage:new{
+            icon = "notice-warning",
+            text = T(_("Download failed.\nHTTP status: %1"), http_code),
+        })
+        os.remove(tmp_zip)
+        return
+    end
+
+    -- Verify zip was downloaded
+    if not util.pathExists(tmp_zip) then
+        UIManager:show(InfoMessage:new{
+            icon = "notice-warning",
+            text = _("Download failed: file not saved."),
+        })
+        return
+    end
+
+    -- Create extraction directory
+    os.execute("mkdir -p " .. shellEscape(tmp_extract))
+
+    -- Extract the zip
+    local extract_cmd = string.format("unzip -o %s -d %s", shellEscape(tmp_zip), shellEscape(tmp_extract))
+    local result = os.execute(extract_cmd)
+
+    if result ~= 0 then
+        UIManager:show(InfoMessage:new{
+            icon = "notice-warning",
+            text = _("Failed to extract update."),
+        })
+        os.remove(tmp_zip)
+        os.execute("rm -rf " .. shellEscape(tmp_extract))
+        return
+    end
+
+    -- The zip contains localsend.koplugin/ folder
+    local extracted_plugin = tmp_extract .. "/localsend.koplugin"
+
+    if not util.pathExists(extracted_plugin) then
+        UIManager:show(InfoMessage:new{
+            icon = "notice-warning",
+            text = _("Invalid update package structure."),
+        })
+        os.remove(tmp_zip)
+        os.execute("rm -rf " .. shellEscape(tmp_extract))
+        return
+    end
+
+    -- Copy files to plugin directory
+    local files_to_copy = { "main.lua", "_meta.lua", "localsend" }
+    local copy_failed = false
+
+    for _, file in ipairs(files_to_copy) do
+        local src = extracted_plugin .. "/" .. file
+        local dst = plugin_path .. "/" .. file
+
+        if util.pathExists(src) then
+            local cp_result = os.execute(string.format("cp %s %s", shellEscape(src), shellEscape(dst)))
+            if cp_result ~= 0 then
+                copy_failed = true
+                logger.err("[LocalSend] Failed to copy:", file)
+            end
+        else
+            logger.warn("[LocalSend] File not in update package:", file)
+        end
+    end
+
+    -- Make binary executable
+    os.execute("chmod +x " .. shellEscape(plugin_path .. "/localsend"))
+
+    -- Cleanup
+    os.remove(tmp_zip)
+    os.execute("rm -rf " .. shellEscape(tmp_extract))
+
+    if copy_failed then
+        UIManager:show(InfoMessage:new{
+            icon = "notice-warning",
+            text = _("Update partially failed. Some files could not be copied. Please update manually."),
+        })
+        return
+    end
+
+    -- Success!
+    UIManager:show(InfoMessage:new{
+        text = T(_("Update to %1 installed successfully!\n\nPlease restart KOReader for changes to take effect."), new_version),
+    })
+end
+
 function LocalSend:checkForUpdates()
     UIManager:show(InfoMessage:new{
         text = _("Checking for updates..."),
@@ -1158,16 +1310,46 @@ function LocalSend:checkForUpdates()
             timeout = 5,
         })
     else
-        local release_notes = release.body or _("No release notes available.")
-        -- Truncate if too long
-        if #release_notes > 500 then
-            release_notes = release_notes:sub(1, 500) .. "..."
+        -- Update available - check if we can auto-update
+        local arch = self:getDeviceArch()
+        local download_url, asset_name
+
+        if arch and release.assets then
+            download_url, asset_name = self:findAssetForArch(release.assets, arch)
         end
 
-        UIManager:show(InfoMessage:new{
-            text = T(_("Update available!\n\nCurrent: %1\nLatest: %2\n\nRelease notes:\n%3\n\nVisit GitHub to download the update."),
-                PLUGIN_VERSION, release.tag_name, release_notes),
-        })
+        local release_notes = release.body or _("No release notes available.")
+        -- Truncate if too long
+        if #release_notes > 300 then
+            release_notes = release_notes:sub(1, 300) .. "..."
+        end
+
+        if download_url then
+            -- Can auto-update
+            local ConfirmBox = require("ui/widget/confirmbox")
+            UIManager:show(ConfirmBox:new{
+                text = T(_("Update available!\n\nCurrent: %1\nLatest: %2\n\n%3\n\nInstall update now?"),
+                    PLUGIN_VERSION, release.tag_name, release_notes),
+                ok_text = _("Install"),
+                cancel_text = _("Later"),
+                ok_callback = function()
+                    self:performUpdate(download_url, asset_name, release.tag_name)
+                end,
+            })
+        else
+            -- Can't auto-update (unknown arch or no matching asset)
+            local reason = ""
+            if not arch then
+                reason = _("\n\nAuto-update not available: unknown device architecture.")
+            else
+                reason = T(_("\n\nAuto-update not available: no package for %1 architecture."), arch)
+            end
+
+            UIManager:show(InfoMessage:new{
+                text = T(_("Update available!\n\nCurrent: %1\nLatest: %2\n\n%3%4\n\nVisit GitHub to download manually."),
+                    PLUGIN_VERSION, release.tag_name, release_notes, reason),
+            })
+        end
     end
 end
 
@@ -1332,13 +1514,12 @@ function LocalSend:addToMainMenu(menu_items)
             },
             {
                 text_func = function()
-                    return T(_("Version: %1"), PLUGIN_VERSION)
+                    return T(_("Check for updates (%1)"), PLUGIN_VERSION)
                 end,
                 keep_menu_open = true,
                 callback = function()
                     self:checkForUpdates()
                 end,
-                help_text = _("Tap to check for updates"),
             },
         }
     }

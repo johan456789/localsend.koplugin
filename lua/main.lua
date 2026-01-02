@@ -111,7 +111,11 @@ function LocalSend:init()
     self.routing_enabled = G_reader_settings:isTrue("LocalSend_routing_enabled") -- Whether routing is active
     self.last_transfer_count = 0
 
-    if self.autostart then
+    -- Only autostart if:
+    -- 1. autostart setting is enabled
+    -- 2. user hasn't explicitly stopped the server this session
+    -- (The global flag is cleared on KOReader restart, so autostart works on fresh launch)
+    if self.autostart and not _G.LocalSend_user_stopped then
         self:start()
     end
 
@@ -553,6 +557,10 @@ function LocalSend:stopServer(force)
 end
 
 function LocalSend:stop()
+    -- Mark that user explicitly stopped the server this session
+    -- This prevents autostart from restarting it when opening a new document
+    _G.LocalSend_user_stopped = true
+
     local ok, err = self:stopServer(false)
     if not ok then
         logger.warn("[LocalSend] Graceful stop failed:", err)
@@ -583,6 +591,9 @@ function LocalSend:onToggleLocalSend()
     if self:isRunning() then
         self:stop()
     else
+        -- User is explicitly starting the server, clear the stopped flag
+        -- so autostart can work again if they open another document
+        _G.LocalSend_user_stopped = nil
         self:start()
     end
 end
@@ -1216,6 +1227,7 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
     end
 
     -- Copy files to plugin directory
+    -- Core files that must exist:
     local files_to_copy = { "main.lua", "_meta.lua", "localsend" }
     local copy_failed = false
 
@@ -1232,6 +1244,26 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
         else
             logger.warn("[LocalSend] File not in update package:", file)
         end
+    end
+
+    -- Also copy any additional .lua files (for future-proofing)
+    -- This ensures new Lua modules are picked up without hardcoding names
+    local ls_handle = io.popen("ls " .. shellEscape(extracted_plugin) .. "/*.lua 2>/dev/null")
+    if ls_handle then
+        for lua_file in ls_handle:lines() do
+            local filename = lua_file:match("([^/]+)$")
+            -- Skip files we already copied
+            if filename and filename ~= "main.lua" and filename ~= "_meta.lua" then
+                local dst = plugin_path .. "/" .. filename
+                local cp_result = os.execute(string.format("cp %s %s", shellEscape(lua_file), shellEscape(dst)))
+                if cp_result ~= 0 then
+                    logger.warn("[LocalSend] Failed to copy additional lua file:", filename)
+                else
+                    logger.dbg("[LocalSend] Copied additional lua file:", filename)
+                end
+            end
+        end
+        ls_handle:close()
     end
 
     -- Make binary executable

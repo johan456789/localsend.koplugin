@@ -51,6 +51,7 @@ mkdir -p "$BUILD_DIR/$PLUGIN_NAME"
 # Copy plugin source files to build directory
 cp "$PLUGIN_SRC/main.lua" "$BUILD_DIR/$PLUGIN_NAME/"
 cp "$PLUGIN_SRC/_meta.lua" "$BUILD_DIR/$PLUGIN_NAME/"
+# Note: localsend_utils.lua is only for tests, not shipped in the plugin
 
 if ! $PACKAGE_ONLY; then
     # Build for armv7 (32-bit ARM)

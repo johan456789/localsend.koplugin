@@ -3,5 +3,5 @@ return {
     name = "localsend",
     fullname = _("LocalSend"),
     description = _([[Receive files from other devices using LocalSend protocol.]]),
-    version = "v1.1.0"
+    version = "v1.1.1"
 }

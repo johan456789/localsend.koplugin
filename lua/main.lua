@@ -119,12 +119,13 @@ function LocalSend:init()
     self:onDispatcherRegisterActions()
 end
 
--- Cleanup when plugin is unloaded or KOReader is closed
-function LocalSend:onCloseWidget()
+-- Cleanup when KOReader exits (not when switching documents)
+-- Note: onCloseWidget is called when switching books, so we don't stop the server there.
+-- Instead, we stop on Exit event which is only triggered when KOReader actually closes.
+function LocalSend:onExit()
     if self:isRunning() then
-        -- Force stop to ensure clean shutdown
         self:stopServer(true)
-        logger.dbg("[LocalSend] Server stopped on plugin unload")
+        logger.dbg("[LocalSend] Server stopped on KOReader exit")
     end
 end
 

@@ -417,7 +417,7 @@ describe("Menu Building", function()
     end)
 
     describe("text_func dynamic behavior", function()
-        it("device name shows '(random)' when empty", function()
+        it("device name shows '(KOReader)' when empty", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
@@ -450,7 +450,7 @@ describe("Menu Building", function()
 
             assert.is_not_nil(device_name_item)
             local text = device_name_item.text_func()
-            assert.truthy(text:match("random") or text:match("%%1"), "Should show '(random)' or placeholder")
+            assert.truthy(text:match("KOReader"), "Should show '(KOReader)' as default")
         end)
 
         it("device name shows actual name when set", function()

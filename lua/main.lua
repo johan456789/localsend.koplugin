@@ -356,9 +356,9 @@ function LocalSend:start()
         shellEscape(self.save_dir),
         shellEscape(transfer_log_file))
 
-    if self.device_name ~= "" then
-        cmd = string.format("%s -n %s", cmd, shellEscape(self.device_name))
-    end
+    -- Always pass device name (default to "KOReader" if not set)
+    local effective_name = self.device_name ~= "" and self.device_name or "KOReader"
+    cmd = string.format("%s -n %s", cmd, shellEscape(effective_name))
 
     if self.pin ~= "" then
         cmd = string.format("%s -p %s", cmd, shellEscape(self.pin))
@@ -427,12 +427,30 @@ function LocalSend:start()
                 self:checkForNewTransfers()
             end)
 
+            -- Build concise startup message
+            local network_info = Device.retrieveNetworkInfo and Device:retrieveNetworkInfo() or nil
+            local pin_status = self.pin ~= "" and _("PIN: enabled") or nil
+
+            local message_parts = {
+                T(_("Device: %1"), effective_name),
+            }
+
+            -- Try to extract IP and show with port for manual connection
+            local ip_addr = network_info and network_info:match("(%d+%.%d+%.%d+%.%d+)")
+            if ip_addr then
+                table.insert(message_parts, T(_("IP: %1"), ip_addr .. ":" .. self.port))
+            elseif network_info and network_info ~= "" then
+                -- Fallback: show raw network info if we can't extract IP
+                table.insert(message_parts, network_info)
+            end
+
+            if pin_status then
+                table.insert(message_parts, pin_status)
+            end
+
             local info = InfoMessage:new{
-                timeout = 10,
-                text = T(_("LocalSend server started.\n\nPort: %1\nSave directory: %2\n%3"),
-                    self.port,
-                    self.save_dir,
-                    Device.retrieveNetworkInfo and Device:retrieveNetworkInfo() or _("Could not retrieve network info.")),
+                timeout = 5,
+                text = _("LocalSend Ready") .. "\n" .. table.concat(message_parts, "\n"),
             }
             UIManager:show(info)
         else
@@ -643,7 +661,7 @@ end
 function LocalSend:showDeviceNameDialog(touchmenu_instance)
     self.device_name_dialog = InputDialog:new{
         title = _("Device name"),
-        description = _("Leave empty for random name (e.g., 'Special Pineapple')"),
+        description = _("Leave empty for default ('KOReader')"),
         input = self.device_name,
         input_hint = "My Kindle",
         buttons = {
@@ -1397,7 +1415,7 @@ function LocalSend:addToMainMenu(menu_items)
                             if self.device_name ~= "" then
                                 return T(_("Device name (%1)"), self.device_name)
                             else
-                                return _("Device name (random)")
+                                return _("Device name (KOReader)")
                             end
                         end,
                         keep_menu_open = true,

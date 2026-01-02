@@ -602,7 +602,7 @@ describe("start() function", function()
             assert.equal(5, scheduled_callbacks[1].delay, "Should schedule with 5 second delay")
         end)
 
-        it("should show success notification with port and save directory", function()
+        it("should show success notification with device name", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
@@ -626,7 +626,7 @@ describe("start() function", function()
 
             local found_success = false
             for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("LocalSend server started") then
+                if n.text and n.text:match("LocalSend Ready") then
                     found_success = true
                     break
                 end

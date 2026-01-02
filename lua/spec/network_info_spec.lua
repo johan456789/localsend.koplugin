@@ -181,25 +181,7 @@ describe("Network Info Display", function()
     end)
 
     describe("when retrieveNetworkInfo is nil (old KOReader)", function()
-        it("shows fallback message", function()
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = nil,
-            }
-
-            create_instance_and_start()
-
-            local found_fallback = false
-            for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("Could not retrieve network info") then
-                    found_fallback = true
-                    break
-                end
-            end
-            assert.is_true(found_fallback, "Should show fallback when retrieveNetworkInfo is nil")
-        end)
-
-        it("still shows port and save directory", function()
+        it("shows success message without network info", function()
             package.loaded["device"] = {
                 isKindle = function() return false end,
                 retrieveNetworkInfo = nil,
@@ -209,17 +191,35 @@ describe("Network Info Display", function()
 
             local found_success = false
             for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("LocalSend server started") then
+                if n.text and n.text:match("LocalSend Ready") then
                     found_success = true
                     break
                 end
             end
-            assert.is_true(found_success, "Should still show success message")
+            assert.is_true(found_success, "Should show success message even without network info")
+        end)
+
+        it("still shows device name", function()
+            package.loaded["device"] = {
+                isKindle = function() return false end,
+                retrieveNetworkInfo = nil,
+            }
+
+            create_instance_and_start()
+
+            local found_device = false
+            for _, n in ipairs(notifications_shown) do
+                if n.text and n.text:match("Device:") then
+                    found_device = true
+                    break
+                end
+            end
+            assert.is_true(found_device, "Should show device name in notification")
         end)
     end)
 
     describe("when retrieveNetworkInfo returns empty string", function()
-        it("shows empty network info section (not fallback)", function()
+        it("shows success notification without network section", function()
             package.loaded["device"] = {
                 isKindle = function() return false end,
                 retrieveNetworkInfo = function() return "" end,
@@ -227,26 +227,19 @@ describe("Network Info Display", function()
 
             create_instance_and_start()
 
-            -- In Lua, empty string "" is truthy for the `and` operator
-            -- So: Device.retrieveNetworkInfo and Device:retrieveNetworkInfo() returns ""
-            -- And "" or "fallback" returns "" because "" is truthy
-            -- The notification will have the empty string in place of network info
             local found_success = false
             for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("LocalSend server started") then
+                if n.text and n.text:match("LocalSend Ready") then
                     found_success = true
-                    -- The network info portion should be empty, not the fallback message
-                    -- Because "" or "fallback" in Lua returns "" (truthy)
                     break
                 end
             end
-            assert.is_true(found_success, "Should still show success notification with empty network info")
+            assert.is_true(found_success, "Should still show success notification")
         end)
     end)
 
     describe("when Device module is completely missing", function()
         it("handles gracefully if Device global is missing", function()
-            -- In reality, Device should always exist, but this tests robustness
             package.loaded["device"] = {
                 isKindle = function() return false end,
                 -- No retrieveNetworkInfo at all
@@ -254,20 +247,20 @@ describe("Network Info Display", function()
 
             create_instance_and_start()
 
-            -- Should show fallback
-            local found_fallback = false
+            -- Should still show success
+            local found_success = false
             for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("Could not retrieve network info") then
-                    found_fallback = true
+                if n.text and n.text:match("LocalSend Ready") then
+                    found_success = true
                     break
                 end
             end
-            assert.is_true(found_fallback, "Should show fallback when function is missing")
+            assert.is_true(found_success, "Should show success message even without network function")
         end)
     end)
 
     describe("notification content structure", function()
-        it("includes port in notification", function()
+        it("includes device name in notification", function()
             package.loaded["device"] = {
                 isKindle = function() return false end,
                 retrieveNetworkInfo = function() return "WiFi" end,
@@ -275,18 +268,17 @@ describe("Network Info Display", function()
 
             create_instance_and_start()
 
-            local found_port = false
+            local found_device = false
             for _, n in ipairs(notifications_shown) do
-                -- Port might be in text with template substitution
-                if n.text and (n.text:match("Port") or n.text:match("53317") or n.text:match("%%1")) then
-                    found_port = true
+                if n.text and n.text:match("Device:") then
+                    found_device = true
                     break
                 end
             end
-            assert.is_true(found_port, "Should mention port in notification")
+            assert.is_true(found_device, "Should mention device name in notification")
         end)
 
-        it("includes save directory in notification", function()
+        it("shows default device name 'KOReader' when not configured", function()
             package.loaded["device"] = {
                 isKindle = function() return false end,
                 retrieveNetworkInfo = function() return "WiFi" end,
@@ -294,14 +286,33 @@ describe("Network Info Display", function()
 
             create_instance_and_start()
 
-            local found_dir = false
+            local found_koreader = false
             for _, n in ipairs(notifications_shown) do
-                if n.text and (n.text:match("Save directory") or n.text:match("/mnt/us/documents") or n.text:match("%%2")) then
-                    found_dir = true
+                if n.text and n.text:match("KOReader") then
+                    found_koreader = true
                     break
                 end
             end
-            assert.is_true(found_dir, "Should mention save directory in notification")
+            assert.is_true(found_koreader, "Should show 'KOReader' as default device name")
+        end)
+
+        it("shows custom device name when configured", function()
+            settings["LocalSend_device_name"] = "My Kindle"
+            package.loaded["device"] = {
+                isKindle = function() return false end,
+                retrieveNetworkInfo = function() return "WiFi" end,
+            }
+
+            create_instance_and_start()
+
+            local found_custom = false
+            for _, n in ipairs(notifications_shown) do
+                if n.text and n.text:match("My Kindle") then
+                    found_custom = true
+                    break
+                end
+            end
+            assert.is_true(found_custom, "Should show custom device name")
         end)
 
         it("has timeout on success notification", function()
@@ -314,13 +325,53 @@ describe("Network Info Display", function()
 
             local found_timeout = false
             for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("LocalSend server started") and n.timeout then
+                if n.text and n.text:match("LocalSend Ready") and n.timeout then
                     found_timeout = true
                     assert.is_true(n.timeout > 0, "Timeout should be positive")
                     break
                 end
             end
             assert.is_true(found_timeout, "Success notification should have timeout")
+        end)
+
+        it("shows PIN status when PIN is configured", function()
+            settings["LocalSend_pin"] = "1234"
+            package.loaded["device"] = {
+                isKindle = function() return false end,
+                retrieveNetworkInfo = function() return "WiFi" end,
+            }
+
+            create_instance_and_start()
+
+            local found_pin = false
+            for _, n in ipairs(notifications_shown) do
+                if n.text and n.text:match("PIN") then
+                    found_pin = true
+                    break
+                end
+            end
+            assert.is_true(found_pin, "Should show PIN status when PIN is set")
+        end)
+
+        it("does not show PIN status when PIN is not configured", function()
+            settings["LocalSend_pin"] = nil
+            package.loaded["device"] = {
+                isKindle = function() return false end,
+                retrieveNetworkInfo = function() return "WiFi" end,
+            }
+
+            create_instance_and_start()
+
+            local found_pin = false
+            for _, n in ipairs(notifications_shown) do
+                if n.text and n.text:match("LocalSend Ready") then
+                    if n.text:match("PIN") then
+                        found_pin = true
+                    end
+                    break
+                end
+            end
+            assert.is_false(found_pin, "Should not show PIN status when PIN is not set")
         end)
     end)
 end)

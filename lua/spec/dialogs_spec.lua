@@ -302,7 +302,7 @@ describe("Dialog Functions", function()
             assert.is_true(found_dialog, "Should show InputDialog for device name")
         end)
 
-        it("should have description mentioning random name option", function()
+        it("should have description mentioning default name option", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
@@ -312,7 +312,7 @@ describe("Dialog Functions", function()
             instance:showDeviceNameDialog({ updateItems = function() end })
 
             local dialog = dialogs_shown[1]
-            assert.truthy(dialog.description:match("random name"))
+            assert.truthy(dialog.description:match("KOReader"))
         end)
 
         it("should validate device name on save", function()

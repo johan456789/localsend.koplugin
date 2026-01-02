@@ -225,7 +225,7 @@ def generate_token_timestamp(signing_key):
 ### 4.5 Token Verification
 
 > [!WARNING]
-> **Implementation Note (as of 2024-12-30):** The Rust core fully implements nonce-based token verification for WebRTC. The web client only verifies timestamp-based tokens for discovery; it does **not** verify the remote peer's nonce-based token during WebRTC handshake. See [Appendix C](#appendix-c-implementation-differences-rust-vs-web) for details.
+> **Implementation Note (as of 2025-12-30):** The Rust core fully implements nonce-based token verification for WebRTC. The web client only verifies timestamp-based tokens for discovery; it does **not** verify the remote peer's nonce-based token during WebRTC handshake. See [Appendix C](#appendix-c-implementation-differences-rust-vs-web) for details.
 
 #### Nonce-based Token Verification
 ```python
@@ -1405,7 +1405,7 @@ response = client.prepare_upload(
 
 ## Appendix C: Implementation Differences (Rust vs Web)
 
-> **Analysis Date:** 2024-12-30
+> **Analysis Date:** 2025-12-30
 >
 > This appendix documents behavioral differences between the two official LocalSend implementations. Both are interoperable, but implementers should be aware of these variations.
 
@@ -1584,7 +1584,7 @@ This document refers to the protocol as "v3" because:
   - `core/src/webrtc/signaling.rs` - WebSocket signaling (3 unit tests)
   - `core/src/webrtc/webrtc.rs` - Data channel protocol, 16KB chunks, PIN handling (2 unit tests)
   - `core/src/main.rs` - Integration test examples
-- Web source files analyzed (as of 2024-12-30):
+- Web source files analyzed (as of 2025-12-30):
   - `web/services/signaling.ts` - WebSocket signaling, keep-alive, message types
   - `web/services/webrtc.ts` - Data channel protocol, file transfer, PIN handling
   - `web/services/crypto.ts` - Token generation/verification, Ed25519/RSA-PSS support
@@ -1597,15 +1597,15 @@ This document refers to the protocol as "v3" because:
 
 | Date | Changes |
 |------|---------|
-| 2024-12-30 | Added Appendix C: Implementation Differences (Rust vs Web) |
-| 2024-12-30 | Added Section 7.4: Keep-Alive mechanism (ping, token refresh) |
-| 2024-12-30 | Added Sections 10.6-10.8: ICE gathering, token generation, JS config |
-| 2024-12-30 | Updated Section 10.3: Buffer management with implementation comparison |
-| 2024-12-30 | Added warning note to Section 4.5 about token verification gap |
-| 2024-12-30 | Updated header to reference both Rust and Web implementations |
-| 2024-12-30 | Added version naming clarification (v3 endpoints vs "2.3" version field) |
-| 2024-12-28 | Added SPKI DER format clarification for token hashing |
-| 2024-12-28 | Added timestamp-based tokens for discovery/HTTP |
-| 2024-12-28 | Added salt type distinction (nonces vs timestamps) |
-| 2024-12-28 | Added WebRTC ICE configuration section (port ranges, timeouts) |
-| 2024-12-28 | Updated test vectors with SPKI DER format notes |
+| 2025-12-30 | Added Appendix C: Implementation Differences (Rust vs Web) |
+| 2025-12-30 | Added Section 7.4: Keep-Alive mechanism (ping, token refresh) |
+| 2025-12-30 | Added Sections 10.6-10.8: ICE gathering, token generation, JS config |
+| 2025-12-30 | Updated Section 10.3: Buffer management with implementation comparison |
+| 2025-12-30 | Added warning note to Section 4.5 about token verification gap |
+| 2025-12-30 | Updated header to reference both Rust and Web implementations |
+| 2025-12-30 | Added version naming clarification (v3 endpoints vs "2.3" version field) |
+| 2025-12-28 | Added SPKI DER format clarification for token hashing |
+| 2025-12-28 | Added timestamp-based tokens for discovery/HTTP |
+| 2025-12-28 | Added salt type distinction (nonces vs timestamps) |
+| 2025-12-28 | Added WebRTC ICE configuration section (port ranges, timeouts) |
+| 2025-12-28 | Updated test vectors with SPKI DER format notes |

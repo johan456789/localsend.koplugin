@@ -11,29 +11,60 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	lserrors "localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
+
 	"github.com/google/uuid"
 )
 
+// SessionTimeout is the duration after which an inactive session is considered expired.
+// Sessions that don't receive any file uploads within this time will be cleaned up.
+const SessionTimeout = 1 * time.Minute
+
+// activityReader wraps an io.Reader and updates a timestamp pointer periodically.
+// This keeps the session alive during long file transfers without excessive writes.
+type activityReader struct {
+	r            io.Reader
+	lastActivity *int64
+	lastUpdate   int64 // local tracking to rate-limit updates
+}
+
+const activityUpdateInterval = 10 // seconds between lastActivity updates
+
+func (ar *activityReader) Read(p []byte) (n int, err error) {
+	n, err = ar.r.Read(p)
+	if n > 0 {
+		now := time.Now().Unix()
+		// Only update if at least activityUpdateInterval seconds have passed
+		if now-ar.lastUpdate >= activityUpdateInterval {
+			atomic.StoreInt64(ar.lastActivity, now)
+			ar.lastUpdate = now
+		}
+	}
+	return n, err
+}
+
 type RecvSession struct {
 	// filesCount must be first for 64-bit alignment on 32-bit ARM
-	filesCount int64
-	fileMetas  models.FileMetas
-	fileTokens models.FileTokens
-	mu         sync.RWMutex
-	id         string
-	clientIP   string // IP address of the client that initiated the session (per protocol spec Section 4.2)
-	started    atomic.Bool
+	filesCount   int64
+	lastActivity int64 // Unix timestamp in seconds, updated on each file save
+	fileMetas    models.FileMetas
+	fileTokens   models.FileTokens
+	mu           sync.RWMutex
+	id           string
+	clientIP     string // IP address of the client that initiated the session (per protocol spec Section 4.2)
+	started      atomic.Bool
 }
 
 func NewRecvSession(sessionId string, clientIP string) (*RecvSession, error) {
 	sess := &RecvSession{
-		fileMetas:  make(models.FileMetas),
-		fileTokens: make(models.FileTokens),
-		id:         sessionId,
-		clientIP:   clientIP,
+		fileMetas:    make(models.FileMetas),
+		fileTokens:   make(models.FileTokens),
+		id:           sessionId,
+		clientIP:     clientIP,
+		lastActivity: time.Now().Unix(),
 	}
 
 	return sess, nil
@@ -145,8 +176,11 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	}
 	defer func() { _ = file.Close() }()
 
+	// Wrap the reader to update lastActivity during transfer, keeping session alive
+	activeReader := &activityReader{r: fileData, lastActivity: &sess.lastActivity}
+
 	writer := io.MultiWriter(file, hasher)
-	_, err = io.Copy(writer, fileData)
+	_, err = io.Copy(writer, activeReader)
 	if err != nil {
 		return "", lserrors.ErrFileIO
 	}
@@ -205,6 +239,12 @@ func (sess *RecvSession) End() {
 
 func (sess *RecvSession) Stopped() bool {
 	fileLefts := atomic.LoadInt64(&sess.filesCount)
+
+	// Check if session has timed out due to inactivity
+	lastActivity := atomic.LoadInt64(&sess.lastActivity)
+	if time.Since(time.Unix(lastActivity, 0)) > SessionTimeout {
+		return true
+	}
 
 	return (!sess.started.Load()) || (fileLefts == 0)
 }

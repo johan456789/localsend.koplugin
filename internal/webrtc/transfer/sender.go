@@ -255,7 +255,10 @@ func (s *RTCSender) handleNonceResponse(msg interface{}, msgType string) {
 	s.remoteNonce = remoteNonce
 
 	// Final nonce = sender_nonce || receiver_nonce
-	s.finalNonce = append(s.localNonce, s.remoteNonce...)
+	// Use explicit allocation to avoid modifying underlying arrays
+	s.finalNonce = make([]byte, len(s.localNonce)+len(s.remoteNonce))
+	copy(s.finalNonce, s.localNonce)
+	copy(s.finalNonce[len(s.localNonce):], s.remoteNonce)
 
 	slog.Info("Nonce exchange complete, sending token")
 

@@ -35,6 +35,33 @@ local function isValidPath(path)
     return true
 end
 
+-- Validate that a port number is safe for shell operations
+local function isValidPort(port)
+    if port == nil then return false end
+    local num = tonumber(port)
+    if num == nil then return false end
+    if num < 1 or num > 65535 then return false end
+    -- Ensure it's an integer
+    if num ~= math.floor(num) then return false end
+    return true
+end
+
+-- Check if an iptables rule exists (returns true if rule exists)
+local function iptablesRuleExists(rule)
+    -- iptables -C checks if rule exists, returns 0 if it does
+    local result = os.execute("iptables -C " .. rule .. " 2>/dev/null")
+    return result == 0
+end
+
+-- Add iptables rule only if it doesn't already exist
+local function iptablesAddIfMissing(rule)
+    if not iptablesRuleExists(rule) then
+        os.execute("iptables -A " .. rule)
+        return true
+    end
+    return false
+end
+
 local data_dir = DataStorage:getFullDataDir()
 local plugin_path = data_dir .. "/plugins/localsend.koplugin"
 local plugin_meta = dofile(plugin_path .. "/_meta.lua")
@@ -66,7 +93,12 @@ local LocalSend = WidgetContainer:extend{
 }
 
 function LocalSend:init()
-    self.port = G_reader_settings:readSetting("LocalSend_port") or "53317"
+    local loaded_port = G_reader_settings:readSetting("LocalSend_port") or "53317"
+    if not isValidPort(loaded_port) then
+        logger.warn("[LocalSend] Invalid port in settings, using default 53317")
+        loaded_port = "53317"
+    end
+    self.port = loaded_port
     self.save_dir = G_reader_settings:readSetting("LocalSend_save_dir") or "/mnt/us/documents"
     self.device_name = G_reader_settings:readSetting("LocalSend_device_name") or ""
     self.use_https = G_reader_settings:nilOrTrue("LocalSend_use_https")
@@ -136,24 +168,28 @@ end
 
 function LocalSend:openFirewall()
     if Device:isKindle() then
-        -- TCP for file transfer
-        os.execute(string.format(
-            "iptables -A INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT",
+        if not isValidPort(self.port) then
+            logger.err("[LocalSend] Invalid port, cannot configure firewall")
+            return
+        end
+        -- TCP for file transfer (idempotent - won't add if already exists)
+        iptablesAddIfMissing(string.format(
+            "INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT",
             self.port))
-        os.execute(string.format(
-            "iptables -A OUTPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT",
+        iptablesAddIfMissing(string.format(
+            "OUTPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT",
             self.port))
         -- UDP for device discovery
-        os.execute(string.format(
-            "iptables -A INPUT -p udp --dport %s -j ACCEPT",
+        iptablesAddIfMissing(string.format(
+            "INPUT -p udp --dport %s -j ACCEPT",
             self.port))
-        os.execute(string.format(
-            "iptables -A OUTPUT -p udp --sport %s -j ACCEPT",
+        iptablesAddIfMissing(string.format(
+            "OUTPUT -p udp --sport %s -j ACCEPT",
             self.port))
         -- WebRTC/ICE UDP ports - must match range in peer.go SetEphemeralUDPPortRange
         if self.use_webrtc then
-            os.execute("iptables -A INPUT -p udp --dport 50000:50100 -j ACCEPT")
-            os.execute("iptables -A OUTPUT -p udp --sport 50000:50100 -j ACCEPT")
+            iptablesAddIfMissing("INPUT -p udp --dport 50000:50100 -j ACCEPT")
+            iptablesAddIfMissing("OUTPUT -p udp --sport 50000:50100 -j ACCEPT")
             logger.dbg("[LocalSend] Firewall opened for WebRTC UDP ports (50000-50100)")
         end
         logger.dbg("[LocalSend] Firewall opened for port " .. self.port)
@@ -162,6 +198,10 @@ end
 
 function LocalSend:closeFirewall()
     if Device:isKindle() then
+        if not isValidPort(self.port) then
+            logger.err("[LocalSend] Invalid port, cannot configure firewall")
+            return
+        end
         os.execute(string.format(
             "iptables -D INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT",
             self.port))
@@ -300,10 +340,12 @@ function LocalSend:checkForNewTransfers()
         self.last_transfer_count = current_count
     end
 
-    -- Schedule next check
-    UIManager:scheduleIn(5, function()
-        self:checkForNewTransfers()
-    end)
+    -- Schedule next check only if still running
+    if self:isRunning() then
+        UIManager:scheduleIn(5, function()
+            self:checkForNewTransfers()
+        end)
+    end
 end
 
 function LocalSend:start()
@@ -763,8 +805,14 @@ function LocalSend:exportExtRouting()
     local path = plugin_path .. "/ext_routing.json"
     local f = io.open(path, "w")
     if f then
-        f:write(json.encode(config))
+        local ok, err = pcall(function()
+            f:write(json.encode(config))
+        end)
         f:close()
+        if not ok then
+            logger.warn("[LocalSend] Failed to write extension routing config:", err)
+            return nil
+        end
         logger.dbg("[LocalSend] Exported extension routing config to", path)
         return path
     end

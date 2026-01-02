@@ -118,3 +118,57 @@ func EnsureDirectory(dir string) error {
 	}
 	return nil
 }
+
+// IsExtensionAllowed checks if a filename has an extension in the allowed list.
+// Returns true if allowedExtensions is empty (accept all) or if the extension is found.
+func IsExtensionAllowed(filename string, allowedExtensions []string) bool {
+	if len(allowedExtensions) == 0 {
+		return true
+	}
+
+	// Get the extension (without the dot, lowercase)
+	ext := GetFileExtension(filename)
+	if ext == "" {
+		return false // No extension, reject
+	}
+
+	// Check if it's in the allowed list
+	for _, allowed := range allowedExtensions {
+		if ext == allowed {
+			return true
+		}
+	}
+
+	return false
+}
+
+// GetFileExtension returns the lowercase extension without the leading dot.
+// Returns empty string if no extension.
+func GetFileExtension(filename string) string {
+	for i := len(filename) - 1; i >= 0; i-- {
+		if filename[i] == '.' {
+			if i == len(filename)-1 {
+				return "" // Ends with dot, no extension
+			}
+			return strings.ToLower(filename[i+1:])
+		}
+		if filename[i] == '/' || filename[i] == '\\' {
+			return "" // Hit path separator before dot
+		}
+	}
+	return ""
+}
+
+// SanitizeForLog removes or escapes control characters that could cause issues in logs.
+// Preserves printable characters and common whitespace (space, tab).
+func SanitizeForLog(s string) string {
+	var result strings.Builder
+	result.Grow(len(s))
+	for _, r := range s {
+		if r >= 32 || r == '\t' {
+			result.WriteRune(r)
+		}
+		// Control characters are simply omitted
+	}
+	return result.String()
+}

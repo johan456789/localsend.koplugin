@@ -457,3 +457,116 @@ func TestNonceCacheIntegration(t *testing.T) {
 		t.Errorf("Combined nonce length = %d; want 64", len(combinedNonce))
 	}
 }
+
+// =============================================================================
+// FilterFilesByExtension Tests
+// =============================================================================
+
+func TestFilterFilesByExtension(t *testing.T) {
+	t.Run("empty allowed list returns all files", func(t *testing.T) {
+		files := models.FileMetas{
+			"1": models.FileMeta{Id: "1", Filename: "doc.pdf", Size: 100},
+			"2": models.FileMeta{Id: "2", Filename: "image.exe", Size: 200},
+			"3": models.FileMeta{Id: "3", Filename: "noext", Size: 300},
+		}
+
+		filtered, rejected := FilterFilesByExtension(files, nil)
+
+		if len(filtered) != 3 {
+			t.Errorf("expected 3 files, got %d", len(filtered))
+		}
+		if len(rejected) != 0 {
+			t.Errorf("expected 0 rejected, got %d", len(rejected))
+		}
+	})
+
+	t.Run("filters by allowed extensions", func(t *testing.T) {
+		files := models.FileMetas{
+			"1": models.FileMeta{Id: "1", Filename: "doc.pdf", Size: 100},
+			"2": models.FileMeta{Id: "2", Filename: "book.epub", Size: 200},
+			"3": models.FileMeta{Id: "3", Filename: "virus.exe", Size: 300},
+			"4": models.FileMeta{Id: "4", Filename: "script.sh", Size: 400},
+		}
+
+		allowed := []string{"pdf", "epub"}
+		filtered, rejected := FilterFilesByExtension(files, allowed)
+
+		if len(filtered) != 2 {
+			t.Errorf("expected 2 files, got %d", len(filtered))
+		}
+		if len(rejected) != 2 {
+			t.Errorf("expected 2 rejected, got %d", len(rejected))
+		}
+
+		// Check that pdf and epub are in filtered
+		if _, ok := filtered["1"]; !ok {
+			t.Error("pdf file should be in filtered")
+		}
+		if _, ok := filtered["2"]; !ok {
+			t.Error("epub file should be in filtered")
+		}
+	})
+
+	t.Run("rejects files without extension", func(t *testing.T) {
+		files := models.FileMetas{
+			"1": models.FileMeta{Id: "1", Filename: "doc.pdf", Size: 100},
+			"2": models.FileMeta{Id: "2", Filename: "noextension", Size: 200},
+		}
+
+		allowed := []string{"pdf"}
+		filtered, rejected := FilterFilesByExtension(files, allowed)
+
+		if len(filtered) != 1 {
+			t.Errorf("expected 1 file, got %d", len(filtered))
+		}
+		if len(rejected) != 1 {
+			t.Errorf("expected 1 rejected, got %d", len(rejected))
+		}
+
+		// Check the rejected list contains the right filename
+		found := false
+		for _, name := range rejected {
+			if name == "noextension" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("'noextension' should be in rejected list")
+		}
+	})
+
+	t.Run("case insensitive matching", func(t *testing.T) {
+		files := models.FileMetas{
+			"1": models.FileMeta{Id: "1", Filename: "doc.PDF", Size: 100},
+			"2": models.FileMeta{Id: "2", Filename: "book.Epub", Size: 200},
+		}
+
+		allowed := []string{"pdf", "epub"}
+		filtered, rejected := FilterFilesByExtension(files, allowed)
+
+		if len(filtered) != 2 {
+			t.Errorf("expected 2 files (case insensitive), got %d", len(filtered))
+		}
+		if len(rejected) != 0 {
+			t.Errorf("expected 0 rejected, got %d", len(rejected))
+		}
+	})
+
+	t.Run("all files rejected returns empty map", func(t *testing.T) {
+		files := models.FileMetas{
+			"1": models.FileMeta{Id: "1", Filename: "virus.exe", Size: 100},
+			"2": models.FileMeta{Id: "2", Filename: "malware.bat", Size: 200},
+		}
+
+		allowed := []string{"pdf", "epub"}
+		filtered, rejected := FilterFilesByExtension(files, allowed)
+
+		if len(filtered) != 0 {
+			t.Errorf("expected 0 files, got %d", len(filtered))
+		}
+		if len(rejected) != 2 {
+			t.Errorf("expected 2 rejected, got %d", len(rejected))
+		}
+	})
+}

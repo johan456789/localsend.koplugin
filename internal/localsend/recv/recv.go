@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"localsend-cli/internal/localsend"
@@ -73,11 +72,12 @@ func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) 
 		return
 	}
 
+	// Sanitize inputs to prevent log injection
 	entry := TransferLogEntry{
 		Timestamp: time.Now().Format(time.RFC3339),
-		Filename:  filename,
+		Filename:  utils.SanitizeForLog(filename),
 		Size:      size,
-		Sender:    sender,
+		Sender:    utils.SanitizeForLog(sender),
 	}
 
 	data, err := json.Marshal(entry)
@@ -124,27 +124,26 @@ func (fr *FileReceiver) GetSaveDir(filename string) string {
 // IsExtensionAllowed checks if a filename has an allowed extension.
 // Returns true if no filter is set or if the extension is in the allowed list.
 func (fr *FileReceiver) IsExtensionAllowed(filename string) bool {
-	// No filter set, accept all
-	if len(fr.allowedExtensions) == 0 {
-		return true
+	return utils.IsExtensionAllowed(filename, fr.allowedExtensions)
+}
+
+// FilterFilesByExtension filters a file list, returning only files with allowed extensions.
+// If allowedExtensions is empty, returns all files unchanged.
+// Returns filtered files and a list of rejected filenames for logging.
+func FilterFilesByExtension(files models.FileMetas, allowedExtensions []string) (filtered models.FileMetas, rejected []string) {
+	if len(allowedExtensions) == 0 {
+		return files, nil
 	}
 
-	// Get the extension (without the dot, lowercase)
-	ext := filepath.Ext(filename)
-	if ext == "" {
-		return false // No extension, reject
-	}
-	ext = ext[1:] // Remove the leading dot
-	ext = strings.ToLower(ext)
-
-	// Check if it's in the allowed list
-	for _, allowed := range fr.allowedExtensions {
-		if ext == allowed {
-			return true
+	filtered = make(models.FileMetas)
+	for id, fileMeta := range files {
+		if utils.IsExtensionAllowed(fileMeta.Filename, allowedExtensions) {
+			filtered[id] = fileMeta
+		} else {
+			rejected = append(rejected, fileMeta.Filename)
 		}
 	}
-
-	return false
+	return filtered, rejected
 }
 
 func (fr *FileReceiver) Init() error {

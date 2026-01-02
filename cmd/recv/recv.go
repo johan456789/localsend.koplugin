@@ -1,11 +1,10 @@
 package recv
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 
 	"localsend-cli/internal/crypto"
@@ -148,25 +147,10 @@ func startWebRTCReceiver(deviceName, saveDir, pin string, allowedExts []string, 
 	receiver.OnSelectFiles(func(files []transfer.RTCFileDto) []string {
 		var ids []string
 		for _, f := range files {
-			// Check extension filter
-			if len(allowedExts) > 0 {
-				ext := filepath.Ext(f.FileName)
-				if ext == "" {
-					slog.Info("Rejecting file (no extension)", "name", f.FileName)
-					continue
-				}
-				ext = strings.ToLower(ext[1:]) // Remove leading dot
-				allowed := false
-				for _, a := range allowedExts {
-					if ext == a {
-						allowed = true
-						break
-					}
-				}
-				if !allowed {
-					slog.Info("Rejecting file (extension not allowed)", "name", f.FileName, "ext", ext)
-					continue
-				}
+			// Check extension filter using shared utility
+			if !utils.IsExtensionAllowed(f.FileName, allowedExts) {
+				slog.Info("Rejecting file (extension not allowed)", "name", f.FileName)
+				continue
 			}
 			slog.Info("Accepting file via WebRTC", "name", f.FileName, "size", f.Size)
 			ids = append(ids, f.ID)
@@ -174,16 +158,21 @@ func startWebRTCReceiver(deviceName, saveDir, pin string, allowedExts []string, 
 		return ids
 	})
 
-	// Listen for offers
-	receiver.ListenForOffers(func(offer signaling.WsServerMessage) {
+	// Create a context that will be cancelled on shutdown signal
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Listen for offers with context for proper cancellation
+	receiver.ListenForOffersWithContext(ctx, func(offer signaling.WsServerMessage) {
 		slog.Info("Received WebRTC offer", "peer", offer.Peer.Alias)
 		if err := receiver.AcceptOffer(offer); err != nil {
 			slog.Error("Failed to accept offer", "error", err)
 		}
 	})
 
-	// Block until signal
+	// Block until signal, then cancel context
 	<-utils.WaitForSignal()
+	cancel()
 }
 
 func init() {

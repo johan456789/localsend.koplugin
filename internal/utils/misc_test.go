@@ -306,3 +306,165 @@ func TestForEachAsync(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+// TestGetFileExtension tests the GetFileExtension function
+func TestGetFileExtension(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		expected string
+	}{
+		{"simple extension", "file.pdf", "pdf"},
+		{"uppercase extension", "FILE.PDF", "pdf"},
+		{"mixed case", "Document.Epub", "epub"},
+		{"multiple dots", "file.name.with.dots.txt", "txt"},
+		{"no extension", "filename", ""},
+		{"hidden file no ext", ".gitignore", "gitignore"},
+		{"ends with dot", "file.", ""},
+		{"empty string", "", ""},
+		{"path with extension", "/path/to/file.mobi", "mobi"},
+		{"windows path", "C:\\Users\\file.doc", "doc"},
+		{"extension with numbers", "archive.7z", "7z"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := GetFileExtension(tc.filename)
+			if result != tc.expected {
+				t.Errorf("GetFileExtension(%q) = %q, expected %q", tc.filename, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestIsExtensionAllowed tests the IsExtensionAllowed function
+func TestIsExtensionAllowed(t *testing.T) {
+	t.Run("empty allowed list accepts all", func(t *testing.T) {
+		if !IsExtensionAllowed("file.pdf", nil) {
+			t.Error("nil allowedExtensions should accept all files")
+		}
+		if !IsExtensionAllowed("file.pdf", []string{}) {
+			t.Error("empty allowedExtensions should accept all files")
+		}
+		if !IsExtensionAllowed("noextension", []string{}) {
+			t.Error("empty allowedExtensions should accept files without extension")
+		}
+	})
+
+	t.Run("accepts allowed extensions", func(t *testing.T) {
+		allowed := []string{"pdf", "epub", "mobi"}
+
+		if !IsExtensionAllowed("book.pdf", allowed) {
+			t.Error("should accept .pdf")
+		}
+		if !IsExtensionAllowed("book.epub", allowed) {
+			t.Error("should accept .epub")
+		}
+		if !IsExtensionAllowed("book.mobi", allowed) {
+			t.Error("should accept .mobi")
+		}
+	})
+
+	t.Run("rejects non-allowed extensions", func(t *testing.T) {
+		allowed := []string{"pdf", "epub"}
+
+		if IsExtensionAllowed("virus.exe", allowed) {
+			t.Error("should reject .exe")
+		}
+		if IsExtensionAllowed("script.sh", allowed) {
+			t.Error("should reject .sh")
+		}
+	})
+
+	t.Run("rejects files without extension when filter is set", func(t *testing.T) {
+		allowed := []string{"pdf"}
+
+		if IsExtensionAllowed("noextension", allowed) {
+			t.Error("should reject files without extension when filter is set")
+		}
+	})
+
+	t.Run("case insensitive matching", func(t *testing.T) {
+		allowed := []string{"pdf"}
+
+		if !IsExtensionAllowed("file.PDF", allowed) {
+			t.Error("should accept .PDF (uppercase)")
+		}
+		if !IsExtensionAllowed("file.Pdf", allowed) {
+			t.Error("should accept .Pdf (mixed case)")
+		}
+	})
+
+	t.Run("handles paths with directories", func(t *testing.T) {
+		allowed := []string{"pdf"}
+
+		if !IsExtensionAllowed("/path/to/file.pdf", allowed) {
+			t.Error("should accept file with path")
+		}
+		if !IsExtensionAllowed("C:\\Users\\Documents\\file.pdf", allowed) {
+			t.Error("should accept file with Windows path")
+		}
+	})
+}
+
+// TestSanitizeForLog tests the SanitizeForLog function
+func TestSanitizeForLog(t *testing.T) {
+	t.Run("preserves normal text", func(t *testing.T) {
+		input := "Hello, World! This is a normal filename.pdf"
+		result := SanitizeForLog(input)
+		if result != input {
+			t.Errorf("expected %q, got %q", input, result)
+		}
+	})
+
+	t.Run("preserves tabs", func(t *testing.T) {
+		input := "file\twith\ttabs.txt"
+		result := SanitizeForLog(input)
+		if result != input {
+			t.Errorf("expected %q, got %q", input, result)
+		}
+	})
+
+	t.Run("removes control characters", func(t *testing.T) {
+		// Test with newline, carriage return, and null byte
+		input := "file\nwith\rnewlines\x00and\x07bells.txt"
+		expected := "filewithnewlinesandbells.txt"
+		result := SanitizeForLog(input)
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
+		}
+	})
+
+	t.Run("removes escape sequences", func(t *testing.T) {
+		// Test with ANSI escape sequence (could be used for log injection)
+		input := "file\x1b[31mred\x1b[0m.txt"
+		expected := "file[31mred[0m.txt"
+		result := SanitizeForLog(input)
+		if result != expected {
+			t.Errorf("expected %q, got %q", expected, result)
+		}
+	})
+
+	t.Run("handles empty string", func(t *testing.T) {
+		result := SanitizeForLog("")
+		if result != "" {
+			t.Errorf("expected empty string, got %q", result)
+		}
+	})
+
+	t.Run("handles unicode", func(t *testing.T) {
+		input := "文件名.pdf"
+		result := SanitizeForLog(input)
+		if result != input {
+			t.Errorf("expected %q, got %q", input, result)
+		}
+	})
+
+	t.Run("handles emoji", func(t *testing.T) {
+		input := "📚book.epub"
+		result := SanitizeForLog(input)
+		if result != input {
+			t.Errorf("expected %q, got %q", input, result)
+		}
+	})
+}

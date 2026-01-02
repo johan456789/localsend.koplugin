@@ -120,6 +120,57 @@ func (r *RTCReceiver) SetExtensionRoutes(routes map[string]string) {
 	r.extRoutes = routes
 }
 
+// prepareFilesForReceive creates files and generates tokens for accepted file IDs.
+// Returns a map of fileId -> token for successfully prepared files.
+func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]string {
+	fileTokens := make(map[string]string)
+	for _, id := range acceptedIDs {
+		// Find the file metadata first
+		var targetFile *RTCFileDto
+		for i := range r.files {
+			if r.files[i].ID == id {
+				targetFile = &r.files[i]
+				break
+			}
+		}
+		if targetFile == nil {
+			slog.Warn("File ID not found in file list", "id", id)
+			continue
+		}
+
+		// Determine save directory and create it
+		saveDir := r.getSaveDir(targetFile.FileName)
+		if err := os.MkdirAll(saveDir, 0755); err != nil {
+			slog.Error("Failed to create save directory", "dir", saveDir, "error", err)
+			continue
+		}
+
+		// Find unique path
+		path, err := session.FindUniquePath(saveDir, targetFile.FileName)
+		if err != nil {
+			slog.Error("Failed to find unique path", "error", err)
+			continue
+		}
+
+		// Create the file
+		file, err := os.Create(path)
+		if err != nil {
+			slog.Error("Failed to create file", "path", path, "error", err)
+			continue
+		}
+
+		// Only add the token since file was created successfully
+		token := fmt.Sprintf("%d", time.Now().UnixNano())
+		fileTokens[id] = token
+		r.fileTokens[id] = token
+		r.fileWriters[id] = file
+		r.filePaths[id] = path
+		r.fileHashers[id] = sha256.New()
+		slog.Info("Ready to receive", "file", filepath.Base(path))
+	}
+	return fileTokens
+}
+
 // sendError sends an error response to the peer.
 func (r *RTCReceiver) sendError(message string) {
 	if r.peer == nil {
@@ -236,13 +287,15 @@ func (r *RTCReceiver) handleMessage(data []byte) {
 			r.finishCurrentFile()
 			slog.Info("All files received, transfer complete")
 			// Close the peer connection after transfer (like official impl)
+			// Capture and clear peer reference to prevent double-close
 			peer := r.peer
-			go func() {
-				time.Sleep(100 * time.Millisecond) // Brief delay to ensure response is sent
-				if peer != nil {
-					_ = peer.Close()
-				}
-			}()
+			r.peer = nil
+			if peer != nil {
+				go func(p *PeerConnection) {
+					time.Sleep(100 * time.Millisecond) // Brief delay to ensure response is sent
+					_ = p.Close()
+				}(peer)
+			}
 		}
 		return
 	}
@@ -499,40 +552,8 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 		return
 	}
 
-	// Generate simple UUID tokens for each accepted file (matches official implementation)
-	fileTokens := make(map[string]string)
-	for _, id := range acceptedIDs {
-		token := fmt.Sprintf("%d", time.Now().UnixNano()) // Simple unique token
-		fileTokens[id] = token
-		r.fileTokens[id] = token
-
-		// Create file writer with unique path
-		for _, f := range r.files {
-			if f.ID == id {
-				saveDir := r.getSaveDir(f.FileName)
-				// Ensure directory exists
-				if err := os.MkdirAll(saveDir, 0755); err != nil {
-					slog.Error("Failed to create save directory", "dir", saveDir, "error", err)
-					continue
-				}
-				path, err := session.FindUniquePath(saveDir, f.FileName)
-				if err != nil {
-					slog.Error("Failed to find unique path", "error", err)
-					continue
-				}
-				file, err := os.Create(path)
-				if err != nil {
-					slog.Error("Failed to create file", "path", path, "error", err)
-					continue
-				}
-				r.fileWriters[id] = file
-				r.filePaths[id] = path
-				r.fileHashers[id] = sha256.New()
-				slog.Info("Ready to receive", "file", filepath.Base(path))
-				break
-			}
-		}
-	}
+	// Prepare files and generate tokens
+	fileTokens := r.prepareFilesForReceive(acceptedIDs)
 
 	// Send acceptance with file tokens as binary (official protocol uses chunked binary)
 	response := RTCFileListResponse{
@@ -598,40 +619,8 @@ func (r *RTCReceiver) handlePairResponse(_ interface{}, msgType string, data []b
 
 // acceptFilesAfterPair sends the file acceptance response after PAIR flow completes.
 func (r *RTCReceiver) acceptFilesAfterPair() {
-	// Generate tokens for accepted files
-	fileTokens := make(map[string]string)
-	for _, id := range r.acceptedIDs {
-		token := fmt.Sprintf("%d", time.Now().UnixNano())
-		fileTokens[id] = token
-		r.fileTokens[id] = token
-
-		// Create file writer with unique path
-		for _, f := range r.files {
-			if f.ID == id {
-				saveDir := r.getSaveDir(f.FileName)
-				// Ensure directory exists
-				if err := os.MkdirAll(saveDir, 0755); err != nil {
-					slog.Error("Failed to create save directory", "dir", saveDir, "error", err)
-					continue
-				}
-				path, err := session.FindUniquePath(saveDir, f.FileName)
-				if err != nil {
-					slog.Error("Failed to find unique path", "error", err)
-					continue
-				}
-				file, err := os.Create(path)
-				if err != nil {
-					slog.Error("Failed to create file", "path", path, "error", err)
-					continue
-				}
-				r.fileWriters[id] = file
-				r.filePaths[id] = path
-				r.fileHashers[id] = sha256.New()
-				slog.Info("Ready to receive", "file", filepath.Base(path))
-				break
-			}
-		}
-	}
+	// Prepare files and generate tokens
+	fileTokens := r.prepareFilesForReceive(r.acceptedIDs)
 
 	// Send acceptance with file tokens
 	response := RTCFileListResponse{

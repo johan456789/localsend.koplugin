@@ -619,3 +619,147 @@ func TestGetFileMeta(t *testing.T) {
 		}
 	})
 }
+
+// TestSessionTimeout verifies that sessions are marked as stopped after timeout
+func TestSessionTimeout(t *testing.T) {
+	sess, err := NewRecvSession("test-session", "192.168.1.1")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// Accept a file and start the session
+	fileMeta := models.FileMeta{
+		Id:       "file1",
+		Filename: "test.txt",
+		Size:     100,
+	}
+	sess.AcceptFile("file1", fileMeta)
+	sess.Start()
+
+	// Session should not be stopped initially
+	if sess.Stopped() {
+		t.Error("session should not be stopped initially")
+	}
+
+	// Manually set lastActivity to simulate a timeout
+	// Note: This is a whitebox test that directly manipulates the field
+	sess.lastActivity = sess.lastActivity - int64(SessionTimeout.Seconds()) - 1
+
+	// Session should now be stopped due to timeout
+	if !sess.Stopped() {
+		t.Error("session should be stopped after timeout")
+	}
+}
+
+// TestActivityReader tests the activityReader wrapper
+func TestActivityReader(t *testing.T) {
+	t.Run("updates lastActivity on first read", func(t *testing.T) {
+		var lastActivity int64 = 0
+		data := bytes.NewReader([]byte("hello world"))
+		ar := &activityReader{r: data, lastActivity: &lastActivity}
+
+		buf := make([]byte, 5)
+		n, err := ar.Read(buf)
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if n != 5 {
+			t.Errorf("expected 5 bytes, got %d", n)
+		}
+		if lastActivity == 0 {
+			t.Error("lastActivity should have been updated")
+		}
+	})
+
+	t.Run("rate limits updates", func(t *testing.T) {
+		var lastActivity int64 = 0
+		data := bytes.NewReader(make([]byte, 1000))
+		ar := &activityReader{r: data, lastActivity: &lastActivity}
+
+		buf := make([]byte, 100)
+
+		// First read should update
+		ar.Read(buf)
+		firstUpdate := ar.lastUpdate
+		if firstUpdate == 0 {
+			t.Error("first read should update lastUpdate")
+		}
+
+		// Immediate second read should NOT update (rate limited)
+		ar.Read(buf)
+		if ar.lastUpdate != firstUpdate {
+			t.Error("second read should be rate limited")
+		}
+	})
+
+	t.Run("updates after interval passes", func(t *testing.T) {
+		var lastActivity int64 = 0
+		data := bytes.NewReader(make([]byte, 1000))
+		ar := &activityReader{r: data, lastActivity: &lastActivity}
+
+		buf := make([]byte, 100)
+
+		// First read
+		ar.Read(buf)
+		originalUpdate := ar.lastUpdate
+
+		// Simulate time passing by backdating lastUpdate
+		ar.lastUpdate = originalUpdate - activityUpdateInterval - 1
+
+		// Next read should update since interval has passed
+		ar.Read(buf)
+		if ar.lastUpdate == originalUpdate-activityUpdateInterval-1 {
+			t.Error("should have updated after interval passed")
+		}
+	})
+
+	t.Run("does not update on zero bytes read", func(t *testing.T) {
+		var lastActivity int64 = 0
+		data := bytes.NewReader([]byte{}) // empty
+		ar := &activityReader{r: data, lastActivity: &lastActivity}
+
+		buf := make([]byte, 10)
+		n, _ := ar.Read(buf)
+
+		if n != 0 {
+			t.Errorf("expected 0 bytes, got %d", n)
+		}
+		if lastActivity != 0 {
+			t.Error("lastActivity should not be updated on zero bytes")
+		}
+	})
+}
+
+// TestSessionStaysAliveDuringTransfer verifies that file transfers keep the session alive
+func TestSessionStaysAliveDuringTransfer(t *testing.T) {
+	sess, err := NewRecvSession("test-session", "192.168.1.1")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// Accept a file and start the session
+	fileMeta := models.FileMeta{
+		Id:       "file1",
+		Filename: "test.txt",
+		Size:     100,
+	}
+	sess.AcceptFile("file1", fileMeta)
+	sess.Start()
+
+	// Simulate session being old (past timeout)
+	sess.lastActivity = sess.lastActivity - int64(SessionTimeout.Seconds()) - 1
+
+	// Session should be considered stopped due to timeout
+	if !sess.Stopped() {
+		t.Error("session should be stopped when lastActivity is old")
+	}
+
+	// Simulate activity by updating lastActivity (as activityReader would do)
+	sess.lastActivity = sess.lastActivity + int64(SessionTimeout.Seconds()) + 10
+
+	// Session should no longer be stopped
+	if sess.Stopped() {
+		t.Error("session should not be stopped after activity update")
+	}
+}

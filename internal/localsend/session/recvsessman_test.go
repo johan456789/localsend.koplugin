@@ -152,7 +152,7 @@ func TestRecvSessManagerHasActiveSessions(t *testing.T) {
 		files := models.FileMetas{
 			"file1": {Id: "file1", Filename: "test.txt", Size: 100},
 		}
-		mgr.NewSession(files, "192.168.1.1")
+		_, _ = mgr.NewSession(files, "192.168.1.1")
 
 		if !mgr.HasActiveSessions() {
 			t.Error("should return true with active session")

@@ -327,7 +327,7 @@ func (mcs *Discoverier) tryScanIP(ip, scheme string, bodyBytes []byte) bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return false

@@ -167,17 +167,7 @@ func TestFindUniquePathBounded(t *testing.T) {
 			if i == 0 {
 				name = "test.txt"
 			} else {
-				name = "test (" + string(rune('0'+i)) + ").txt"
-			}
-			// Use proper formatting for numbers > 9
-			if i == 0 {
-				name = "test.txt"
-			} else {
-				name = filepath.Join(dir, "test ("+itoa(i)+").txt")
-				if err := os.WriteFile(name, []byte("x"), 0644); err != nil {
-					t.Fatalf("failed to create file %s: %v", name, err)
-				}
-				continue
+				name = "test (" + itoa(i) + ").txt"
 			}
 			path := filepath.Join(dir, name)
 			if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
@@ -431,7 +421,7 @@ func TestSaveFileValidation(t *testing.T) {
 			Filename: "test.txt",
 			Size:     5,
 		}
-		sess.AcceptFile("file1", fileMeta)
+		_ = sess.AcceptFile("file1", fileMeta)
 		sess.Start()
 
 		// Get the actual token
@@ -452,7 +442,7 @@ func TestSaveFileValidation(t *testing.T) {
 			Filename: "test.txt",
 			Size:     5,
 		}
-		sess.AcceptFile("file1", fileMeta)
+		_ = sess.AcceptFile("file1", fileMeta)
 		sess.Start()
 
 		_, err := sess.SaveFile(dir, "file1", "wrong-token", "192.168.1.1", bytes.NewReader([]byte("hello")))
@@ -468,7 +458,7 @@ func TestSaveFileValidation(t *testing.T) {
 			Filename: "test.txt",
 			Size:     5,
 		}
-		sess.AcceptFile("file1", fileMeta)
+		_ = sess.AcceptFile("file1", fileMeta)
 		sess.Start()
 
 		tokens := sess.FileTokens()
@@ -497,7 +487,7 @@ func TestSaveFileSuccess(t *testing.T) {
 		Size:     int64(len(content)),
 		Checksum: checksum,
 	}
-	sess.AcceptFile("file1", fileMeta)
+	_ = sess.AcceptFile("file1", fileMeta)
 	sess.Start()
 
 	tokens := sess.FileTokens()
@@ -538,7 +528,7 @@ func TestSaveFileChecksumValidation(t *testing.T) {
 		Size:     5,
 		Checksum: "0000000000000000000000000000000000000000000000000000000000000000", // wrong checksum
 	}
-	sess.AcceptFile("file1", fileMeta)
+	_ = sess.AcceptFile("file1", fileMeta)
 	sess.Start()
 
 	tokens := sess.FileTokens()
@@ -567,7 +557,7 @@ func TestSaveFileCreatesUniqueNames(t *testing.T) {
 		Filename: "test.txt", // Same name as existing file
 		Size:     int64(len(content)),
 	}
-	sess.AcceptFile("file1", fileMeta)
+	_ = sess.AcceptFile("file1", fileMeta)
 	sess.Start()
 
 	tokens := sess.FileTokens()
@@ -600,7 +590,7 @@ func TestGetFileMeta(t *testing.T) {
 		Filename: "test.txt",
 		Size:     100,
 	}
-	sess.AcceptFile("file1", fileMeta)
+	_ = sess.AcceptFile("file1", fileMeta)
 
 	t.Run("returns meta for accepted file", func(t *testing.T) {
 		meta, ok := sess.GetFileMeta("file1")
@@ -633,7 +623,7 @@ func TestSessionTimeout(t *testing.T) {
 		Filename: "test.txt",
 		Size:     100,
 	}
-	sess.AcceptFile("file1", fileMeta)
+	_ = sess.AcceptFile("file1", fileMeta)
 	sess.Start()
 
 	// Session should not be stopped initially
@@ -680,14 +670,14 @@ func TestActivityReader(t *testing.T) {
 		buf := make([]byte, 100)
 
 		// First read should update
-		ar.Read(buf)
+		_, _ = ar.Read(buf)
 		firstUpdate := ar.lastUpdate
 		if firstUpdate == 0 {
 			t.Error("first read should update lastUpdate")
 		}
 
 		// Immediate second read should NOT update (rate limited)
-		ar.Read(buf)
+		_, _ = ar.Read(buf)
 		if ar.lastUpdate != firstUpdate {
 			t.Error("second read should be rate limited")
 		}
@@ -701,14 +691,14 @@ func TestActivityReader(t *testing.T) {
 		buf := make([]byte, 100)
 
 		// First read
-		ar.Read(buf)
+		_, _ = ar.Read(buf)
 		originalUpdate := ar.lastUpdate
 
 		// Simulate time passing by backdating lastUpdate
 		ar.lastUpdate = originalUpdate - activityUpdateInterval - 1
 
 		// Next read should update since interval has passed
-		ar.Read(buf)
+		_, _ = ar.Read(buf)
 		if ar.lastUpdate == originalUpdate-activityUpdateInterval-1 {
 			t.Error("should have updated after interval passed")
 		}
@@ -744,7 +734,7 @@ func TestSessionStaysAliveDuringTransfer(t *testing.T) {
 		Filename: "test.txt",
 		Size:     100,
 	}
-	sess.AcceptFile("file1", fileMeta)
+	_ = sess.AcceptFile("file1", fileMeta)
 	sess.Start()
 
 	// Simulate session being old (past timeout)

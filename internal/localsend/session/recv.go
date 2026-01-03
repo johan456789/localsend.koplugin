@@ -103,31 +103,42 @@ func (sess *RecvSession) Start() {
 // maxUniquePathAttempts is the maximum number of attempts to find a unique filename
 const maxUniquePathAttempts = 10000
 
-// FindUniquePath returns a unique file path by appending a counter if the file already exists.
+// CreateUniqueFile atomically creates a file with a unique name, appending a counter if needed.
 // For example: "file.txt" -> "file (1).txt" -> "file (2).txt"
-// Returns an error if a unique path cannot be found after maxUniquePathAttempts.
-func FindUniquePath(dir, filename string) (string, error) {
+// Uses O_CREATE|O_EXCL to prevent race conditions between concurrent uploads.
+// Returns the opened file and its path, or an error if a unique name cannot be found.
+func CreateUniqueFile(dir, filename string) (*os.File, string, error) {
 	path := filepath.Join(dir, filename)
 
-	// If file doesn't exist, use the original name
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return path, nil
+	// Try the original filename first
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err == nil {
+		return file, path, nil
+	}
+	if !os.IsExist(err) {
+		// Some other error (permissions, etc.)
+		return nil, "", err
 	}
 
-	// Split filename into name and extension
+	// File exists, try with counter suffix
 	ext := filepath.Ext(filename)
 	name := strings.TrimSuffix(filename, ext)
 
-	// Try incrementing counter until we find a unique name
 	for i := 1; i <= maxUniquePathAttempts; i++ {
 		newFilename := fmt.Sprintf("%s (%d)%s", name, i, ext)
 		path = filepath.Join(dir, newFilename)
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return path, nil
+
+		file, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err == nil {
+			return file, path, nil
+		}
+		if !os.IsExist(err) {
+			// Some other error (permissions, etc.)
+			return nil, "", err
 		}
 	}
 
-	return "", fmt.Errorf("could not find unique path after %d attempts for %s", maxUniquePathAttempts, filename)
+	return nil, "", fmt.Errorf("could not create unique file after %d attempts for %s", maxUniquePathAttempts, filename)
 }
 
 func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string, clientIP string, fileData io.Reader) (string, error) {
@@ -156,11 +167,11 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		return "", lserrors.ErrRejected
 	}
 
-	// write the file data to disk while calculating checksum simultaneously
-	saveAs, err := FindUniquePath(saveToDir, expectedMeta.Filename)
-	if err != nil {
-		slog.Error("Failed to find unique path", "error", err)
-		return "", lserrors.ErrFileIO
+	// Sanitize filename to prevent directory traversal attacks.
+	// A malicious client could send "../../../etc/passwd" to write outside saveToDir.
+	safeFilename := filepath.Base(expectedMeta.Filename)
+	if safeFilename == "." || safeFilename == "/" {
+		return "", lserrors.ErrInvalidBody
 	}
 
 	// Ensure the directory exists (for extension routing to new directories)
@@ -169,12 +180,15 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		return "", lserrors.ErrFileIO
 	}
 
-	hasher := sha256.New()
-	file, err := os.Create(saveAs)
+	// Atomically create a file with a unique name (prevents race conditions)
+	file, saveAs, err := CreateUniqueFile(saveToDir, safeFilename)
 	if err != nil {
+		slog.Error("Failed to create unique file", "error", err)
 		return "", lserrors.ErrFileIO
 	}
 	defer func() { _ = file.Close() }()
+
+	hasher := sha256.New()
 
 	// Wrap the reader to update lastActivity during transfer, keeping session alive
 	activeReader := &activityReader{r: fileData, lastActivity: &sess.lastActivity}

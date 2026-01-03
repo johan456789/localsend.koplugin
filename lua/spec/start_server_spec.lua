@@ -76,6 +76,17 @@ describe("start() function", function()
         }
 
         package.loaded["util"] = {
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
             pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
@@ -241,14 +252,14 @@ describe("start() function", function()
             os_execute_calls = {}
             instance:start()
 
-            -- Find the main command
+            -- Find the main command (util.args format: 'binary' 'recv' '-d' '/path' ...)
             local found_cmd = false
             for _, cmd in ipairs(os_execute_calls) do
                 if cmd:match("localsend") and cmd:match("recv") then
                     found_cmd = true
-                    assert.truthy(cmd:match("%-d '/mnt/us/documents'") or cmd:match("-d '/mnt/us/documents'"),
+                    assert.truthy(cmd:match("'%-d' '/mnt/us/documents'"),
                         "Should include -d flag with save directory")
-                    assert.truthy(cmd:match("%-l '/tmp/localsend_transfers.log'") or cmd:match("-l"),
+                    assert.truthy(cmd:match("'%-l' '/tmp/localsend_transfers.log'"),
                         "Should include -l flag for transfer log")
                     break
                 end
@@ -282,7 +293,7 @@ describe("start() function", function()
 
             local found_name = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("%-n 'My Kindle'") then
+                if cmd:match("'%-n' 'My Kindle'") then
                     found_name = true
                     break
                 end
@@ -316,7 +327,7 @@ describe("start() function", function()
 
             local found_pin = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("%-p '1234'") then
+                if cmd:match("'%-p' '1234'") then
                     found_pin = true
                     break
                 end
@@ -350,7 +361,7 @@ describe("start() function", function()
 
             local found_ext = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("%-a 'epub,pdf'") then
+                if cmd:match("'%-a' 'epub,pdf'") then
                     found_ext = true
                     break
                 end
@@ -384,7 +395,7 @@ describe("start() function", function()
 
             local found_https = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("%-%-https=false") then
+                if cmd:match("'%-%-https=false'") then
                     found_https = true
                     break
                 end
@@ -418,7 +429,7 @@ describe("start() function", function()
 
             local found_webrtc = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("%-w=false") then
+                if cmd:match("'%-w=false'") then
                     found_webrtc = true
                     break
                 end
@@ -451,7 +462,7 @@ describe("start() function", function()
 
             local found_routing = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("%-%-ext%-routing '/path/to/ext_routing.json'") then
+                if cmd:match("'%-%-ext%-routing' '/path/to/ext_routing.json'") then
                     found_routing = true
                     break
                 end

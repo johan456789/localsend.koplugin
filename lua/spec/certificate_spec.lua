@@ -81,6 +81,17 @@ describe("Certificate Management", function()
         }
 
         package.loaded["util"] = {
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
             pathExists = function(path)
                 if path_exists_map[path] ~= nil then
                     return path_exists_map[path]
@@ -125,7 +136,7 @@ describe("Certificate Management", function()
 
             local found_mkdir = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("mkdir %-p") and cmd:match("certs") then
+                if cmd:match("'mkdir' '%-p'") and cmd:match("certs") then
                     found_mkdir = true
                     break
                 end
@@ -172,7 +183,7 @@ describe("Certificate Management", function()
             local found_ln_key = false
             local found_ln_crt = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("ln %-sf") then
+                if cmd:match("'ln' '%-sf'") then
                     if cmd:match("server%.key%.pem") then
                         found_ln_key = true
                     end
@@ -248,7 +259,7 @@ describe("Certificate Management", function()
             local found_cp_key = false
             local found_cp_crt = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("^cp ") then
+                if cmd:match("^'cp'") then
                     if cmd:match("server%.key%.pem") then
                         found_cp_key = true
                     end
@@ -344,7 +355,7 @@ describe("Certificate Management", function()
             local found_rm_stored_key = false
             local found_rm_stored_crt = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("rm %-f") then
+                if cmd:match("'rm' '%-f'") then
                     if cmd:match("certs/server%.key%.pem") then
                         found_rm_stored_key = true
                     end
@@ -369,11 +380,11 @@ describe("Certificate Management", function()
             local found_rm_tmp_key = false
             local found_rm_tmp_crt = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("rm %-f") then
-                    if cmd:match("'/tmp/server%.key%.pem'") then
+                if cmd:match("'rm' '%-f'") then
+                    if cmd:match("/tmp/server%.key%.pem") then
                         found_rm_tmp_key = true
                     end
-                    if cmd:match("'/tmp/server%.crt'") then
+                    if cmd:match("/tmp/server%.crt") then
                         found_rm_tmp_crt = true
                     end
                 end

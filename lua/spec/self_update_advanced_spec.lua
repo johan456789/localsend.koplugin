@@ -84,6 +84,17 @@ describe("Self-Update Advanced", function()
         }
 
         package.loaded["util"] = {
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
             pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
@@ -162,7 +173,7 @@ describe("Self-Update Advanced", function()
                     close = function() end,
                 }
             end
-            if cmd:match("^ls ") then
+            if cmd:match("^'ls'") then
                 local files = http_responses.ls_files or {}
                 local i = 0
                 return {
@@ -238,7 +249,7 @@ describe("Self-Update Advanced", function()
             -- Make cp fail for main.lua
             _G.os.execute = function(cmd)
                 table.insert(os_execute_calls, cmd)
-                if cmd:match("cp.*main%.lua") then
+                if cmd:match("'cp'.*main%.lua") then
                     return 1
                 end
                 return 0
@@ -278,7 +289,7 @@ describe("Self-Update Advanced", function()
             local copy_commands = {}
             _G.os.execute = function(cmd)
                 table.insert(os_execute_calls, cmd)
-                if cmd:match("^cp ") then
+                if cmd:match("^'cp'") then
                     table.insert(copy_commands, cmd)
                     -- Fail first cp command
                     if #copy_commands == 1 then
@@ -318,7 +329,7 @@ describe("Self-Update Advanced", function()
             _G.os.execute = function(cmd)
                 table.insert(os_execute_calls, cmd)
                 -- Check for additional lua file copies (not core files)
-                if cmd:match("cp.*localsend_utils%.lua") then
+                if cmd:match("'cp'.*localsend_utils%.lua") then
                     additional_lua_copied = true
                 end
                 return 0
@@ -339,10 +350,10 @@ describe("Self-Update Advanced", function()
             local extra_meta_copies = 0
             for _, cmd in ipairs(os_execute_calls) do
                 -- Count copies from the additional loop (ls output paths)
-                if cmd:match("cp.*/tmp/localsend_update_extract/localsend.koplugin/main%.lua") then
+                if cmd:match("'cp'.*/tmp/localsend_update_extract/localsend.koplugin/main%.lua") then
                     extra_main_copies = extra_main_copies + 1
                 end
-                if cmd:match("cp.*/tmp/localsend_update_extract/localsend.koplugin/_meta%.lua") then
+                if cmd:match("'cp'.*/tmp/localsend_update_extract/localsend.koplugin/_meta%.lua") then
                     extra_meta_copies = extra_meta_copies + 1
                 end
             end
@@ -359,7 +370,7 @@ describe("Self-Update Advanced", function()
 
             _G.os.execute = function(cmd)
                 table.insert(os_execute_calls, cmd)
-                if cmd:match("cp.*localsend_utils%.lua") then
+                if cmd:match("'cp'.*localsend_utils%.lua") then
                     return 1
                 end
                 return 0
@@ -398,7 +409,7 @@ describe("Self-Update Advanced", function()
 
             _G.os.execute = function(cmd)
                 table.insert(os_execute_calls, cmd)
-                if cmd:match("chmod %+x") then
+                if cmd:match("'chmod' '%+x'") then
                     return 1
                 end
                 return 0
@@ -428,7 +439,7 @@ describe("Self-Update Advanced", function()
             local copy_count = 0
             _G.os.execute = function(cmd)
                 table.insert(os_execute_calls, cmd)
-                if cmd:match("^cp ") then
+                if cmd:match("^'cp'") then
                     copy_count = copy_count + 1
                     -- Fail second copy only
                     if copy_count == 2 then
@@ -490,7 +501,18 @@ describe("Self-Update Advanced", function()
             -- Must reload module after changing pathExists
             package.loaded["main"] = nil
             package.loaded["util"] = {
-                pathExists = function(path)
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
+            pathExists = function(path)
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     if path == "/tmp/localsend_update.zip" then return true end

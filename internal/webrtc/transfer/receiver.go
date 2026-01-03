@@ -145,17 +145,10 @@ func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]st
 			continue
 		}
 
-		// Find unique path
-		path, err := session.FindUniquePath(saveDir, targetFile.FileName)
+		// Atomically create file with unique name (prevents race conditions)
+		file, path, err := session.CreateUniqueFile(saveDir, targetFile.FileName)
 		if err != nil {
-			slog.Error("Failed to find unique path", "error", err)
-			continue
-		}
-
-		// Create the file
-		file, err := os.Create(path)
-		if err != nil {
-			slog.Error("Failed to create file", "path", path, "error", err)
+			slog.Error("Failed to create unique file", "error", err)
 			continue
 		}
 

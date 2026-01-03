@@ -90,6 +90,17 @@ describe("validateSaveDir", function()
         os_execute_calls = {}
 
         package.loaded["util"] = {
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
             pathExists = function(path)
                 if path_exists_map[path] ~= nil then
                     return path_exists_map[path]

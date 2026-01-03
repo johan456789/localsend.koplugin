@@ -53,6 +53,17 @@ describe("getDeviceArch", function()
             dbg = function() end,
         }
         package.loaded["util"] = {
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
             pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end

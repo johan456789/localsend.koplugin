@@ -89,6 +89,17 @@ describe("Self-Update", function()
         }
 
         package.loaded["util"] = {
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
             pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
@@ -417,7 +428,7 @@ describe("Self-Update", function()
             -- Should have copied files
             local found_cp = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("cp ") then
+                if cmd:match("^'cp'") then
                     found_cp = true
                     break
                 end
@@ -427,7 +438,7 @@ describe("Self-Update", function()
             -- Should make binary executable
             local found_chmod = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("chmod %+x") and cmd:match("localsend") then
+                if cmd:match("'chmod' '%+x'") and cmd:match("localsend") then
                     found_chmod = true
                     break
                 end

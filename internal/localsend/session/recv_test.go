@@ -12,20 +12,26 @@ import (
 	"localsend-cli/internal/models"
 )
 
-// TestFindUniquePath tests the FindUniquePath function
-func TestFindUniquePath(t *testing.T) {
-	t.Run("returns original path when file does not exist", func(t *testing.T) {
+// TestCreateUniqueFile tests the CreateUniqueFile function
+func TestCreateUniqueFile(t *testing.T) {
+	t.Run("creates file when it does not exist", func(t *testing.T) {
 		dir := t.TempDir()
 		filename := "test.txt"
 
-		path, err := FindUniquePath(dir, filename)
+		file, path, err := CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		defer file.Close()
 
 		expected := filepath.Join(dir, filename)
 		if path != expected {
 			t.Errorf("expected %q, got %q", expected, path)
+		}
+
+		// Verify file was created
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("file should exist: %v", err)
 		}
 	})
 
@@ -39,10 +45,11 @@ func TestFindUniquePath(t *testing.T) {
 			t.Fatalf("failed to create test file: %v", err)
 		}
 
-		path, err := FindUniquePath(dir, filename)
+		file, path, err := CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		defer file.Close()
 
 		expected := filepath.Join(dir, "test (1).txt")
 		if path != expected {
@@ -62,10 +69,11 @@ func TestFindUniquePath(t *testing.T) {
 			}
 		}
 
-		path, err := FindUniquePath(dir, filename)
+		file, path, err := CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		defer file.Close()
 
 		expected := filepath.Join(dir, "test (3).txt")
 		if path != expected {
@@ -83,10 +91,11 @@ func TestFindUniquePath(t *testing.T) {
 			t.Fatalf("failed to create test file: %v", err)
 		}
 
-		path, err := FindUniquePath(dir, filename)
+		file, path, err := CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		defer file.Close()
 
 		expected := filepath.Join(dir, "README (1)")
 		if path != expected {
@@ -104,10 +113,11 @@ func TestFindUniquePath(t *testing.T) {
 			t.Fatalf("failed to create test file: %v", err)
 		}
 
-		path, err := FindUniquePath(dir, filename)
+		file, path, err := CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		defer file.Close()
 
 		// filepath.Ext(".gitignore") returns ".gitignore" (whole name is extension)
 		// So name becomes "" and ext is ".gitignore", resulting in " (1).gitignore"
@@ -127,10 +137,11 @@ func TestFindUniquePath(t *testing.T) {
 			t.Fatalf("failed to create test file: %v", err)
 		}
 
-		path, err := FindUniquePath(dir, filename)
+		file, path, err := CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		defer file.Close()
 
 		// Only the last extension is preserved
 		expected := filepath.Join(dir, "archive.tar (1).gz")
@@ -140,8 +151,8 @@ func TestFindUniquePath(t *testing.T) {
 	})
 }
 
-// TestFindUniquePathBounded verifies the fix for Issue #6 - unbounded loop
-func TestFindUniquePathBounded(t *testing.T) {
+// TestCreateUniqueFileBounded verifies the fix for Issue #6 - unbounded loop
+func TestCreateUniqueFileBounded(t *testing.T) {
 	// Skip this test in short mode as it creates many files
 	if testing.Short() {
 		t.Skip("skipping bounded loop test in short mode")
@@ -175,11 +186,13 @@ func TestFindUniquePathBounded(t *testing.T) {
 			}
 		}
 
-		// Should find test (6).txt
-		path, err := FindUniquePath(dir, filename)
+		// Should create test (6).txt
+		file, path, err := CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		defer file.Close()
+
 		expected := filepath.Join(dir, "test (6).txt")
 		if path != expected {
 			t.Errorf("expected %q, got %q", expected, path)
@@ -751,5 +764,157 @@ func TestSessionStaysAliveDuringTransfer(t *testing.T) {
 	// Session should no longer be stopped
 	if sess.Stopped() {
 		t.Error("session should not be stopped after activity update")
+	}
+}
+
+// TestSaveFileDirectoryTraversalPrevention verifies the fix for directory traversal vulnerability.
+// A malicious client could send "../../../etc/passwd" as filename to write outside saveToDir.
+func TestSaveFileDirectoryTraversalPrevention(t *testing.T) {
+	dir := t.TempDir()
+
+	testCases := []struct {
+		name             string
+		maliciousName    string
+		expectedSanitized string
+	}{
+		{
+			name:             "simple parent traversal",
+			maliciousName:    "../evil.txt",
+			expectedSanitized: "evil.txt",
+		},
+		{
+			name:             "deep parent traversal",
+			maliciousName:    "../../../etc/passwd",
+			expectedSanitized: "passwd",
+		},
+		{
+			name:             "absolute path attempt",
+			maliciousName:    "/etc/passwd",
+			expectedSanitized: "passwd",
+		},
+		{
+			name:             "mixed traversal",
+			maliciousName:    "foo/../../../bar/secret.txt",
+			expectedSanitized: "secret.txt",
+		},
+		{
+			name:             "windows-style traversal",
+			maliciousName:    "..\\..\\windows\\system32\\config",
+			expectedSanitized: "..\\..\\windows\\system32\\config", // Not a unix path, treated as filename
+		},
+		{
+			name:             "hidden file traversal",
+			maliciousName:    "../.ssh/id_rsa",
+			expectedSanitized: "id_rsa",
+		},
+		{
+			name:             "normal filename unchanged",
+			maliciousName:    "normal_file.txt",
+			expectedSanitized: "normal_file.txt",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			sess, _ := NewRecvSession("test-session", "192.168.1.1")
+			content := []byte("test content")
+
+			fileMeta := models.FileMeta{
+				Id:       "file1",
+				Filename: tc.maliciousName,
+				Size:     int64(len(content)),
+			}
+			_ = sess.AcceptFile("file1", fileMeta)
+			sess.Start()
+
+			tokens := sess.FileTokens()
+
+			savedName, err := sess.SaveFile(dir, "file1", tokens["file1"], "192.168.1.1", bytes.NewReader(content))
+			if err != nil {
+				t.Fatalf("SaveFile failed: %v", err)
+			}
+
+			// Verify the saved filename is sanitized
+			if savedName != tc.expectedSanitized {
+				t.Errorf("expected sanitized name %q, got %q", tc.expectedSanitized, savedName)
+			}
+
+			// Verify file was saved in the correct directory (not escaped)
+			savedPath := filepath.Join(dir, savedName)
+			if _, err := os.Stat(savedPath); err != nil {
+				t.Errorf("file should exist at %s: %v", savedPath, err)
+			}
+
+			// Verify no file was created outside the save directory
+			// (e.g., ../evil.txt should not create a file in parent dir)
+			parentPath := filepath.Join(filepath.Dir(dir), tc.expectedSanitized)
+			if _, err := os.Stat(parentPath); err == nil {
+				t.Errorf("file should NOT exist at %s (directory traversal occurred!)", parentPath)
+			}
+
+			// Clean up for next test case
+			os.Remove(savedPath)
+		})
+	}
+}
+
+// TestCreateUniqueFileConcurrent verifies that concurrent file creation is race-free.
+// Two goroutines trying to create the same filename should not both succeed with the same path.
+func TestCreateUniqueFileConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	filename := "concurrent_test.txt"
+
+	const numGoroutines = 50
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	// Collect all created paths
+	paths := make(chan string, numGoroutines)
+	errors := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+
+			file, path, err := CreateUniqueFile(dir, filename)
+			if err != nil {
+				errors <- err
+				return
+			}
+			// Write something to prove we own the file
+			_, _ = file.WriteString("owned")
+			_ = file.Close()
+			paths <- path
+		}()
+	}
+
+	wg.Wait()
+	close(paths)
+	close(errors)
+
+	// Check for errors
+	for err := range errors {
+		t.Errorf("CreateUniqueFile failed: %v", err)
+	}
+
+	// Collect all paths and verify uniqueness
+	seenPaths := make(map[string]bool)
+	for path := range paths {
+		if seenPaths[path] {
+			t.Errorf("duplicate path created: %s (race condition!)", path)
+		}
+		seenPaths[path] = true
+	}
+
+	// Verify we got the expected number of unique files
+	if len(seenPaths) != numGoroutines {
+		t.Errorf("expected %d unique files, got %d", numGoroutines, len(seenPaths))
+	}
+
+	// Verify expected naming pattern
+	// First should be "concurrent_test.txt", rest should be "concurrent_test (1).txt", etc.
+	expectedFirst := filepath.Join(dir, filename)
+	if !seenPaths[expectedFirst] {
+		t.Errorf("expected %s to be created", expectedFirst)
 	}
 }

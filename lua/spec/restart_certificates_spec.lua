@@ -49,6 +49,17 @@ describe("Server Restart and Certificate Functions", function()
             dbg = function() end,
         }
         package.loaded["util"] = {
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
             pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
@@ -193,7 +204,7 @@ describe("Server Restart and Certificate Functions", function()
             -- Should have 4 rm commands for key and cert in both locations
             local rm_count = 0
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("^rm %-f") then
+                if cmd:match("^'rm' '%-f'") then
                     rm_count = rm_count + 1
                 end
             end

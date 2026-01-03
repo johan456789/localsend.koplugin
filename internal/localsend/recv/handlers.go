@@ -2,6 +2,7 @@ package recv
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 
 	"localsend-cli/internal/crypto"
@@ -101,8 +102,18 @@ func (fr *FileReceiver) uploadHandler(c *fiber.Ctx) error {
 	// Determine save directory (may be routed based on extension)
 	saveDir := fr.GetSaveDir(fileMeta.Filename)
 
+	// Use streaming to avoid loading entire file into memory (prevents OOM on large files).
+	// Note: RequestBodyStream() may return nil for small requests that were already buffered,
+	// so we fall back to c.Body() in that case.
+	var bodyReader io.Reader
+	if stream := c.Context().RequestBodyStream(); stream != nil {
+		bodyReader = stream
+	} else {
+		bodyReader = bytes.NewReader(c.Body())
+	}
+
 	// Pass client IP for validation per protocol spec Section 4.2
-	savedFilename, err := session.SaveFile(saveDir, fileId, token, c.IP(), bytes.NewReader(c.Body()))
+	savedFilename, err := session.SaveFile(saveDir, fileId, token, c.IP(), bodyReader)
 	if err != nil {
 		slog.Error("Upload error", "remote", c.IP(), "session", sessionId, "error", err)
 		return c.SendStatus(constants.Status(err))

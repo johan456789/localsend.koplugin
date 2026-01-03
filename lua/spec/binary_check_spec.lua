@@ -84,7 +84,18 @@ describe("Binary Existence Check", function()
         it("returns disabled module", function()
             -- Mock pathExists to report binary as missing
             package.loaded["util"] = {
-                pathExists = function(path)
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
+            pathExists = function(path)
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return false end -- Binary missing!
                     return false
@@ -100,7 +111,18 @@ describe("Binary Existence Check", function()
 
         it("has only disabled field when binary missing", function()
             package.loaded["util"] = {
-                pathExists = function(path)
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
+            pathExists = function(path)
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return false end
                     return false
@@ -123,7 +145,18 @@ describe("Binary Existence Check", function()
     describe("when binary exists", function()
         it("returns full module", function()
             package.loaded["util"] = {
-                pathExists = function(path)
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
+            pathExists = function(path)
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     return false
@@ -140,7 +173,18 @@ describe("Binary Existence Check", function()
 
         it("has init method", function()
             package.loaded["util"] = {
-                pathExists = function(path)
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
+            pathExists = function(path)
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     return false
@@ -155,7 +199,18 @@ describe("Binary Existence Check", function()
 
         it("has start method", function()
             package.loaded["util"] = {
-                pathExists = function(path)
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
+            pathExists = function(path)
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     return false
@@ -170,7 +225,18 @@ describe("Binary Existence Check", function()
 
         it("has isRunning method", function()
             package.loaded["util"] = {
-                pathExists = function(path)
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
+            pathExists = function(path)
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     return false

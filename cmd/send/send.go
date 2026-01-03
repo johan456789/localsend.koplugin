@@ -57,7 +57,7 @@ var Cmd = &cobra.Command{
 			devinfo, err = localsend.GetDeviceInfo(ip, supportHttps)
 			if err != nil {
 				slog.Error("Fail to get device info", "error", err)
-				return nil
+				return err
 			}
 		} else {
 			devinfo = models.NewDeviceInfo(lsutils.GenAlias(), lsutils.GenFingerprint())
@@ -105,7 +105,7 @@ var Cmd = &cobra.Command{
 		err = sender.Start()
 		if err != nil {
 			slog.Error("Fail to send", "error", err)
-			return nil
+			return err
 		}
 
 		slog.Info("Done")

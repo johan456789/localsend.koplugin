@@ -88,22 +88,26 @@ var Cmd = &cobra.Command{
 			}
 		}()
 
+		// Create a context that will be cancelled on shutdown signal
+		ctx, cancel := context.WithCancel(context.Background())
+
 		if webrtcMode {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				startWebRTCReceiver(devname, savetodir, pin, allowedExts, extRoutes, recver.LogTransfer)
+				startWebRTCReceiver(ctx, devname, savetodir, pin, allowedExts, extRoutes, recver.LogTransfer)
 			}()
 		}
 
 		<-utils.WaitForSignal()
+		cancel() // Signal WebRTC receiver to stop
 
 		_ = recver.Stop()
 		wg.Wait()
 	},
 }
 
-func startWebRTCReceiver(deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string)) {
+func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string)) {
 	// Generate signing key and token
 	key, token, err := crypto.GenerateKeyPairWithToken()
 	if err != nil {
@@ -158,10 +162,6 @@ func startWebRTCReceiver(deviceName, saveDir, pin string, allowedExts []string, 
 		return ids
 	})
 
-	// Create a context that will be cancelled on shutdown signal
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Listen for offers with context for proper cancellation
 	receiver.ListenForOffersWithContext(ctx, func(offer signaling.WsServerMessage) {
 		slog.Info("Received WebRTC offer", "peer", offer.Peer.Alias)
@@ -170,9 +170,8 @@ func startWebRTCReceiver(deviceName, saveDir, pin string, allowedExts []string, 
 		}
 	})
 
-	// Block until signal, then cancel context
-	<-utils.WaitForSignal()
-	cancel()
+	// Block until context is cancelled (shutdown signal from main)
+	<-ctx.Done()
 }
 
 func init() {

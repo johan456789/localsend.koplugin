@@ -89,6 +89,17 @@ describe("Process Management", function()
         removed_files = {}
 
         package.loaded["util"] = {
+            args = function(t)
+                local escaped = {}
+                for _, v in ipairs(t) do
+                    if v == nil then
+                        table.insert(escaped, "''")
+                    else
+                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                    end
+                end
+                return table.concat(escaped, " ")
+            end,
             pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
@@ -121,7 +132,8 @@ describe("Process Management", function()
         _G.os.execute = function(cmd)
             table.insert(kill_calls, cmd)
             -- Parse kill command to simulate process termination
-            local sig, pid = cmd:match("kill %-(%w+) (%d+)")
+            -- Match quoted format from util.args: 'kill' '-TERM' '12345'
+            local sig, pid = cmd:match("'kill' '%-(%w+)' '(%d+)'")
             if sig and pid then
                 pid = tonumber(pid)
                 if sig == "KILL" then
@@ -297,7 +309,8 @@ describe("Process Management", function()
             local term_count = 0
             _G.os.execute = function(cmd)
                 table.insert(kill_calls, cmd)
-                if cmd:match("kill %-TERM") then
+                -- Match quoted format from util.args: 'kill' '-TERM' '12345'
+                if cmd:match("'kill' '%-TERM'") then
                     term_count = term_count + 1
                     proc_exists_map[12345] = false
                 end
@@ -324,7 +337,8 @@ describe("Process Management", function()
             local kill_count = 0
             _G.os.execute = function(cmd)
                 table.insert(kill_calls, cmd)
-                if cmd:match("kill %-KILL") then
+                -- Match quoted format from util.args: 'kill' '-KILL' '12345'
+                if cmd:match("'kill' '%-KILL'") then
                     kill_count = kill_count + 1
                     proc_exists_map[12345] = false
                 end

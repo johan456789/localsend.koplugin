@@ -18,14 +18,6 @@ local GITHUB_RELEASE_URL = "https://api.github.com/repos/kaikozlov/localsend.kop
 -- Utility functions (inlined for backwards compatibility with older self-update)
 -- Also available in localsend_utils.lua for testing
 
--- Shell escape utility to prevent command injection
--- Wraps string in single quotes and escapes any embedded single quotes
-local function shellEscape(str)
-    if str == nil then return "''" end
-    -- Single quote escape: replace ' with '\''
-    return "'" .. str:gsub("'", "'\\''" ) .. "'"
-end
-
 -- Validate that a path is safe for shell operations
 local function isValidPath(path)
     if path == nil or path == "" then return false end
@@ -200,7 +192,7 @@ end
 function LocalSend:setupCertificates()
     -- Ensure cert storage directory exists
     if not util.pathExists(cert_storage_path) then
-        os.execute("mkdir -p " .. shellEscape(cert_storage_path))
+        os.execute(util.args({"mkdir", "-p", cert_storage_path}))
     end
 
     local stored_key = cert_storage_path .. "/server.key.pem"
@@ -210,8 +202,8 @@ function LocalSend:setupCertificates()
 
     -- If we have stored certs, symlink them to /tmp where localsend expects them
     if util.pathExists(stored_key) and util.pathExists(stored_cert) then
-        os.execute("ln -sf " .. shellEscape(stored_key) .. " " .. shellEscape(tmp_key))
-        os.execute("ln -sf " .. shellEscape(stored_cert) .. " " .. shellEscape(tmp_cert))
+        os.execute(util.args({"ln", "-sf", stored_key, tmp_key}))
+        os.execute(util.args({"ln", "-sf", stored_cert, tmp_cert}))
         logger.dbg("[LocalSend] Using stored certificates")
         return true
     end
@@ -228,8 +220,8 @@ function LocalSend:saveCertificates()
 
     if util.pathExists(tmp_key) and util.pathExists(tmp_cert) then
         if not util.pathExists(stored_key) then
-            os.execute("cp " .. shellEscape(tmp_key) .. " " .. shellEscape(stored_key))
-            os.execute("cp " .. shellEscape(tmp_cert) .. " " .. shellEscape(stored_cert))
+            os.execute(util.args({"cp", tmp_key, stored_key}))
+            os.execute(util.args({"cp", tmp_cert, stored_cert}))
             logger.dbg("[LocalSend] Saved certificates for future use")
         end
     end
@@ -307,7 +299,7 @@ function LocalSend:validateSaveDir(path)
     -- Check if path exists
     if not util.pathExists(path) then
         -- Try to create it
-        local result = os.execute("mkdir -p " .. shellEscape(path))
+        local result = os.execute(util.args({"mkdir", "-p", path}))
         if result ~= 0 then
             return false, _("Directory does not exist and could not be created.")
         end
@@ -426,18 +418,17 @@ function LocalSend:start()
     -- Clear old transfer log and reset count
     self:clearTransferLog()
 
-    -- Build command with proper shell escaping
-    local cmd = string.format("%s recv -d %s -l %s",
-        shellEscape(binary_path),
-        shellEscape(self.save_dir),
-        shellEscape(transfer_log_file))
+    -- Build command arguments table
+    local args = {binary_path, "recv", "-d", self.save_dir, "-l", transfer_log_file}
 
     -- Always pass device name (default to "KOReader" if not set)
     local effective_name = self.device_name ~= "" and self.device_name or "KOReader"
-    cmd = string.format("%s -n %s", cmd, shellEscape(effective_name))
+    table.insert(args, "-n")
+    table.insert(args, effective_name)
 
     if self.pin ~= "" then
-        cmd = string.format("%s -p %s", cmd, shellEscape(self.pin))
+        table.insert(args, "-p")
+        table.insert(args, self.pin)
     end
 
     -- Determine accept_ext based on routing or manual setting
@@ -456,28 +447,30 @@ function LocalSend:start()
     end
 
     if effective_accept_ext ~= "" then
-        cmd = string.format("%s -a %s", cmd, shellEscape(effective_accept_ext))
+        table.insert(args, "-a")
+        table.insert(args, effective_accept_ext)
     end
 
     if not self.use_https then
-        cmd = string.format("%s --https=false", cmd)
+        table.insert(args, "--https=false")
     end
 
     if not self.use_webrtc then
-        cmd = string.format("%s -w=false", cmd)
+        table.insert(args, "-w=false")
     end
 
     -- Export and apply extension routing config if configured
     local routing_path = self:exportExtRouting()
     if routing_path then
-        cmd = string.format("%s --ext-routing %s", cmd, shellEscape(routing_path))
+        table.insert(args, "--ext-routing")
+        table.insert(args, routing_path)
     end
 
     -- Open firewall before starting
     self:openFirewall()
 
-    -- Run in background and save PID
-    cmd = string.format("(%s) & echo $! > %s", cmd, shellEscape(pid_file))
+    -- Build final command: run in background and save PID
+    local cmd = string.format("(%s) & echo $! > %s", util.args(args), util.args({pid_file}))
 
     logger.dbg("[LocalSend] Starting server: ", cmd)
 
@@ -594,7 +587,7 @@ function LocalSend:stopServer(force)
     end
 
     local function send(sig, p)
-        return os.execute(string.format("kill -%s %d", sig, p)) == 0
+        return os.execute(util.args({"kill", "-" .. sig, tostring(p)})) == 0
     end
 
     if pid then
@@ -1152,10 +1145,10 @@ end
 
 function LocalSend:rotateCertificates()
     -- Remove stored certificates so new ones will be generated
-    os.execute("rm -f " .. shellEscape(cert_storage_path .. "/server.key.pem"))
-    os.execute("rm -f " .. shellEscape(cert_storage_path .. "/server.crt"))
-    os.execute("rm -f " .. shellEscape("/tmp/server.key.pem"))
-    os.execute("rm -f " .. shellEscape("/tmp/server.crt"))
+    os.execute(util.args({"rm", "-f", cert_storage_path .. "/server.key.pem"}))
+    os.execute(util.args({"rm", "-f", cert_storage_path .. "/server.crt"}))
+    os.execute(util.args({"rm", "-f", "/tmp/server.key.pem"}))
+    os.execute(util.args({"rm", "-f", "/tmp/server.crt"}))
 
     UIManager:show(InfoMessage:new{
         text = _("Certificates cleared. New certificates will be generated on next start."),
@@ -1211,12 +1204,11 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
 
     -- Clean up any previous update attempt
     os.remove(tmp_zip)
-    os.execute("rm -rf " .. shellEscape(tmp_extract))
+    os.execute(util.args({"rm", "-rf", tmp_extract}))
 
     -- Download the zip
-    local cmd = string.format(
-        "curl -L -s -o %s -w '%%{http_code}' --connect-timeout 30 --max-time 120 %s",
-        shellEscape(tmp_zip), shellEscape(download_url))
+    local cmd = util.args({"curl", "-L", "-s", "-o", tmp_zip, "-w", "%{http_code}",
+        "--connect-timeout", "30", "--max-time", "120", download_url})
 
     local handle = io.popen(cmd)
     local http_code = handle:read("*a")
@@ -1241,11 +1233,10 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
     end
 
     -- Create extraction directory
-    os.execute("mkdir -p " .. shellEscape(tmp_extract))
+    os.execute(util.args({"mkdir", "-p", tmp_extract}))
 
     -- Extract the zip
-    local extract_cmd = string.format("unzip -o %s -d %s", shellEscape(tmp_zip), shellEscape(tmp_extract))
-    local result = os.execute(extract_cmd)
+    local result = os.execute(util.args({"unzip", "-o", tmp_zip, "-d", tmp_extract}))
 
     if result ~= 0 then
         UIManager:show(InfoMessage:new{
@@ -1253,7 +1244,7 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
             text = _("Failed to extract update."),
         })
         os.remove(tmp_zip)
-        os.execute("rm -rf " .. shellEscape(tmp_extract))
+        os.execute(util.args({"rm", "-rf", tmp_extract}))
         return
     end
 
@@ -1266,7 +1257,7 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
             text = _("Invalid update package structure."),
         })
         os.remove(tmp_zip)
-        os.execute("rm -rf " .. shellEscape(tmp_extract))
+        os.execute(util.args({"rm", "-rf", tmp_extract}))
         return
     end
 
@@ -1280,7 +1271,7 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
         local dst = plugin_path .. "/" .. file
 
         if util.pathExists(src) then
-            local cp_result = os.execute(string.format("cp %s %s", shellEscape(src), shellEscape(dst)))
+            local cp_result = os.execute(util.args({"cp", src, dst}))
             if cp_result ~= 0 then
                 copy_failed = true
                 logger.err("[LocalSend] Failed to copy:", file)
@@ -1292,14 +1283,15 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
 
     -- Also copy any additional .lua files (for future-proofing)
     -- This ensures new Lua modules are picked up without hardcoding names
-    local ls_handle = io.popen("ls " .. shellEscape(extracted_plugin) .. "/*.lua 2>/dev/null")
+    -- Note: glob pattern must remain unquoted for shell expansion
+    local ls_handle = io.popen(util.args({"ls"}) .. " " .. util.args({extracted_plugin}) .. "/*.lua 2>/dev/null")
     if ls_handle then
         for lua_file in ls_handle:lines() do
             local filename = lua_file:match("([^/]+)$")
             -- Skip files we already copied
             if filename and filename ~= "main.lua" and filename ~= "_meta.lua" then
                 local dst = plugin_path .. "/" .. filename
-                local cp_result = os.execute(string.format("cp %s %s", shellEscape(lua_file), shellEscape(dst)))
+                local cp_result = os.execute(util.args({"cp", lua_file, dst}))
                 if cp_result ~= 0 then
                     logger.warn("[LocalSend] Failed to copy additional lua file:", filename)
                 else
@@ -1311,11 +1303,11 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
     end
 
     -- Make binary executable
-    os.execute("chmod +x " .. shellEscape(plugin_path .. "/localsend"))
+    os.execute(util.args({"chmod", "+x", plugin_path .. "/localsend"}))
 
     -- Cleanup
     os.remove(tmp_zip)
-    os.execute("rm -rf " .. shellEscape(tmp_extract))
+    os.execute(util.args({"rm", "-rf", tmp_extract}))
 
     if copy_failed then
         UIManager:show(InfoMessage:new{

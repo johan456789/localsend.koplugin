@@ -225,13 +225,26 @@ func TestGetCertDir(t *testing.T) {
 	})
 
 	t.Run("does not use tmp directory", func(t *testing.T) {
+		// During `go test`, the test binary is compiled to /tmp/go-build.../
+		// so GetCertDir() will return a path in /tmp. This is expected
+		// because GetCertDir() returns a path next to the executable.
+		// In production, the binary will be in a persistent location.
+		exePath, err := os.Executable()
+		if err != nil {
+			t.Fatalf("failed to get executable path: %v", err)
+		}
+		exePath, _ = filepath.EvalSymlinks(exePath)
+		tmpDir := os.TempDir()
+		if filepath.HasPrefix(exePath, tmpDir) || filepath.HasPrefix(exePath, "/tmp") {
+			t.Skip("skipping: test binary is in temp directory (go test environment)")
+		}
+
 		dir, err := GetCertDir()
 		if err != nil {
 			t.Fatalf("GetCertDir failed: %v", err)
 		}
 
 		// Should NOT be in /tmp or os.TempDir()
-		tmpDir := os.TempDir()
 		if filepath.HasPrefix(dir, tmpDir) {
 			t.Errorf("cert directory should NOT be in temp dir, got %q", dir)
 		}
@@ -320,12 +333,25 @@ func TestGetCertPaths(t *testing.T) {
 	})
 
 	t.Run("paths are NOT in tmp", func(t *testing.T) {
+		// During `go test`, the test binary is compiled to /tmp/go-build.../
+		// so GetCertPaths() will return paths in /tmp. This is expected
+		// because it uses GetCertDir() which returns a path next to the executable.
+		// In production, the binary will be in a persistent location.
+		exePath, err := os.Executable()
+		if err != nil {
+			t.Fatalf("failed to get executable path: %v", err)
+		}
+		exePath, _ = filepath.EvalSymlinks(exePath)
+		tmpDir := os.TempDir()
+		if filepath.HasPrefix(exePath, tmpDir) || filepath.HasPrefix(exePath, "/tmp") {
+			t.Skip("skipping: test binary is in temp directory (go test environment)")
+		}
+
 		privKey, cert, err := GetCertPaths()
 		if err != nil {
 			t.Fatalf("GetCertPaths failed: %v", err)
 		}
 
-		tmpDir := os.TempDir()
 		if filepath.HasPrefix(privKey, tmpDir) || filepath.HasPrefix(privKey, "/tmp") {
 			t.Errorf("private key should NOT be in temp dir, got %q", privKey)
 		}

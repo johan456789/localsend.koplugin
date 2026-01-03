@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"sync/atomic"
@@ -156,6 +157,13 @@ func (fsp *ForwardSender) sendFile(fid string, ftoken string) error {
 		return fmt.Errorf("failed to open file %s: %w", fmeta.Filename, err)
 	}
 	defer func() { _ = fd.Close() }()
+
+	// Guard against integer overflow on 32-bit systems where int is 32-bit.
+	// On 64-bit systems, math.MaxInt is large enough that this check passes.
+	// On 32-bit systems, files larger than ~2.15GB would overflow.
+	if fmeta.Size > math.MaxInt {
+		return fmt.Errorf("file too large for transfer on this system: %s (%d bytes exceeds %d limit)", fmeta.Filename, fmeta.Size, math.MaxInt)
+	}
 
 	// send file
 	status, _, errs := agent.InsecureSkipVerify().BodyStream(fd, int(fmeta.Size)).Bytes()

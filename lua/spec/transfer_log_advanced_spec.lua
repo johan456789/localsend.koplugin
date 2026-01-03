@@ -11,7 +11,11 @@ describe("getTransferLog edge cases", function()
         package.loaded["ffi/util"] = {
             template = function(s, ...) return s end,
             usleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
             sleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
         }
         package.loaded["datastorage"] = {
             getFullDataDir = function() return "/tmp/koreader" end,
@@ -24,6 +28,7 @@ describe("getTransferLog edge cases", function()
         package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
+        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
@@ -54,7 +59,7 @@ describe("getTransferLog edge cases", function()
             dbg = function() end,
         }
         package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -110,7 +115,7 @@ describe("getTransferLog edge cases", function()
 
             -- Mock util.pathExists to return true for log file
             package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -126,6 +131,15 @@ describe("getTransferLog edge cases", function()
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     if path:match("localsend_transfers%.log") then return true end
                     return false
+            end,
+            getFriendlySize = function(size)
+                if size >= 1048576 then
+                    return string.format("%.1f MB", size / 1048576)
+                elseif size >= 1024 then
+                    return string.format("%.1f KB", size / 1024)
+                else
+                    return string.format("%d B", size)
+                end
                 end,
             }
 
@@ -186,7 +200,7 @@ describe("getTransferLog edge cases", function()
             }
 
             package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -202,6 +216,15 @@ describe("getTransferLog edge cases", function()
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     if path:match("localsend_transfers%.log") then return true end
                     return false
+            end,
+            getFriendlySize = function(size)
+                if size >= 1048576 then
+                    return string.format("%.1f MB", size / 1048576)
+                elseif size >= 1024 then
+                    return string.format("%.1f KB", size / 1024)
+                else
+                    return string.format("%d B", size)
+                end
                 end,
             }
 
@@ -257,7 +280,7 @@ describe("getTransferLog edge cases", function()
             }
 
             package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -273,6 +296,15 @@ describe("getTransferLog edge cases", function()
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     if path:match("localsend_transfers%.log") then return true end
                     return false
+            end,
+            getFriendlySize = function(size)
+                if size >= 1048576 then
+                    return string.format("%.1f MB", size / 1048576)
+                elseif size >= 1024 then
+                    return string.format("%.1f KB", size / 1024)
+                else
+                    return string.format("%d B", size)
+                end
                 end,
             }
 
@@ -332,7 +364,7 @@ describe("getTransferLog edge cases", function()
             }
 
             package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -348,6 +380,15 @@ describe("getTransferLog edge cases", function()
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     if path:match("localsend_transfers%.log") then return true end
                     return false
+            end,
+            getFriendlySize = function(size)
+                if size >= 1048576 then
+                    return string.format("%.1f MB", size / 1048576)
+                elseif size >= 1024 then
+                    return string.format("%.1f KB", size / 1024)
+                else
+                    return string.format("%d B", size)
+                end
                 end,
             }
 

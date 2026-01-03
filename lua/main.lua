@@ -3,6 +3,7 @@ local Device = require("device")
 local Dispatcher = require("dispatcher")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
+local NetworkMgr = require("ui/network/manager")
 local PathChooser = require("ui/widget/pathchooser")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -192,7 +193,7 @@ end
 function LocalSend:setupCertificates()
     -- Ensure cert storage directory exists
     if not util.pathExists(cert_storage_path) then
-        os.execute(util.args({"mkdir", "-p", cert_storage_path}))
+        util.makePath(cert_storage_path)
     end
 
     local stored_key = cert_storage_path .. "/server.key.pem"
@@ -202,8 +203,8 @@ function LocalSend:setupCertificates()
 
     -- If we have stored certs, symlink them to /tmp where localsend expects them
     if util.pathExists(stored_key) and util.pathExists(stored_cert) then
-        os.execute(util.args({"ln", "-sf", stored_key, tmp_key}))
-        os.execute(util.args({"ln", "-sf", stored_cert, tmp_cert}))
+        os.execute(util.shell_escape({"ln", "-sf", stored_key, tmp_key}))
+        os.execute(util.shell_escape({"ln", "-sf", stored_cert, tmp_cert}))
         logger.dbg("[LocalSend] Using stored certificates")
         return true
     end
@@ -220,8 +221,8 @@ function LocalSend:saveCertificates()
 
     if util.pathExists(tmp_key) and util.pathExists(tmp_cert) then
         if not util.pathExists(stored_key) then
-            os.execute(util.args({"cp", tmp_key, stored_key}))
-            os.execute(util.args({"cp", tmp_cert, stored_cert}))
+            os.execute(util.shell_escape({"cp", tmp_key, stored_key}))
+            os.execute(util.shell_escape({"cp", tmp_cert, stored_cert}))
             logger.dbg("[LocalSend] Saved certificates for future use")
         end
     end
@@ -299,8 +300,9 @@ function LocalSend:validateSaveDir(path)
     -- Check if path exists
     if not util.pathExists(path) then
         -- Try to create it
-        local result = os.execute(util.args({"mkdir", "-p", path}))
-        if result ~= 0 then
+        local ok, err = util.makePath(path)
+        if not ok then
+            logger.warn("[LocalSend] Failed to create directory:", err)
             return false, _("Directory does not exist and could not be created.")
         end
     end
@@ -470,7 +472,7 @@ function LocalSend:start()
     self:openFirewall()
 
     -- Build final command: run in background and save PID
-    local cmd = string.format("(%s) & echo $! > %s", util.args(args), util.args({pid_file}))
+    local cmd = string.format("(%s) & echo $! > %s", util.shell_escape(args), util.shell_escape({pid_file}))
 
     logger.dbg("[LocalSend] Starting server: ", cmd)
 
@@ -546,12 +548,11 @@ function LocalSend:isRunning()
 
     -- Helper to check PID validity
     local function checkPID()
-        local f = io.open(pid_file, "r")
-        if not f then return false end
-        local pid = f:read("*l")
-        f:close()
+        local content = util.readFromFile(pid_file)
+        if not content then return false end
+        local pid = tonumber(content:match("^(%d+)"))
 
-        if pid and tonumber(pid) then
+        if pid then
             return util.pathExists("/proc/" .. pid)
         end
         return false
@@ -573,36 +574,39 @@ function LocalSend:stopServer(force)
     end
 
     local function readPID()
-        local f = io.open(pid_file, "r")
-        if not f then return nil end
-        local s = f:read("*l")
-        f:close()
-        return s and tonumber(s) or nil
+        local content = util.readFromFile(pid_file)
+        if not content then return nil end
+        return tonumber(content:match("^(%d+)"))
     end
 
     local pid = readPID()
 
     local function isProcAlive(p)
+        -- Check /proc directly - works for any process, not just direct children
         return p and util.pathExists("/proc/" .. p)
     end
 
-    local function send(sig, p)
-        return os.execute(util.args({"kill", "-" .. sig, tostring(p)})) == 0
-    end
-
     if pid then
-        send("TERM", pid)
+        -- Use ffiutil.terminateSubProcess for graceful termination (sends SIGTERM)
+        ffiutil.terminateSubProcess(pid)
         for _ = 1, 20 do
             if not isProcAlive(pid) then break end
             ffiutil.sleep(0.1)
         end
 
         if isProcAlive(pid) and force then
-            send("KILL", pid)
+            -- Force kill with SIGKILL if still alive
+            os.execute(util.shell_escape({"kill", "-KILL", tostring(pid)}))
             for _ = 1, 10 do
                 if not isProcAlive(pid) then break end
                 ffiutil.sleep(0.1)
             end
+        end
+
+        -- Final check with grace period for process cleanup
+        if isProcAlive(pid) then
+            -- Process might be in final cleanup, wait a bit more
+            ffiutil.sleep(0.2)
         end
 
         if not isProcAlive(pid) then
@@ -1125,16 +1129,7 @@ function LocalSend:showRecentTransfers()
     local start_idx = math.max(1, #transfers - 9)
     for i = start_idx, #transfers do
         local t = transfers[i]
-        local size_str = ""
-        if t.size then
-            if t.size >= 1048576 then
-                size_str = string.format(" (%.1f MB)", t.size / 1048576)
-            elseif t.size >= 1024 then
-                size_str = string.format(" (%.1f KB)", t.size / 1024)
-            else
-                size_str = string.format(" (%d B)", t.size)
-            end
-        end
+        local size_str = t.size and string.format(" (%s)", util.getFriendlySize(t.size)) or ""
         table.insert(lines, string.format("%d. %s%s", i, t.filename, size_str))
     end
 
@@ -1145,10 +1140,10 @@ end
 
 function LocalSend:rotateCertificates()
     -- Remove stored certificates so new ones will be generated
-    os.execute(util.args({"rm", "-f", cert_storage_path .. "/server.key.pem"}))
-    os.execute(util.args({"rm", "-f", cert_storage_path .. "/server.crt"}))
-    os.execute(util.args({"rm", "-f", "/tmp/server.key.pem"}))
-    os.execute(util.args({"rm", "-f", "/tmp/server.crt"}))
+    os.execute(util.shell_escape({"rm", "-f", cert_storage_path .. "/server.key.pem"}))
+    os.execute(util.shell_escape({"rm", "-f", cert_storage_path .. "/server.crt"}))
+    os.execute(util.shell_escape({"rm", "-f", "/tmp/server.key.pem"}))
+    os.execute(util.shell_escape({"rm", "-f", "/tmp/server.crt"}))
 
     UIManager:show(InfoMessage:new{
         text = _("Certificates cleared. New certificates will be generated on next start."),
@@ -1204,10 +1199,10 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
 
     -- Clean up any previous update attempt
     os.remove(tmp_zip)
-    os.execute(util.args({"rm", "-rf", tmp_extract}))
+    os.execute(util.shell_escape({"rm", "-rf", tmp_extract}))
 
     -- Download the zip
-    local cmd = util.args({"curl", "-L", "-s", "-o", tmp_zip, "-w", "%{http_code}",
+    local cmd = util.shell_escape({"curl", "-L", "-s", "-o", tmp_zip, "-w", "%{http_code}",
         "--connect-timeout", "30", "--max-time", "120", download_url})
 
     local handle = io.popen(cmd)
@@ -1233,10 +1228,10 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
     end
 
     -- Create extraction directory
-    os.execute(util.args({"mkdir", "-p", tmp_extract}))
+    util.makePath(tmp_extract)
 
     -- Extract the zip
-    local result = os.execute(util.args({"unzip", "-o", tmp_zip, "-d", tmp_extract}))
+    local result = os.execute(util.shell_escape({"unzip", "-o", tmp_zip, "-d", tmp_extract}))
 
     if result ~= 0 then
         UIManager:show(InfoMessage:new{
@@ -1244,7 +1239,7 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
             text = _("Failed to extract update."),
         })
         os.remove(tmp_zip)
-        os.execute(util.args({"rm", "-rf", tmp_extract}))
+        os.execute(util.shell_escape({"rm", "-rf", tmp_extract}))
         return
     end
 
@@ -1257,7 +1252,7 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
             text = _("Invalid update package structure."),
         })
         os.remove(tmp_zip)
-        os.execute(util.args({"rm", "-rf", tmp_extract}))
+        os.execute(util.shell_escape({"rm", "-rf", tmp_extract}))
         return
     end
 
@@ -1271,7 +1266,7 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
         local dst = plugin_path .. "/" .. file
 
         if util.pathExists(src) then
-            local cp_result = os.execute(util.args({"cp", src, dst}))
+            local cp_result = os.execute(util.shell_escape({"cp", src, dst}))
             if cp_result ~= 0 then
                 copy_failed = true
                 logger.err("[LocalSend] Failed to copy:", file)
@@ -1284,14 +1279,14 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
     -- Also copy any additional .lua files (for future-proofing)
     -- This ensures new Lua modules are picked up without hardcoding names
     -- Note: glob pattern must remain unquoted for shell expansion
-    local ls_handle = io.popen(util.args({"ls"}) .. " " .. util.args({extracted_plugin}) .. "/*.lua 2>/dev/null")
+    local ls_handle = io.popen(util.shell_escape({"ls"}) .. " " .. util.shell_escape({extracted_plugin}) .. "/*.lua 2>/dev/null")
     if ls_handle then
         for lua_file in ls_handle:lines() do
-            local filename = lua_file:match("([^/]+)$")
+            local _, filename = util.splitFilePathName(lua_file)
             -- Skip files we already copied
             if filename and filename ~= "main.lua" and filename ~= "_meta.lua" then
                 local dst = plugin_path .. "/" .. filename
-                local cp_result = os.execute(util.args({"cp", lua_file, dst}))
+                local cp_result = os.execute(util.shell_escape({"cp", lua_file, dst}))
                 if cp_result ~= 0 then
                     logger.warn("[LocalSend] Failed to copy additional lua file:", filename)
                 else
@@ -1303,11 +1298,11 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
     end
 
     -- Make binary executable
-    os.execute(util.args({"chmod", "+x", plugin_path .. "/localsend"}))
+    os.execute(util.shell_escape({"chmod", "+x", plugin_path .. "/localsend"}))
 
     -- Cleanup
     os.remove(tmp_zip)
-    os.execute(util.args({"rm", "-rf", tmp_extract}))
+    os.execute(util.shell_escape({"rm", "-rf", tmp_extract}))
 
     if copy_failed then
         UIManager:show(InfoMessage:new{
@@ -1324,6 +1319,15 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
 end
 
 function LocalSend:checkForUpdates()
+    -- Check network connectivity first
+    if not NetworkMgr:isOnline() then
+        UIManager:show(InfoMessage:new{
+            icon = "notice-warning",
+            text = _("No network connection. Please connect to WiFi first."),
+        })
+        return
+    end
+
     UIManager:show(InfoMessage:new{
         text = _("Checking for updates..."),
         timeout = 2,
@@ -1348,18 +1352,16 @@ function LocalSend:checkForUpdates()
         return
     end
 
-    local f = io.open(tmp_file, "r")
-    if not f then
+    local content = util.readFromFile(tmp_file)
+    os.remove(tmp_file)
+
+    if not content then
         UIManager:show(InfoMessage:new{
             icon = "notice-warning",
             text = _("Failed to read update information."),
         })
         return
     end
-
-    local content = f:read("*a")
-    f:close()
-    os.remove(tmp_file)
 
     local ok, release = pcall(json.decode, content)
     if not ok or not release or not release.tag_name then

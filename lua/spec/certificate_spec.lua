@@ -12,7 +12,11 @@ describe("Certificate Management", function()
         package.loaded["ffi/util"] = {
             template = function(s, ...) return s end,
             usleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
             sleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
         }
         package.loaded["datastorage"] = {
             getFullDataDir = function() return "/tmp/koreader" end,
@@ -81,7 +85,7 @@ describe("Certificate Management", function()
         }
 
         package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -98,6 +102,19 @@ describe("Certificate Management", function()
                 end
                 return false
             end,
+            makePath = function(path)
+                -- Track makePath calls via os_execute_calls for test compatibility
+                table.insert(os_execute_calls, "'mkdir' '-p' '" .. path .. "'")
+                return true
+            end,
+            readFromFile = function(path)
+                return nil
+            end,
+            splitFilePathName = function(file)
+                if file == nil or file == "" then return "", "" end
+                if not file:find("/") then return "", file end
+                return file:match("(.*/)(.*)")
+            end,
         }
 
         package.loaded["ui/widget/infomessage"] = {
@@ -107,6 +124,7 @@ describe("Certificate Management", function()
             end,
         }
 
+        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,

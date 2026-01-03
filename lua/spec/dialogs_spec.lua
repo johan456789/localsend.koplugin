@@ -21,7 +21,11 @@ describe("Dialog Functions", function()
                 return result
             end,
             usleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
             sleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
         }
         package.loaded["datastorage"] = {
             getFullDataDir = function() return "/tmp/koreader" end,
@@ -85,7 +89,7 @@ describe("Dialog Functions", function()
         }
 
         package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -140,6 +144,7 @@ describe("Dialog Functions", function()
             end,
         }
 
+        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
@@ -383,7 +388,8 @@ describe("Dialog Functions", function()
             -- Track close calls through the mock
             local close_called = false
             local close_arg = nil
-            package.loaded["ui/uimanager"] = {
+            package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/uimanager"] = {
                 show = function() end,
                 close = function(self, dialog)
                     close_called = true
@@ -460,7 +466,8 @@ describe("Dialog Functions", function()
         it("cancel button should close dialog without changes", function()
             -- Track close calls through the mock
             local close_called = false
-            package.loaded["ui/uimanager"] = {
+            package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/uimanager"] = {
                 show = function() end,
                 close = function(self, dialog)
                     close_called = true
@@ -548,7 +555,8 @@ describe("Dialog Functions", function()
         it("cancel button should close dialog without changes", function()
             -- Track close calls through the mock
             local close_called = false
-            package.loaded["ui/uimanager"] = {
+            package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/uimanager"] = {
                 show = function() end,
                 close = function(self, dialog)
                     close_called = true
@@ -718,7 +726,8 @@ describe("Dialog Functions", function()
             local picker_called = false
             -- Track close calls through the mock
             local close_called = false
-            package.loaded["ui/uimanager"] = {
+            package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/uimanager"] = {
                 show = function() end,
                 close = function(self, dialog)
                     close_called = true

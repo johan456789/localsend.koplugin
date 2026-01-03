@@ -14,7 +14,11 @@ describe("checkForNewTransfers", function()
         package.loaded["ffi/util"] = {
             template = function(s, ...) return s end,
             usleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
             sleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
         }
         package.loaded["datastorage"] = {
             getFullDataDir = function() return "/tmp/koreader" end,
@@ -79,7 +83,7 @@ describe("checkForNewTransfers", function()
         is_running = false
 
         package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -123,6 +127,7 @@ describe("checkForNewTransfers", function()
             end,
         }
 
+        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,

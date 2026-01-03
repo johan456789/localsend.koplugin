@@ -8,7 +8,11 @@ describe("Binary Existence Check", function()
         package.loaded["ffi/util"] = {
             template = function(s, ...) return s end,
             usleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
             sleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
         }
         package.loaded["datastorage"] = {
             getFullDataDir = function() return "/tmp/koreader" end,
@@ -21,6 +25,7 @@ describe("Binary Existence Check", function()
         package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
+        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
@@ -84,7 +89,7 @@ describe("Binary Existence Check", function()
         it("returns disabled module", function()
             -- Mock pathExists to report binary as missing
             package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -99,6 +104,15 @@ describe("Binary Existence Check", function()
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return false end -- Binary missing!
                     return false
+            end,
+            getFriendlySize = function(size)
+                if size >= 1048576 then
+                    return string.format("%.1f MB", size / 1048576)
+                elseif size >= 1024 then
+                    return string.format("%.1f KB", size / 1024)
+                else
+                    return string.format("%d B", size)
+                end
                 end,
             }
 
@@ -111,7 +125,7 @@ describe("Binary Existence Check", function()
 
         it("has only disabled field when binary missing", function()
             package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -126,6 +140,15 @@ describe("Binary Existence Check", function()
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return false end
                     return false
+            end,
+            getFriendlySize = function(size)
+                if size >= 1048576 then
+                    return string.format("%.1f MB", size / 1048576)
+                elseif size >= 1024 then
+                    return string.format("%.1f KB", size / 1024)
+                else
+                    return string.format("%d B", size)
+                end
                 end,
             }
 
@@ -145,7 +168,7 @@ describe("Binary Existence Check", function()
     describe("when binary exists", function()
         it("returns full module", function()
             package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -160,6 +183,15 @@ describe("Binary Existence Check", function()
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     return false
+            end,
+            getFriendlySize = function(size)
+                if size >= 1048576 then
+                    return string.format("%.1f MB", size / 1048576)
+                elseif size >= 1024 then
+                    return string.format("%.1f KB", size / 1024)
+                else
+                    return string.format("%d B", size)
+                end
                 end,
             }
 
@@ -173,7 +205,7 @@ describe("Binary Existence Check", function()
 
         it("has init method", function()
             package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -188,6 +220,15 @@ describe("Binary Existence Check", function()
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     return false
+            end,
+            getFriendlySize = function(size)
+                if size >= 1048576 then
+                    return string.format("%.1f MB", size / 1048576)
+                elseif size >= 1024 then
+                    return string.format("%.1f KB", size / 1024)
+                else
+                    return string.format("%d B", size)
+                end
                 end,
             }
 
@@ -199,7 +240,7 @@ describe("Binary Existence Check", function()
 
         it("has start method", function()
             package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -214,6 +255,15 @@ describe("Binary Existence Check", function()
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     return false
+            end,
+            getFriendlySize = function(size)
+                if size >= 1048576 then
+                    return string.format("%.1f MB", size / 1048576)
+                elseif size >= 1024 then
+                    return string.format("%.1f KB", size / 1024)
+                else
+                    return string.format("%d B", size)
+                end
                 end,
             }
 
@@ -225,7 +275,7 @@ describe("Binary Existence Check", function()
 
         it("has isRunning method", function()
             package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -240,6 +290,15 @@ describe("Binary Existence Check", function()
                     if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                     if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                     return false
+            end,
+            getFriendlySize = function(size)
+                if size >= 1048576 then
+                    return string.format("%.1f MB", size / 1048576)
+                elseif size >= 1024 then
+                    return string.format("%.1f KB", size / 1024)
+                else
+                    return string.format("%d B", size)
+                end
                 end,
             }
 

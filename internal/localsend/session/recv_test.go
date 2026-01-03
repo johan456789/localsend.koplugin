@@ -22,7 +22,7 @@ func TestCreateUniqueFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		expected := filepath.Join(dir, filename)
 		if path != expected {
@@ -49,7 +49,7 @@ func TestCreateUniqueFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		expected := filepath.Join(dir, "test (1).txt")
 		if path != expected {
@@ -73,7 +73,7 @@ func TestCreateUniqueFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		expected := filepath.Join(dir, "test (3).txt")
 		if path != expected {
@@ -95,7 +95,7 @@ func TestCreateUniqueFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		expected := filepath.Join(dir, "README (1)")
 		if path != expected {
@@ -117,7 +117,7 @@ func TestCreateUniqueFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		// filepath.Ext(".gitignore") returns ".gitignore" (whole name is extension)
 		// So name becomes "" and ext is ".gitignore", resulting in " (1).gitignore"
@@ -141,7 +141,7 @@ func TestCreateUniqueFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		// Only the last extension is preserved
 		expected := filepath.Join(dir, "archive.tar (1).gz")
@@ -191,7 +191,7 @@ func TestCreateUniqueFileBounded(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		expected := filepath.Join(dir, "test (6).txt")
 		if path != expected {
@@ -853,7 +853,7 @@ func TestSaveFileDirectoryTraversalPrevention(t *testing.T) {
 			}
 
 			// Clean up for next test case
-			os.Remove(savedPath)
+			_ = os.Remove(savedPath)
 		})
 	}
 }

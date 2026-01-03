@@ -9,12 +9,23 @@ describe("Process Management", function()
     local proc_exists_map
     local kill_calls
     local removed_files
+    local terminate_calls
 
     setup(function()
+        -- Dynamic ffiutil mock - will be configured in before_each
         package.loaded["ffi/util"] = {
             template = function(s, ...) return s end,
             usleep = function() end,
             sleep = function() end,
+            isSubProcessDone = function(pid, wait)
+                -- Returns true if subprocess is done (not running)
+                return proc_exists_map[pid] ~= true
+            end,
+            terminateSubProcess = function(pid)
+                table.insert(terminate_calls, pid)
+                -- Simulate SIGTERM - process stops
+                proc_exists_map[pid] = false
+            end,
         }
         package.loaded["datastorage"] = {
             getFullDataDir = function() return "/tmp/koreader" end,
@@ -27,6 +38,7 @@ describe("Process Management", function()
         package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
+        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
@@ -87,9 +99,10 @@ describe("Process Management", function()
         proc_exists_map = {}
         kill_calls = {}
         removed_files = {}
+        terminate_calls = {}
 
         package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -110,6 +123,21 @@ describe("Process Management", function()
                     return proc_exists_map[tonumber(pid)] or false
                 end
                 return false
+            end,
+            makePath = function(path)
+                return true
+            end,
+            readFromFile = function(path)
+                if path == "/tmp/localsend_koreader.pid" then
+                    if not pid_file_exists then return nil end
+                    return pid_file_content
+                end
+                return nil
+            end,
+            splitFilePathName = function(file)
+                if file == nil or file == "" then return "", "" end
+                if not file:find("/") then return "", file end
+                return file:match("(.*/)(.*)")
             end,
         }
 
@@ -300,22 +328,13 @@ describe("Process Management", function()
             assert.is_true(ok)
         end)
 
-        it("sends SIGTERM first", function()
+        it("sends SIGTERM first via terminateSubProcess", function()
             pid_file_exists = true
             pid_file_content = "12345"
             proc_exists_map[12345] = true
 
-            -- Process exits after TERM
-            local term_count = 0
-            _G.os.execute = function(cmd)
-                table.insert(kill_calls, cmd)
-                -- Match quoted format from util.args: 'kill' '-TERM' '12345'
-                if cmd:match("'kill' '%-TERM'") then
-                    term_count = term_count + 1
-                    proc_exists_map[12345] = false
-                end
-                return 0
-            end
+            -- terminateSubProcess will be called and terminate the process
+            -- (the mock in setup handles this)
 
             LocalSend = require("main")
             local instance = LocalSend:new{
@@ -326,13 +345,21 @@ describe("Process Management", function()
             local ok = instance:stopServer(false)
 
             assert.is_true(ok)
-            assert.equal(1, term_count, "Should send SIGTERM")
+            assert.equal(1, #terminate_calls, "Should call terminateSubProcess once")
+            assert.equal(12345, terminate_calls[1], "Should terminate PID 12345")
         end)
 
-        it("sends SIGKILL when force=true and process doesn't exit", function()
+        it("sends SIGKILL when force=true and process doesn't exit after SIGTERM", function()
             pid_file_exists = true
             pid_file_content = "12345"
             proc_exists_map[12345] = true
+
+            -- Override terminateSubProcess to NOT kill the process
+            -- so that SIGKILL is required
+            package.loaded["ffi/util"].terminateSubProcess = function(pid)
+                table.insert(terminate_calls, pid)
+                -- Process doesn't die from SIGTERM
+            end
 
             local kill_count = 0
             _G.os.execute = function(cmd)
@@ -354,7 +381,8 @@ describe("Process Management", function()
             local ok = instance:stopServer(true)
 
             assert.is_true(ok)
-            assert.is_true(kill_count >= 1, "Should send SIGKILL when force=true")
+            assert.equal(1, #terminate_calls, "Should call terminateSubProcess once")
+            assert.is_true(kill_count >= 1, "Should send SIGKILL when force=true and process doesn't exit")
         end)
 
         it("removes PID file after successful stop", function()
@@ -362,11 +390,10 @@ describe("Process Management", function()
             pid_file_content = "12345"
             proc_exists_map[12345] = true
 
-            _G.os.execute = function(cmd)
-                if cmd:match("kill") then
-                    proc_exists_map[12345] = false
-                end
-                return 0
+            -- Reset the mock to ensure terminateSubProcess works
+            package.loaded["ffi/util"].terminateSubProcess = function(pid)
+                table.insert(terminate_calls, pid)
+                proc_exists_map[pid] = false
             end
 
             LocalSend = require("main")
@@ -392,11 +419,10 @@ describe("Process Management", function()
             pid_file_content = "12345"
             proc_exists_map[12345] = true
 
-            _G.os.execute = function(cmd)
-                if cmd:match("kill") then
-                    proc_exists_map[12345] = false
-                end
-                return 0
+            -- Reset the mock to ensure terminateSubProcess works
+            package.loaded["ffi/util"].terminateSubProcess = function(pid)
+                table.insert(terminate_calls, pid)
+                proc_exists_map[pid] = false
             end
 
             LocalSend = require("main")
@@ -417,9 +443,16 @@ describe("Process Management", function()
             pid_file_content = "12345"
             proc_exists_map[12345] = true
 
-            -- Process never exits
+            -- Override terminateSubProcess to NOT kill the process
+            package.loaded["ffi/util"].terminateSubProcess = function(pid)
+                table.insert(terminate_calls, pid)
+                -- Process doesn't die from SIGTERM
+            end
+
+            -- SIGKILL also doesn't work
             _G.os.execute = function(cmd)
                 table.insert(kill_calls, cmd)
+                -- Don't set proc_exists_map[12345] = false - process never dies
                 return 0
             end
 
@@ -442,12 +475,11 @@ describe("Process Management", function()
             pid_file_content = "12345"
             proc_exists_map[12345] = true
 
-            _G.os.execute = function(cmd)
-                if cmd:match("kill") then
-                    proc_exists_map[12345] = false
-                    pid_file_exists = false
-                end
-                return 0
+            -- Reset the mock to ensure terminateSubProcess works
+            package.loaded["ffi/util"].terminateSubProcess = function(pid)
+                table.insert(terminate_calls, pid)
+                proc_exists_map[pid] = false
+                pid_file_exists = false
             end
 
             LocalSend = require("main")

@@ -16,7 +16,11 @@ describe("Self-Update Advanced", function()
         package.loaded["ffi/util"] = {
             template = function(s, ...) return s end,
             usleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
             sleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
         }
         package.loaded["datastorage"] = {
             getFullDataDir = function() return "/tmp/koreader" end,
@@ -84,7 +88,7 @@ describe("Self-Update Advanced", function()
         }
 
         package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -100,6 +104,17 @@ describe("Self-Update Advanced", function()
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                 if file_contents[path] ~= nil then return true end
                 return false
+            end,
+            makePath = function(path)
+                return true
+            end,
+            readFromFile = function(path)
+                return file_contents[path]
+            end,
+            splitFilePathName = function(file)
+                if file == nil or file == "" then return "", "" end
+                if not file:find("/") then return "", file end
+                return file:match("(.*/)(.*)")
             end,
         }
 
@@ -130,6 +145,7 @@ describe("Self-Update Advanced", function()
             end,
         }
 
+        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
@@ -501,7 +517,7 @@ describe("Self-Update Advanced", function()
             -- Must reload module after changing pathExists
             package.loaded["main"] = nil
             package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -522,7 +538,27 @@ describe("Self-Update Advanced", function()
                     if path == "/tmp/localsend_update_extract/localsend.koplugin/localsend" then return true end
                     -- _meta.lua doesn't exist
                     return false
+            end,
+            getFriendlySize = function(size)
+                if size >= 1048576 then
+                    return string.format("%.1f MB", size / 1048576)
+                elseif size >= 1024 then
+                    return string.format("%.1f KB", size / 1024)
+                else
+                    return string.format("%d B", size)
+                end
                 end,
+            makePath = function(path)
+                return true
+            end,
+            readFromFile = function(path)
+                return nil
+            end,
+            splitFilePathName = function(file)
+                if file == nil or file == "" then return "", "" end
+                if not file:find("/") then return "", file end
+                return file:match("(.*/)(.*)")
+            end,
             }
 
             LocalSend = require("main")

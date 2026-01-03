@@ -13,7 +13,11 @@ describe("I/O Error Handling", function()
         package.loaded["ffi/util"] = {
             template = function(s, ...) return s end,
             usleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
             sleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
         }
         package.loaded["datastorage"] = {
             getFullDataDir = function() return "/tmp/koreader" end,
@@ -26,6 +30,7 @@ describe("I/O Error Handling", function()
         package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
+        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
@@ -84,7 +89,7 @@ describe("I/O Error Handling", function()
 
         -- Default path exists behavior
         package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -101,6 +106,25 @@ describe("I/O Error Handling", function()
                 if path_exists_map[path] ~= nil then return path_exists_map[path] end
                 return false
             end,
+            makePath = function(path)
+                -- Return failure when testing mkdir failures
+                if _G._test_makePath_should_fail then
+                    return nil, "Failed to create directory"
+                end
+                return true
+            end,
+            readFromFile = function(path)
+                -- For PID file reading tests
+                if path:match("pid$") and _G._test_readFromFile_returns_nil then
+                    return nil
+                end
+                return _G._test_readFromFile_content
+            end,
+            splitFilePathName = function(file)
+                if file == nil or file == "" then return "", "" end
+                if not file:find("/") then return "", file end
+                return file:match("(.*/)(.*)")
+            end,
         }
 
         -- Default json behavior
@@ -114,17 +138,11 @@ describe("I/O Error Handling", function()
 
     describe("io.open() failure handling", function()
         describe("isRunning", function()
-            it("returns false when PID file exists but cannot be opened", function()
+            it("returns false when PID file exists but cannot be read", function()
                 path_exists_map["/tmp/localsend_koreader.pid"] = true
 
-                -- Mock io.open to return nil for PID file
-                local original_io_open = io.open
-                _G.io.open = function(path, mode)
-                    if path:match("pid$") then
-                        return nil
-                    end
-                    return original_io_open(path, mode)
-                end
+                -- Mock readFromFile to return nil for PID file
+                _G._test_readFromFile_returns_nil = true
 
                 LocalSend = require("main")
                 local instance = LocalSend:new{
@@ -133,9 +151,9 @@ describe("I/O Error Handling", function()
 
                 local result = instance:isRunning()
 
-                assert.is_false(result, "Should return false when PID file cannot be opened")
+                assert.is_false(result, "Should return false when PID file cannot be read")
 
-                _G.io.open = original_io_open
+                _G._test_readFromFile_returns_nil = nil
             end)
         end)
 
@@ -217,13 +235,11 @@ describe("I/O Error Handling", function()
 
     describe("os.execute() failure handling", function()
         describe("setupCertificates", function()
-            it("does not crash when mkdir fails", function()
+            it("does not crash when makePath fails", function()
                 path_exists_map["/tmp/koreader/plugins/localsend.koplugin/certs"] = false
 
-                _G.os.execute = function(cmd)
-                    if cmd:match("mkdir") then return 1 end
-                    return 0
-                end
+                -- Mock makePath to fail
+                _G._test_makePath_should_fail = true
 
                 LocalSend = require("main")
                 local instance = LocalSend:new{
@@ -234,6 +250,8 @@ describe("I/O Error Handling", function()
                 assert.has_no.errors(function()
                     instance:setupCertificates()
                 end)
+
+                _G._test_makePath_should_fail = nil
             end)
 
             it("does not crash when symlink creation fails", function()

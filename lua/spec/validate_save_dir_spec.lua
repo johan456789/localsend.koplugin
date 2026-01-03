@@ -13,7 +13,11 @@ describe("validateSaveDir", function()
         package.loaded["ffi/util"] = {
             template = function(s, ...) return s end,
             usleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
             sleep = function() end,
+            isSubProcessDone = function() return true end,
+            terminateSubProcess = function() end,
         }
         package.loaded["datastorage"] = {
             getFullDataDir = function() return "/tmp/koreader" end,
@@ -26,6 +30,7 @@ describe("validateSaveDir", function()
         package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
+        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
@@ -90,7 +95,7 @@ describe("validateSaveDir", function()
         os_execute_calls = {}
 
         package.loaded["util"] = {
-            args = function(t)
+            shell_escape = function(t)
                 local escaped = {}
                 for _, v in ipairs(t) do
                     if v == nil then
@@ -106,6 +111,25 @@ describe("validateSaveDir", function()
                     return path_exists_map[path]
                 end
                 return false
+            end,
+            makePath = function(path)
+                -- Check if makePath should fail for this path
+                if _G._test_makePath_results and _G._test_makePath_results[path] ~= nil then
+                    if not _G._test_makePath_results[path] then
+                        return nil, "Failed to create directory"
+                    end
+                end
+                -- Simulate success - mark path as existing
+                path_exists_map[path] = true
+                return true
+            end,
+            readFromFile = function(path)
+                return nil
+            end,
+            splitFilePathName = function(file)
+                if file == nil or file == "" then return "", "" end
+                if not file:find("/") then return "", file end
+                return file:match("(.*/)(.*)")
             end,
         }
 
@@ -211,27 +235,9 @@ describe("validateSaveDir", function()
 
         it("creates non-existent directory if possible", function()
             path_exists_map["/mnt/us/newdir"] = false
-            mkdir_results["/mnt/us/newdir"] = 0 -- Success
             writable_paths["/mnt/us/newdir"] = true
 
-            -- After mkdir, path should exist
-            local original_pathExists = package.loaded["util"].pathExists
-            local mkdir_called = false
-            package.loaded["util"].pathExists = function(path)
-                if path == "/mnt/us/newdir" then
-                    return mkdir_called
-                end
-                return original_pathExists(path)
-            end
-
-            _G.os.execute = function(cmd)
-                table.insert(os_execute_calls, cmd)
-                if cmd:match("mkdir") then
-                    mkdir_called = true
-                    return 0
-                end
-                return 0
-            end
+            -- makePath will mark the path as existing when called (in our mock)
 
             LocalSend = require("main")
             local instance = LocalSend:new{
@@ -241,27 +247,14 @@ describe("validateSaveDir", function()
             local valid, err = instance:validateSaveDir("/mnt/us/newdir")
             assert.is_true(valid)
 
-            -- Verify mkdir was called
-            local found_mkdir = false
-            for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("mkdir") then
-                    found_mkdir = true
-                    break
-                end
-            end
-            assert.is_true(found_mkdir, "mkdir should have been called")
+            -- Verify the path now exists (makePath mock marks it as existing)
+            assert.is_true(path_exists_map["/mnt/us/newdir"], "Path should exist after makePath")
         end)
 
         it("rejects directory that cannot be created", function()
             path_exists_map["/readonly/newdir"] = false
-            mkdir_results["/readonly/newdir"] = 1 -- Failure
-
-            _G.os.execute = function(cmd)
-                if cmd:match("mkdir") then
-                    return 1 -- Fail
-                end
-                return 0
-            end
+            -- Mark this path to fail in makePath
+            _G._test_makePath_results = { ["/readonly/newdir"] = false }
 
             LocalSend = require("main")
             local instance = LocalSend:new{
@@ -271,6 +264,8 @@ describe("validateSaveDir", function()
             local valid, err = instance:validateSaveDir("/readonly/newdir")
             assert.is_false(valid)
             assert.truthy(err:match("could not be created"))
+
+            _G._test_makePath_results = nil
         end)
     end)
 

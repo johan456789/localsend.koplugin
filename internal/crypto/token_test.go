@@ -433,8 +433,13 @@ func TestHashMismatchDetection(t *testing.T) {
 		t.Fatalf("Expected 5 parts, got %d", len(parts))
 	}
 
-	// Replace first character of hash
-	tamperedHash := "X" + parts[1][1:]
+	// Replace first character of hash with a different character
+	firstChar := parts[1][0]
+	newChar := byte('A')
+	if firstChar == 'A' {
+		newChar = 'B'
+	}
+	tamperedHash := string(newChar) + parts[1][1:]
 	tamperedToken := strings.Join([]string{parts[0], tamperedHash, parts[2], parts[3], parts[4]}, ".")
 
 	err := VerifyTokenNonce(key.ToVerifyingKey(), tamperedToken, nonce)
@@ -456,8 +461,13 @@ func TestSignatureTamperDetection(t *testing.T) {
 		t.Fatalf("Expected 5 parts, got %d", len(parts))
 	}
 
-	// Replace first character of signature
-	tamperedSig := "X" + parts[4][1:]
+	// Replace first character of signature with a different character
+	sigFirstChar := parts[4][0]
+	sigNewChar := byte('A')
+	if sigFirstChar == 'A' {
+		sigNewChar = 'B'
+	}
+	tamperedSig := string(sigNewChar) + parts[4][1:]
 	tamperedToken := strings.Join([]string{parts[0], parts[1], parts[2], parts[3], tamperedSig}, ".")
 
 	err := VerifyTokenNonce(key.ToVerifyingKey(), tamperedToken, nonce)

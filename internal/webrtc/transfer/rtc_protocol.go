@@ -57,7 +57,7 @@ type RTCFileDto struct {
 
 // RTCFileListResponse is sent by receiver after receiving file list.
 type RTCFileListResponse struct {
-	Status    string            `json:"status"` // "OK", "PAIR", "DECLINED", "INVALID_SIGNATURE"
+	Status    string            `json:"status"`              // "OK", "PAIR", "DECLINED", "INVALID_SIGNATURE"
 	Files     map[string]string `json:"files,omitempty"`     // fileId -> token
 	PublicKey string            `json:"publicKey,omitempty"` // for PAIR
 }
@@ -90,19 +90,19 @@ type RTCErrorResponse struct {
 // ParseRTCMessage tries to detect what type of message this is.
 func ParseRTCMessage(data []byte) (interface{}, string, error) {
 	// Try each message type
-	
+
 	// Check for nonce first
 	var nonce RTCNonceMessage
 	if err := json.Unmarshal(data, &nonce); err == nil && nonce.Nonce != "" {
 		return &nonce, "nonce", nil
 	}
-	
+
 	// Check for file header (has id+token)
 	var fileHeader RTCSendFileHeader
 	if err := json.Unmarshal(data, &fileHeader); err == nil && fileHeader.ID != "" && fileHeader.Token != "" {
 		return &fileHeader, "file_header", nil
 	}
-	
+
 	// Check for status-based responses BEFORE token_request
 	// (token response has both status AND token, while token_request only has token)
 	var generic map[string]interface{}
@@ -129,25 +129,24 @@ func ParseRTCMessage(data []byte) (interface{}, string, error) {
 			return generic, "status_" + status, nil
 		}
 	}
-	
+
 	// Check for token request (only has token field, no status)
 	var tokenReq RTCTokenRequest
 	if err := json.Unmarshal(data, &tokenReq); err == nil && tokenReq.Token != "" {
 		return &tokenReq, "token_request", nil
 	}
-	
+
 	// Check for PIN
 	var pin RTCPinMessage
 	if err := json.Unmarshal(data, &pin); err == nil && pin.Pin != "" {
 		return &pin, "pin", nil
 	}
-	
+
 	// Check for file response (success/error ack from receiver)
 	var fileResp RTCSendFileResponse
 	if err := json.Unmarshal(data, &fileResp); err == nil && fileResp.ID != "" {
 		return &fileResp, "file_response", nil
 	}
-	
+
 	return nil, "", nil
 }
-

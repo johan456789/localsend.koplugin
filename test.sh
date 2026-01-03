@@ -20,10 +20,10 @@ echo
 FAILED=0
 
 # ----------------------------------------------
-# Go Tests
+# Go Tests (with race detector)
 # ----------------------------------------------
-echo -e "${YELLOW}Running Go unit tests...${NC}"
-if go test ./... -count=1; then
+echo -e "${YELLOW}Running Go unit tests with race detector...${NC}"
+if go test ./... -race -count=1; then
     echo -e "${GREEN}✓ Go unit tests passed${NC}"
 else
     echo -e "${RED}✗ Go unit tests failed${NC}"
@@ -32,10 +32,10 @@ fi
 echo
 
 # ----------------------------------------------
-# Go Integration Tests
+# Go Integration Tests (with race detector)
 # ----------------------------------------------
-echo -e "${YELLOW}Running Go integration tests...${NC}"
-if go test ./internal/localsend/... -tags=integration -count=1; then
+echo -e "${YELLOW}Running Go integration tests with race detector...${NC}"
+if go test ./internal/localsend/... -tags=integration -race -count=1; then
     echo -e "${GREEN}✓ Go integration tests passed${NC}"
 else
     echo -e "${RED}✗ Go integration tests failed${NC}"

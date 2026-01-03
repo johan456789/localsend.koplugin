@@ -308,3 +308,14 @@ func ParsePublicKeyPEM(pemStr string) (VerifyingKey, error) {
 		return nil, fmt.Errorf("unsupported public key type in PEM: %T", pub)
 	}
 }
+
+// GenerateSecureToken generates a cryptographically secure random token.
+// This should be used instead of time-based tokens which are predictable.
+func GenerateSecureToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp if crypto/rand fails (should never happen)
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}

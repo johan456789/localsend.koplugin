@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,20 +32,21 @@ const (
 
 // SignalingClient manages connection to the LocalSend signaling server.
 type SignalingClient struct {
-	conn     *websocket.Conn
-	client   ClientInfo // Our info with server-assigned ID
-	peers    map[uuid.UUID]ClientInfo
-	peersMu  sync.RWMutex
-	msgChan  chan WsServerMessage
-	sendChan chan WsClientMessage
-	done     chan struct{}
-	closeOnce sync.Once // Ensures Close() is only executed once
-	onAnswer map[string]func(WsServerMessage) // sessionID -> callback
-	answerMu sync.Mutex
+	conn      *websocket.Conn
+	client    ClientInfo // Our info with server-assigned ID
+	peers     map[uuid.UUID]ClientInfo
+	peersMu   sync.RWMutex
+	msgChan   chan WsServerMessage
+	sendChan  chan WsClientMessage
+	done      chan struct{}
+	closeOnce sync.Once                        // Ensures Close() is only executed once
+	onAnswer  map[string]func(WsServerMessage) // sessionID -> callback
+	answerMu  sync.Mutex
 
 	// Token refresh support
 	baseInfo       ClientInfoWithoutID // Client info without token (for refresh)
-	tokenGenerator func() (string, error)
+	tokenGenerator atomic.Value        // func() (string, error) - stored atomically for thread safety
+	refreshStarted atomic.Bool         // Prevents multiple token refresh goroutines (Issue #3 fix)
 }
 
 // Connect establishes a WebSocket connection to the signaling server.
@@ -224,17 +226,20 @@ func (c *SignalingClient) pingLoop() {
 // tokenRefreshLoop periodically refreshes the token for long sessions.
 // This matches the web client behavior of refreshing every 30 minutes.
 func (c *SignalingClient) tokenRefreshLoop() {
-	if c.tokenGenerator == nil {
-		return
-	}
-
 	ticker := time.NewTicker(tokenRefreshInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			newToken, err := c.tokenGenerator()
+			// Load token generator atomically (Issue #3 fix)
+			genVal := c.tokenGenerator.Load()
+			if genVal == nil {
+				continue
+			}
+			gen := genVal.(func() (string, error))
+
+			newToken, err := gen()
 			if err != nil {
 				slog.Warn("Failed to generate refresh token", "error", err)
 				continue
@@ -257,10 +262,15 @@ func (c *SignalingClient) tokenRefreshLoop() {
 
 // SetTokenGenerator sets a function to generate new tokens for refresh.
 // If set, the client will periodically refresh the token during long sessions.
+// Thread-safe: uses atomic operations to prevent data races (Issue #3 fix).
 func (c *SignalingClient) SetTokenGenerator(gen func() (string, error)) {
-	c.tokenGenerator = gen
-	// Start the refresh loop if we have a generator
+	// Store generator atomically to prevent data race with tokenRefreshLoop
 	if gen != nil {
+		c.tokenGenerator.Store(gen)
+	}
+
+	// Only start ONE goroutine, even if SetTokenGenerator is called multiple times
+	if gen != nil && !c.refreshStarted.Swap(true) {
 		go c.tokenRefreshLoop()
 	}
 }
@@ -291,11 +301,20 @@ func (c *SignalingClient) handlePeerUpdate(msg WsServerMessage) {
 }
 
 // Close closes the signaling connection.
+// Clears all pending answer callbacks to prevent memory leaks (Issue #12 fix).
 func (c *SignalingClient) Close() error {
 	var closeErr error
 	c.closeOnce.Do(func() {
 		close(c.done)
-		closeErr = c.conn.Close()
+
+		// Clear pending answer callbacks to prevent memory leak (Issue #12 fix)
+		c.answerMu.Lock()
+		c.onAnswer = make(map[string]func(WsServerMessage))
+		c.answerMu.Unlock()
+
+		if c.conn != nil {
+			closeErr = c.conn.Close()
+		}
 	})
 	return closeErr
 }

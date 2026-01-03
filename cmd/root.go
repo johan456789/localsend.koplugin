@@ -4,10 +4,10 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/spf13/cobra"
 	"localsend-cli/cmd/recv"
 	"localsend-cli/cmd/scan"
 	"localsend-cli/cmd/send"
-	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{

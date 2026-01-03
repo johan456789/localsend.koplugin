@@ -248,4 +248,3 @@ func TestNonceCombinationSymmetry(t *testing.T) {
 		t.Error("Correct combined nonce should end with receiver nonce")
 	}
 }
-

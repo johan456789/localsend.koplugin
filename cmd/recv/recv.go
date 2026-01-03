@@ -7,13 +7,13 @@ import (
 	"os"
 	"sync"
 
+	"github.com/spf13/cobra"
 	"localsend-cli/internal/crypto"
 	lsrecv "localsend-cli/internal/localsend/recv"
 	lsutils "localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/utils"
 	"localsend-cli/internal/webrtc/signaling"
 	"localsend-cli/internal/webrtc/transfer"
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -77,19 +77,19 @@ var Cmd = &cobra.Command{
 			return
 		}
 
-		// Start HTTP server
+		// Create a context that will be cancelled on shutdown signal
+		ctx, cancel := context.WithCancel(context.Background())
+
+		// Start HTTP server (will shut down when context is cancelled)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := recver.Start()
+			err := recver.Start(ctx)
 			if err != nil {
 				slog.Error("Fail to start server", "error", err)
 				return
 			}
 		}()
-
-		// Create a context that will be cancelled on shutdown signal
-		ctx, cancel := context.WithCancel(context.Background())
 
 		if webrtcMode {
 			wg.Add(1)
@@ -100,9 +100,8 @@ var Cmd = &cobra.Command{
 		}
 
 		<-utils.WaitForSignal()
-		cancel() // Signal WebRTC receiver to stop
+		cancel() // Signal both HTTP and WebRTC receivers to stop
 
-		_ = recver.Stop()
 		wg.Wait()
 	},
 }

@@ -253,10 +253,8 @@ describe("start() function", function()
             }
             instance.save_dir = "/mnt/us/documents"
             instance.isRunning = function() return false end
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             -- Make it "start" successfully
@@ -294,10 +292,8 @@ describe("start() function", function()
             }
             instance.save_dir = "/mnt/us/documents"
             instance.device_name = "My Kindle"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local check_count = 0
@@ -328,10 +324,8 @@ describe("start() function", function()
             }
             instance.save_dir = "/mnt/us/documents"
             instance.pin = "1234"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local check_count = 0
@@ -362,10 +356,8 @@ describe("start() function", function()
             }
             instance.save_dir = "/mnt/us/documents"
             instance.accept_ext = "epub,pdf"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local check_count = 0
@@ -396,10 +388,8 @@ describe("start() function", function()
             }
             instance.save_dir = "/mnt/us/documents"
             instance.use_https = false
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local check_count = 0
@@ -430,10 +420,8 @@ describe("start() function", function()
             }
             instance.save_dir = "/mnt/us/documents"
             instance.use_webrtc = false
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local check_count = 0
@@ -463,10 +451,8 @@ describe("start() function", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.save_dir = "/mnt/us/documents"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return "/path/to/ext_routing.json" end
 
             local check_count = 0
@@ -490,44 +476,7 @@ describe("start() function", function()
     end)
 
     describe("startup sequence", function()
-        it("should call setupCertificates before starting", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-            instance.save_dir = "/mnt/us/documents"
-
-            local setup_called = false
-            local start_cmd_found = false
-            local setup_before_start = false
-
-            instance.setupCertificates = function()
-                setup_called = true
-                setup_before_start = not start_cmd_found
-            end
-            instance.clearTransferLog = function() end
-            instance.openFirewall = function() end
-            instance.saveCertificates = function() end
-            instance.exportExtRouting = function() return nil end
-
-            local check_count = 0
-            instance.isRunning = function(self)
-                check_count = check_count + 1
-                return check_count > 1
-            end
-
-            _G.os.execute = function(cmd)
-                if cmd:match("localsend") then
-                    start_cmd_found = true
-                end
-                return 0
-            end
-
-            instance:start()
-
-            assert.is_true(setup_called, "setupCertificates should be called")
-            assert.is_true(setup_before_start, "setupCertificates should be called before command execution")
-        end)
+        -- Note: setupCertificates test removed - Go now manages certificates directly
 
         it("should call clearTransferLog before starting", function()
             LocalSend = require("main")
@@ -537,10 +486,8 @@ describe("start() function", function()
             instance.save_dir = "/mnt/us/documents"
 
             local clear_called = false
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() clear_called = true end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local check_count = 0
@@ -562,10 +509,8 @@ describe("start() function", function()
             instance.save_dir = "/mnt/us/documents"
 
             local firewall_opened = false
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() firewall_opened = true end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local check_count = 0
@@ -581,30 +526,7 @@ describe("start() function", function()
     end)
 
     describe("on successful start", function()
-        it("should call saveCertificates", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-            instance.save_dir = "/mnt/us/documents"
-
-            local save_called = false
-            instance.setupCertificates = function() end
-            instance.clearTransferLog = function() end
-            instance.openFirewall = function() end
-            instance.saveCertificates = function() save_called = true end
-            instance.exportExtRouting = function() return nil end
-
-            local check_count = 0
-            instance.isRunning = function(self)
-                check_count = check_count + 1
-                return check_count > 1
-            end
-
-            instance:start()
-
-            assert.is_true(save_called, "saveCertificates should be called on success")
-        end)
+        -- Note: saveCertificates test removed - Go now manages certificates directly
 
         it("should schedule transfer notification check", function()
             LocalSend = require("main")
@@ -612,10 +534,8 @@ describe("start() function", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.save_dir = "/mnt/us/documents"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local check_count = 0
@@ -638,10 +558,8 @@ describe("start() function", function()
             }
             instance.save_dir = "/mnt/us/documents"
             instance.port = "53317"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local check_count = 0
@@ -671,7 +589,6 @@ describe("start() function", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.save_dir = "/mnt/us/documents"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
             instance.closeFirewall = function() end
@@ -699,7 +616,6 @@ describe("start() function", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.save_dir = "/mnt/us/documents"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
             instance.exportExtRouting = function() return nil end
@@ -721,7 +637,6 @@ describe("start() function", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.save_dir = "/mnt/us/documents"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
             instance.closeFirewall = function() end
@@ -747,7 +662,6 @@ describe("start() function", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.save_dir = "/mnt/us/documents"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
             instance.exportExtRouting = function() return nil end
@@ -767,7 +681,6 @@ describe("start() function", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.save_dir = "/mnt/us/documents"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
             instance.closeFirewall = function() end
@@ -793,10 +706,8 @@ describe("start() function", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.save_dir = "/mnt/us/documents"
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local poll_count = 0
@@ -821,10 +732,8 @@ describe("start() function", function()
             instance.routing_enabled = true
             instance.ext_dirs = { epub = "/books", pdf = "/docs" }
             instance.routing_accept_all = false
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local check_count = 0
@@ -858,10 +767,8 @@ describe("start() function", function()
             instance.routing_enabled = true
             instance.ext_dirs = { epub = "/books" }
             instance.routing_accept_all = true -- Accept all, not just routed
-            instance.setupCertificates = function() end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.saveCertificates = function() end
             instance.exportExtRouting = function() return nil end
 
             local check_count = 0

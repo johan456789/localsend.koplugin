@@ -71,11 +71,6 @@ func NewRecvSession(sessionId string, clientIP string) (*RecvSession, error) {
 }
 
 func (sess *RecvSession) AcceptFile(fileId string, fileMeta models.FileMeta) error {
-	// reject upload request for a started session
-	if sess.started.Load() {
-		return lserrors.ErrBlockedByOthers
-	}
-
 	// unlikely, but check it anyway
 	if fileId != fileMeta.Id {
 		return lserrors.ErrUnknown
@@ -83,6 +78,12 @@ func (sess *RecvSession) AcceptFile(fileId string, fileMeta models.FileMeta) err
 
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+
+	// Check started INSIDE the lock to prevent TOCTOU race
+	// (previously checked before lock, allowing race with Start())
+	if sess.started.Load() {
+		return lserrors.ErrBlockedByOthers
+	}
 
 	// store the file metadata
 	sess.fileMetas[fileId] = fileMeta
@@ -186,7 +187,19 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		slog.Error("Failed to create unique file", "error", err)
 		return "", lserrors.ErrFileIO
 	}
-	defer func() { _ = file.Close() }()
+
+	// Track success for cleanup - remove partial file on any error
+	success := false
+	defer func() {
+		_ = file.Close()
+		if !success {
+			if removeErr := os.Remove(saveAs); removeErr != nil {
+				slog.Warn("Failed to remove partial file", "path", saveAs, "error", removeErr)
+			} else {
+				slog.Debug("Removed partial file after error", "path", saveAs)
+			}
+		}
+	}()
 
 	hasher := sha256.New()
 
@@ -207,6 +220,9 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 			return "", lserrors.ErrChecksum
 		}
 	}
+
+	// All validations passed - mark as success to prevent cleanup
+	success = true
 
 	slog.Info("Recv file", "file", saveAs, "session", sess.id)
 

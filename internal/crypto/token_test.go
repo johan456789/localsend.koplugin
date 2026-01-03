@@ -134,7 +134,7 @@ func TestExtractSignatureMethod(t *testing.T) {
 
 // =============================================================================
 // Rust Test Vectors
-// These tests verify token generation and verification compatibility with the 
+// These tests verify token generation and verification compatibility with the
 // official Rust implementation using exact values from Rust unit tests.
 // =============================================================================
 
@@ -144,16 +144,16 @@ func TestTokenVerificationRustVector(t *testing.T) {
 	// From Rust tests (core/src/crypto/token.rs)
 	publicKeyPEM := "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAZmdXP230oqK92o65ra3XaF2F8r3+fK5DEBK4c40qVts=\n-----END PUBLIC KEY-----"
 	token := "sha256.RikOdJlAUTdMVFZjEk7Bft5G9cxnNBBLfgttPpyS2FY.hJCuZwAAAAA.ed25519.iNgHrRzX2Iel-Ozj47yn5o5v0cGY_BswK6JYqwY65j7Krpr43KanAaCrjUng7gHtc2pCcylUrKswR_rxyswhDA"
-	
+
 	// The salt in this token is "hJCuZwAAAAA" which is base64-url-safe-no-pad for [0x84, 0x90, 0xae, 0x67, 0x00, 0x00, 0x00, 0x00]
 	// but VerifyTokenNonce should handle decoding it from the token itself.
-	
+
 	// Parse the public key
 	key, err := ParsePublicKeyPEM(publicKeyPEM)
 	if err != nil {
 		t.Fatalf("ParsePublicKeyPEM failed: %v", err)
 	}
-	
+
 	// Salt is extracted from the token by VerifyTokenNonce if we pass nil or the correct bytes
 	// However, VerifyTokenNonce in current implementation might expect it as an argument.
 	// Let's decode the salt from the token to pass it.
@@ -161,12 +161,12 @@ func TestTokenVerificationRustVector(t *testing.T) {
 	if len(parts) != 5 {
 		t.Fatalf("Invalid token format: %d parts", len(parts))
 	}
-	
+
 	salt, err := DecodeNonce(parts[2])
 	if err != nil {
 		t.Fatalf("Failed to decode salt from token: %v", err)
 	}
-	
+
 	// Verify the token
 	err = VerifyTokenNonce(key, token, salt)
 	if err != nil {
@@ -705,3 +705,85 @@ func TestMixedKeyTypeCrossVerification(t *testing.T) {
 	t.Log("Mixed Ed25519/RSA-PSS cross-verification succeeded")
 }
 
+// =============================================================================
+// GenerateSecureToken Tests (Issue #6 fix)
+// Verifies that file tokens are cryptographically random, not time-based.
+// =============================================================================
+
+// TestGenerateSecureToken tests that tokens are random and unique (Issue #6 fix)
+func TestGenerateSecureToken(t *testing.T) {
+	t.Run("generates non-empty token", func(t *testing.T) {
+		token := GenerateSecureToken()
+		if token == "" {
+			t.Error("GenerateSecureToken should return non-empty string")
+		}
+	})
+
+	t.Run("generates unique tokens", func(t *testing.T) {
+		seen := make(map[string]bool)
+		for i := 0; i < 1000; i++ {
+			token := GenerateSecureToken()
+			if seen[token] {
+				t.Errorf("Duplicate token generated: %s", token)
+			}
+			seen[token] = true
+		}
+	})
+
+	t.Run("tokens are not predictable from time", func(t *testing.T) {
+		// Generate many tokens quickly (within same millisecond)
+		tokens := make([]string, 100)
+		for i := 0; i < 100; i++ {
+			tokens[i] = GenerateSecureToken()
+		}
+
+		// All tokens should be unique even when generated in quick succession
+		seen := make(map[string]bool)
+		for _, token := range tokens {
+			if seen[token] {
+				t.Error("Tokens generated quickly should still be unique (not time-based)")
+			}
+			seen[token] = true
+		}
+	})
+
+	t.Run("token has sufficient entropy", func(t *testing.T) {
+		token := GenerateSecureToken()
+		// Token is base64url encoded 16 bytes = ~22 characters
+		// Should be at least 20 characters
+		if len(token) < 20 {
+			t.Errorf("Token should have sufficient length for security, got %d chars", len(token))
+		}
+	})
+
+	t.Run("token is valid base64url", func(t *testing.T) {
+		token := GenerateSecureToken()
+		_, err := base64.RawURLEncoding.DecodeString(token)
+		if err != nil {
+			t.Errorf("Token should be valid base64url: %v", err)
+		}
+	})
+
+	t.Run("token does not contain timestamp", func(t *testing.T) {
+		// Generate token and check it's not just a formatted timestamp
+		token := GenerateSecureToken()
+
+		// Decode and check length - should be 16 bytes of random data
+		decoded, err := base64.RawURLEncoding.DecodeString(token)
+		if err != nil {
+			// Fallback case - just check it's not purely numeric
+			for _, c := range token {
+				if c < '0' || c > '9' {
+					return // Has non-numeric chars, good
+				}
+			}
+			t.Error("Token appears to be purely numeric (possibly timestamp-based)")
+			return
+		}
+
+		// Should be 16 bytes of random data
+		if len(decoded) != 16 {
+			t.Errorf("Expected 16 bytes of random data, got %d", len(decoded))
+		}
+	})
+}

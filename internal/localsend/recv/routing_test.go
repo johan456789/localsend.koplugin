@@ -85,3 +85,120 @@ func TestExtensionRouter_HasRoutes(t *testing.T) {
 		t.Error("Expected HasRoutes() to be true after adding route")
 	}
 }
+
+// =============================================================================
+// Security Tests - Path Traversal (Issue #18)
+// =============================================================================
+
+// TestLoadFromFile_PathTraversal tests that LoadFromFile rejects paths
+// containing path traversal sequences like "..".
+//
+// Currently, the code does NOT validate paths from JSON config, allowing
+// an attacker to specify paths like "../../../etc/" which could write
+// files outside the intended directory.
+//
+// This test SHOULD FAIL on the current codebase (paths are accepted).
+func TestLoadFromFile_PathTraversal(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	testCases := []struct {
+		name        string
+		config      string
+		shouldError bool
+		description string
+	}{
+		{
+			name: "path traversal in extension route",
+			config: `{
+				"epub": "/safe/path",
+				"pdf": "../../../etc/passwd"
+			}`,
+			shouldError: true,
+			description: "relative path with .. should be rejected",
+		},
+		{
+			name: "path traversal in default",
+			config: `{
+				"default": "/tmp/../../../etc"
+			}`,
+			shouldError: true,
+			description: "path containing .. should be rejected even if starts with /",
+		},
+		{
+			name: "relative path without leading slash",
+			config: `{
+				"epub": "relative/path/here"
+			}`,
+			shouldError: true,
+			description: "relative paths should be rejected (must be absolute)",
+		},
+		{
+			name: "valid absolute paths",
+			config: `{
+				"epub": "/mnt/books",
+				"pdf": "/home/user/documents",
+				"default": "/tmp/downloads"
+			}`,
+			shouldError: false,
+			description: "valid absolute paths should be accepted",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := filepath.Join(tmpDir, "config.json")
+			if err := os.WriteFile(configPath, []byte(tc.config), 0644); err != nil {
+				t.Fatalf("Failed to write config: %v", err)
+			}
+
+			router := NewExtensionRouter("/default")
+			err := router.LoadFromFile(configPath)
+
+			if tc.shouldError && err == nil {
+				t.Errorf("LoadFromFile should have returned an error: %s", tc.description)
+			}
+			if !tc.shouldError && err != nil {
+				t.Errorf("LoadFromFile should have succeeded: %v", err)
+			}
+		})
+	}
+}
+
+// TestLoadFromFile_PathTraversal_DirectManipulation tests the vulnerability
+// by directly checking what paths get stored in the router.
+func TestLoadFromFile_PathTraversal_DirectManipulation(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "malicious.json")
+
+	// A malicious config that tries to escape to /etc
+	maliciousConfig := `{
+		"epub": "/tmp/../../../etc",
+		"pdf": "../../sensitive/data"
+	}`
+
+	if err := os.WriteFile(configPath, []byte(maliciousConfig), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	router := NewExtensionRouter("/safe/default")
+	err := router.LoadFromFile(configPath)
+
+	// Current behavior: no error, paths are stored as-is
+	// Expected behavior: should return error for path traversal
+
+	if err == nil {
+		// Check what paths were actually stored
+		epubDir := router.GetSaveDir("test.epub")
+		pdfDir := router.GetSaveDir("test.pdf")
+
+		// If these contain ".." they are vulnerable
+		if filepath.Clean(epubDir) != epubDir || filepath.Clean(pdfDir) != pdfDir {
+			t.Logf("WARNING: Path traversal detected!")
+			t.Logf("  epub route: %q (cleaned: %q)", epubDir, filepath.Clean(epubDir))
+			t.Logf("  pdf route: %q (cleaned: %q)", pdfDir, filepath.Clean(pdfDir))
+		}
+
+		// The real vulnerability: files could be written to /etc
+		t.Error("LoadFromFile accepted path traversal paths - this is a security vulnerability")
+	}
+}

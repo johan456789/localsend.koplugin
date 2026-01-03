@@ -17,7 +17,9 @@ import (
 // certificate slices gracefully without panicking.
 //
 // Before the fix, fwdsend.go:69 would do:
-//   fingerprint := utils.SHA256ofCert(certs[0])
+//
+//	fingerprint := utils.SHA256ofCert(certs[0])
+//
 // This panics if certs is empty.
 //
 // After the fix, the code checks len(certs) > 0 first.

@@ -50,4 +50,3 @@ func DecodeNonce(encoded string) ([]byte, error) {
 	}
 	return nonce, nil
 }
-

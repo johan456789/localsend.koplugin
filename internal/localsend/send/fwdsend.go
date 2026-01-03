@@ -9,12 +9,12 @@ import (
 	"os"
 	"sync/atomic"
 
+	"github.com/gofiber/fiber/v2"
+	"github.com/valyala/fasthttp"
 	"localsend-cli/internal/localsend/constants"
 	lsutils "localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/models"
 	"localsend-cli/internal/utils"
-	"github.com/gofiber/fiber/v2"
-	"github.com/valyala/fasthttp"
 )
 
 type ForwardSender struct {
@@ -180,12 +180,18 @@ func (fsp *ForwardSender) Start() error {
 		return fmt.Errorf("pre-upload failed: %w", err)
 	}
 
+	// Issue #16 fix: Collect and return errors instead of just logging
+	var errs []error
 	for fid, ftoken := range fsp.tokens {
 		err := fsp.sendFile(fid, ftoken)
 		if err != nil {
 			slog.Error("Fail to send file", "error", err, "fileId", fid)
-			continue
+			errs = append(errs, fmt.Errorf("file %s: %w", fid, err))
 		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to send %d file(s): %w", len(errs), errs[0])
 	}
 
 	return nil

@@ -7,14 +7,17 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"localsend-cli/internal/utils"
 	"localsend-cli/templates"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/template/html/v2"
 	"github.com/google/uuid"
@@ -88,6 +91,41 @@ var aliasFruit = []string{
 	"Raspberry",
 	"Strawberry",
 	"Tomato",
+}
+
+// GetCertDir returns the directory for storing TLS certificates.
+// It creates a "certs" subdirectory next to the binary executable.
+// Returns an error if the directory cannot be created (e.g., read-only filesystem).
+func GetCertDir() (string, error) {
+	// Get the path to the executable
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Resolve any symlinks to get the actual binary location
+	exePath, err = filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve executable path: %w", err)
+	}
+
+	// Create certs directory next to the binary
+	certDir := filepath.Join(filepath.Dir(exePath), "certs")
+	if err := os.MkdirAll(certDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create certs directory at %s: %w", certDir, err)
+	}
+
+	return certDir, nil
+}
+
+// GetCertPaths returns the paths for the TLS private key and certificate files.
+// It uses GetCertDir() to determine the directory.
+func GetCertPaths() (privKeyFile, certFile string, err error) {
+	certDir, err := GetCertDir()
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Join(certDir, "server.key.pem"), filepath.Join(certDir, "server.crt"), nil
 }
 
 // GenAndSaveTLScert generates an Ed25519 TLS certificate (per protocol spec v3:
@@ -178,8 +216,8 @@ func NewWebServer(withTemplateEngine ...bool) *fiber.App {
 	config := fiber.Config{
 		Prefork:               false,
 		DisableStartupMessage: true,
-	//	BodyLimit:             100 * 1024 * 1024 * 1024, // 100G
-		BodyLimit:             1 * 1024 * 1024 * 1024, // 1G (for 32-bit)
+		//	BodyLimit:             100 * 1024 * 1024 * 1024, // 100G
+		BodyLimit: 1 * 1024 * 1024 * 1024, // 1G (for 32-bit)
 	}
 
 	if len(withTemplateEngine) > 0 {

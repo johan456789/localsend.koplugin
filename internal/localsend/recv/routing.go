@@ -2,6 +2,7 @@ package recv
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,10 +43,24 @@ func (r *ExtensionRouter) LoadFromFile(path string) error {
 
 	for ext, dir := range config {
 		ext = strings.ToLower(strings.TrimPrefix(ext, "."))
+
+		// Validate path: must be absolute and not contain path traversal
+		if !filepath.IsAbs(dir) {
+			return fmt.Errorf("extension route for %q must be absolute path: %s", ext, dir)
+		}
+
+		// Check for traversal attempts in the raw path before cleaning
+		if strings.Contains(dir, "..") {
+			return fmt.Errorf("extension route for %q contains path traversal: %s", ext, dir)
+		}
+
+		// Clean the path for consistent storage
+		cleaned := filepath.Clean(dir)
+
 		if ext == "default" {
-			r.defaultDir = dir
+			r.defaultDir = cleaned
 		} else {
-			r.routes[ext] = dir
+			r.routes[ext] = cleaned
 		}
 	}
 

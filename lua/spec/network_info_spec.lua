@@ -141,10 +141,8 @@ describe("Network Info Display", function()
         }
         instance.save_dir = "/mnt/us/documents"
         instance.port = "53317"
-        instance.setupCertificates = function() end
         instance.clearTransferLog = function() end
         instance.openFirewall = function() end
-        instance.saveCertificates = function() end
         instance.exportExtRouting = function() return nil end
 
         local check_count = 0

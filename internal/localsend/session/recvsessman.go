@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
-	"github.com/google/uuid"
 )
 
 type RecvSessManager struct {

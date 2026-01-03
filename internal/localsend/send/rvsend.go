@@ -1,18 +1,20 @@
 package send
 
 import (
+	"crypto/subtle"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"mime"
 	"net"
 	"os"
-	"path/filepath"
 
 	"localsend-cli/internal/localsend/constants"
 	lsutils "localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/models"
 	"localsend-cli/internal/utils"
 	"localsend-cli/templates"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
@@ -51,8 +53,10 @@ func (rs *ReverseSender) Init(target *models.DeviceInfo, https bool) error {
 	rs.local.Download = true
 
 	if https {
-		privkeyFile := filepath.Join(os.TempDir(), "server.key.pem")
-		certFile := filepath.Join(os.TempDir(), "server.crt")
+		privkeyFile, certFile, err := lsutils.GetCertPaths()
+		if err != nil {
+			return fmt.Errorf("failed to get certificate paths: %w", err)
+		}
 		cert, err := lsutils.LoadOrGenTLScert(privkeyFile, certFile)
 		if err != nil {
 			return err
@@ -67,10 +71,10 @@ func (rs *ReverseSender) Init(target *models.DeviceInfo, https bool) error {
 }
 
 func (rs *ReverseSender) predownloadHandler(c *fiber.Ctx) error {
-	// Check PIN if set
+	// Check PIN if set (constant-time comparison to prevent timing attacks)
 	if rs.pin != "" {
 		pin := c.Query("pin")
-		if pin != rs.pin {
+		if subtle.ConstantTimeCompare([]byte(pin), []byte(rs.pin)) != 1 {
 			return c.SendStatus(401)
 		}
 	}
@@ -107,7 +111,11 @@ func (rs *ReverseSender) downloadHandler(c *fiber.Ctx) error {
 	}
 
 	// Set Content-Disposition header BEFORE sending file
-	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, fileMeta.Filename))
+	// Use mime.FormatMediaType to properly encode the filename (RFC 5987)
+	disposition := mime.FormatMediaType("attachment", map[string]string{
+		"filename": fileMeta.Filename,
+	})
+	c.Set(fiber.HeaderContentDisposition, disposition)
 
 	err := c.SendFile(fileMeta.FullPath)
 	if err != nil {

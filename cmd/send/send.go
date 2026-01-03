@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/google/uuid"
+	"github.com/spf13/cobra"
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/localsend"
 	lsutils "localsend-cli/internal/localsend/utils"
@@ -15,8 +17,6 @@ import (
 	"localsend-cli/internal/utils"
 	"localsend-cli/internal/webrtc/signaling"
 	"localsend-cli/internal/webrtc/transfer"
-	"github.com/google/uuid"
-	"github.com/spf13/cobra"
 )
 
 var (

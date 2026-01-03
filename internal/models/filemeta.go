@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"localsend-cli/internal/utils"
 	"github.com/google/uuid"
+	"localsend-cli/internal/utils"
 )
 
 // FileMetadata contains optional file timestamp information

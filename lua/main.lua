@@ -82,8 +82,8 @@ end
 
 -- Validate device name for LocalSend
 local function validateDeviceName(name)
-    -- Empty name is valid (will use random name)
-    if name == "" then
+    -- Empty or nil name is valid (will use random name)
+    if name == nil or name == "" then
         return true
     end
 
@@ -121,10 +121,20 @@ end
 
 local data_dir = DataStorage:getFullDataDir()
 local plugin_path = data_dir .. "/plugins/localsend.koplugin"
-local plugin_meta = dofile(plugin_path .. "/_meta.lua")
+
+-- Load plugin metadata safely (Issue #4 fix: wrap dofile in pcall)
+local plugin_meta
+local meta_path = plugin_path .. "/_meta.lua"
+local ok, result = pcall(dofile, meta_path)
+if ok and type(result) == "table" then
+    plugin_meta = result
+else
+    logger.warn("[LocalSend] Failed to load _meta.lua:", result)
+    plugin_meta = { version = "unknown", name = "LocalSend" }
+end
 local PLUGIN_VERSION = plugin_meta.version or "unknown"
 local binary_path = plugin_path .. "/localsend"
-local cert_storage_path = plugin_path .. "/certs"
+local certs_path = plugin_path .. "/certs"  -- Certs folder next to binary (managed by Go)
 local pid_file = "/tmp/localsend_koreader.pid"
 local transfer_log_file = "/tmp/localsend_transfers.log"
 
@@ -187,44 +197,6 @@ function LocalSend:onExit()
     if self:isRunning() then
         self:stopServer(true)
         logger.dbg("[LocalSend] Server stopped on KOReader exit")
-    end
-end
-
-function LocalSend:setupCertificates()
-    -- Ensure cert storage directory exists
-    if not util.pathExists(cert_storage_path) then
-        util.makePath(cert_storage_path)
-    end
-
-    local stored_key = cert_storage_path .. "/server.key.pem"
-    local stored_cert = cert_storage_path .. "/server.crt"
-    local tmp_key = "/tmp/server.key.pem"
-    local tmp_cert = "/tmp/server.crt"
-
-    -- If we have stored certs, symlink them to /tmp where localsend expects them
-    if util.pathExists(stored_key) and util.pathExists(stored_cert) then
-        os.execute(util.shell_escape({"ln", "-sf", stored_key, tmp_key}))
-        os.execute(util.shell_escape({"ln", "-sf", stored_cert, tmp_cert}))
-        logger.dbg("[LocalSend] Using stored certificates")
-        return true
-    end
-
-    return false
-end
-
-function LocalSend:saveCertificates()
-    -- After first run, copy generated certs to persistent storage
-    local tmp_key = "/tmp/server.key.pem"
-    local tmp_cert = "/tmp/server.crt"
-    local stored_key = cert_storage_path .. "/server.key.pem"
-    local stored_cert = cert_storage_path .. "/server.crt"
-
-    if util.pathExists(tmp_key) and util.pathExists(tmp_cert) then
-        if not util.pathExists(stored_key) then
-            os.execute(util.shell_escape({"cp", tmp_key, stored_key}))
-            os.execute(util.shell_escape({"cp", tmp_cert, stored_cert}))
-            logger.dbg("[LocalSend] Saved certificates for future use")
-        end
     end
 end
 
@@ -414,9 +386,6 @@ function LocalSend:start()
         return
     end
 
-    -- Setup persistent certificates
-    self:setupCertificates()
-
     -- Clear old transfer log and reset count
     self:clearTransferLog()
 
@@ -491,8 +460,6 @@ function LocalSend:start()
 
         -- Verify it actually started
         if ready then
-            self:saveCertificates()
-
             -- Start checking for new transfers
             UIManager:scheduleIn(5, function()
                 self:checkForNewTransfers()
@@ -1139,11 +1106,10 @@ function LocalSend:showRecentTransfers()
 end
 
 function LocalSend:rotateCertificates()
-    -- Remove stored certificates so new ones will be generated
-    os.execute(util.shell_escape({"rm", "-f", cert_storage_path .. "/server.key.pem"}))
-    os.execute(util.shell_escape({"rm", "-f", cert_storage_path .. "/server.crt"}))
-    os.execute(util.shell_escape({"rm", "-f", "/tmp/server.key.pem"}))
-    os.execute(util.shell_escape({"rm", "-f", "/tmp/server.crt"}))
+    -- Remove certificates from the certs folder next to the binary
+    -- Go will generate new ones on next start
+    os.execute(util.shell_escape({"rm", "-f", certs_path .. "/server.key.pem"}))
+    os.execute(util.shell_escape({"rm", "-f", certs_path .. "/server.crt"}))
 
     UIManager:show(InfoMessage:new{
         text = _("Certificates cleared. New certificates will be generated on next start."),

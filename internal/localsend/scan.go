@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gofiber/fiber/v2"
 	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
 	"localsend-cli/internal/utils"
-	"github.com/gofiber/fiber/v2"
 )
 
 const (
@@ -23,6 +23,8 @@ const (
 	// maxConcurrentScans limits the number of concurrent subnet scan goroutines
 	// to prevent resource exhaustion on constrained devices (e.g., Raspberry Pi, e-readers)
 	maxConcurrentScans = 50
+	// ipCacheTTL is the time-to-live for cached IP addresses (Issue #22)
+	ipCacheTTL = 30 * time.Second
 )
 
 var multicastDiscoveryAddr = &net.UDPAddr{
@@ -38,6 +40,7 @@ type Discoverier struct {
 	stop        chan struct{}
 	cachedIPs   []net.IP
 	ipCacheTime time.Time
+	ipCacheMu   sync.RWMutex // protects cachedIPs and ipCacheTime (Issue #14 fix)
 }
 
 func NewDiscoverier(devInfo models.DeviceInfo, supportHttps bool) (*Discoverier, error) {
@@ -114,15 +117,31 @@ func (ma *Discoverier) Shutdown() error {
 }
 
 func (mcs *Discoverier) getCachedIPs() ([]net.IP, error) {
-	if time.Since(mcs.ipCacheTime) > 30*time.Second || mcs.cachedIPs == nil {
-		ips, err := utils.GetMyIPv4Addr()
-		if err != nil {
-			return nil, err
-		}
-		mcs.cachedIPs = ips
-		mcs.ipCacheTime = time.Now()
+	// Issue #14 fix: Use double-checked locking for thread-safe cache access
+	mcs.ipCacheMu.RLock()
+	if time.Since(mcs.ipCacheTime) <= ipCacheTTL && mcs.cachedIPs != nil {
+		ips := mcs.cachedIPs
+		mcs.ipCacheMu.RUnlock()
+		return ips, nil
 	}
-	return mcs.cachedIPs, nil
+	mcs.ipCacheMu.RUnlock()
+
+	// Need to refresh - acquire write lock
+	mcs.ipCacheMu.Lock()
+	defer mcs.ipCacheMu.Unlock()
+
+	// Double-check after acquiring write lock (another goroutine may have refreshed)
+	if time.Since(mcs.ipCacheTime) <= ipCacheTTL && mcs.cachedIPs != nil {
+		return mcs.cachedIPs, nil
+	}
+
+	ips, err := utils.GetMyIPv4Addr()
+	if err != nil {
+		return nil, err
+	}
+	mcs.cachedIPs = ips
+	mcs.ipCacheTime = time.Now()
+	return ips, nil
 }
 
 func (mcs *Discoverier) readAndRegister() error {
@@ -146,8 +165,13 @@ func (mcs *Discoverier) readAndRegister() error {
 		return nil
 	}
 
-	// Register the discovered device
-	mcs.PutDiscovered(remoteAddr.IP.To4().String(), anno)
+	// Register the discovered device (IPv4 only - LocalSend protocol uses IPv4)
+	ip4 := remoteAddr.IP.To4()
+	if ip4 == nil {
+		// Skip IPv6 addresses - LocalSend discovery is IPv4 only
+		return nil
+	}
+	mcs.PutDiscovered(ip4.String(), anno)
 
 	// Per protocol spec Section 3.1: respond when we receive an announcement with announce:true
 	// First try HTTP POST (primary method), then UDP fallback

@@ -333,6 +333,71 @@ func TestAcceptFileRejectsAfterStart(t *testing.T) {
 	}
 }
 
+// TestAcceptFileTOCTOURace tests the fix for Issue #8 - TOCTOU race condition.
+// The fix moved the started check inside the mutex lock to prevent a race
+// between AcceptFile checking started and Start() setting it.
+func TestAcceptFileTOCTOURace(t *testing.T) {
+	// Run multiple iterations to increase chance of catching race
+	for iteration := 0; iteration < 20; iteration++ {
+		sess, _ := NewRecvSession("test-session", "192.168.1.1")
+
+		const numAcceptors = 50
+		var wg sync.WaitGroup
+		wg.Add(numAcceptors + 1)
+
+		// Track successful accepts
+		successCount := 0
+		var countMu sync.Mutex
+
+		// One goroutine calls Start()
+		go func() {
+			defer wg.Done()
+			sess.Start()
+		}()
+
+		// Many goroutines try to AcceptFile concurrently
+		for i := 0; i < numAcceptors; i++ {
+			go func(idx int) {
+				defer wg.Done()
+				fileId := "file" + itoa(idx)
+				fileMeta := models.FileMeta{
+					Id:       fileId,
+					Filename: "test" + itoa(idx) + ".txt",
+					Size:     100,
+				}
+				err := sess.AcceptFile(fileId, fileMeta)
+				if err == nil {
+					countMu.Lock()
+					successCount++
+					countMu.Unlock()
+				}
+			}(i)
+		}
+
+		wg.Wait()
+
+		// Verify consistency: number of tokens should match successful accepts
+		tokens := sess.FileTokens()
+		countMu.Lock()
+		count := successCount
+		countMu.Unlock()
+
+		if len(tokens) != count {
+			t.Errorf("iteration %d: token count (%d) != success count (%d) - TOCTOU race detected!",
+				iteration, len(tokens), count)
+		}
+
+		// Also verify no file was accepted after Start was called
+		// by checking all tokens have corresponding file metas
+		for fileId := range tokens {
+			if _, ok := sess.GetFileMeta(fileId); !ok {
+				t.Errorf("iteration %d: token exists for %s but no file meta - inconsistent state!",
+					iteration, fileId)
+			}
+		}
+	}
+}
+
 // TestAcceptFileRejectsIdMismatch tests that AcceptFile rejects mismatched IDs
 func TestAcceptFileRejectsIdMismatch(t *testing.T) {
 	sess, err := NewRecvSession("test-session", "192.168.1.1")
@@ -773,43 +838,43 @@ func TestSaveFileDirectoryTraversalPrevention(t *testing.T) {
 	dir := t.TempDir()
 
 	testCases := []struct {
-		name             string
-		maliciousName    string
+		name              string
+		maliciousName     string
 		expectedSanitized string
 	}{
 		{
-			name:             "simple parent traversal",
-			maliciousName:    "../evil.txt",
+			name:              "simple parent traversal",
+			maliciousName:     "../evil.txt",
 			expectedSanitized: "evil.txt",
 		},
 		{
-			name:             "deep parent traversal",
-			maliciousName:    "../../../etc/passwd",
+			name:              "deep parent traversal",
+			maliciousName:     "../../../etc/passwd",
 			expectedSanitized: "passwd",
 		},
 		{
-			name:             "absolute path attempt",
-			maliciousName:    "/etc/passwd",
+			name:              "absolute path attempt",
+			maliciousName:     "/etc/passwd",
 			expectedSanitized: "passwd",
 		},
 		{
-			name:             "mixed traversal",
-			maliciousName:    "foo/../../../bar/secret.txt",
+			name:              "mixed traversal",
+			maliciousName:     "foo/../../../bar/secret.txt",
 			expectedSanitized: "secret.txt",
 		},
 		{
-			name:             "windows-style traversal",
-			maliciousName:    "..\\..\\windows\\system32\\config",
+			name:              "windows-style traversal",
+			maliciousName:     "..\\..\\windows\\system32\\config",
 			expectedSanitized: "..\\..\\windows\\system32\\config", // Not a unix path, treated as filename
 		},
 		{
-			name:             "hidden file traversal",
-			maliciousName:    "../.ssh/id_rsa",
+			name:              "hidden file traversal",
+			maliciousName:     "../.ssh/id_rsa",
 			expectedSanitized: "id_rsa",
 		},
 		{
-			name:             "normal filename unchanged",
-			maliciousName:    "normal_file.txt",
+			name:              "normal filename unchanged",
+			maliciousName:     "normal_file.txt",
 			expectedSanitized: "normal_file.txt",
 		},
 	}

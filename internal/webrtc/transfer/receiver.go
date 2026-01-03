@@ -3,6 +3,7 @@ package transfer
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -28,6 +29,12 @@ const (
 	stateWaitPairResponse // Waiting for sender's PAIR response
 	stateWaitFiles
 	stateReceivingFiles
+)
+
+// Configuration constants (Issue #22: extracted from magic numbers)
+const (
+	maxPINAttempts     = 3  // Maximum incorrect PIN attempts before closing connection
+	tokenPreviewLength = 30 // Max characters to show in token preview logs
 )
 
 // RTCReceiver handles receiving files over WebRTC.
@@ -153,7 +160,8 @@ func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]st
 		}
 
 		// Only add the token since file was created successfully
-		token := fmt.Sprintf("%d", time.Now().UnixNano())
+		// Use crypto/rand for unpredictable tokens instead of time-based
+		token := crypto.GenerateSecureToken()
 		fileTokens[id] = token
 		r.fileTokens[id] = token
 		r.fileWriters[id] = file
@@ -405,8 +413,8 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 		return
 	}
 	tokenPreview := tokenReq.Token
-	if len(tokenPreview) > 30 {
-		tokenPreview = tokenPreview[:30] + "..."
+	if len(tokenPreview) > tokenPreviewLength {
+		tokenPreview = tokenPreview[:tokenPreviewLength] + "..."
 	}
 	slog.Info("Received token from sender", "token", tokenPreview)
 
@@ -468,7 +476,8 @@ func (r *RTCReceiver) handlePin(msg interface{}, msgType string) {
 	}
 	slog.Info("Received PIN challenge")
 
-	if pinMsg.Pin == r.pin {
+	// Use constant-time comparison to prevent timing attacks
+	if subtle.ConstantTimeCompare([]byte(pinMsg.Pin), []byte(r.pin)) == 1 {
 		slog.Info("PIN correct")
 		response := RTCPinReceivingResponse{Status: "OK"}
 		_ = r.peer.SendJSON(response)
@@ -479,7 +488,7 @@ func (r *RTCReceiver) handlePin(msg interface{}, msgType string) {
 	r.pinAttempts++
 	slog.Warn("Incorrect PIN", "attempt", r.pinAttempts)
 
-	if r.pinAttempts >= 3 {
+	if r.pinAttempts >= maxPINAttempts {
 		slog.Error("Too many PIN attempts, closing connection")
 		response := RTCPinReceivingResponse{Status: "TOO_MANY_ATTEMPTS"}
 		_ = r.peer.SendJSON(response)

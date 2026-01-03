@@ -2,20 +2,22 @@ package recv
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"io"
 	"log/slog"
 
+	"github.com/gofiber/fiber/v2"
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
-	"github.com/gofiber/fiber/v2"
 )
 
 func (fr *FileReceiver) preUploadHandler(c *fiber.Ctx) error {
-	// check pin if it's set
-	if fr.expectedPin != "" {
+	// check pin if it's set (constant-time comparison to prevent timing attacks)
+	expectedPin := fr.getExpectedPIN()
+	if expectedPin != "" {
 		pin := c.Query("pin")
-		if pin != fr.expectedPin {
+		if subtle.ConstantTimeCompare([]byte(pin), []byte(expectedPin)) != 1 {
 			return c.SendStatus(401)
 		}
 	}
@@ -34,7 +36,7 @@ func (fr *FileReceiver) preUploadHandler(c *fiber.Ctx) error {
 	}
 
 	// Filter files by extension if filter is enabled
-	if len(fr.allowedExtensions) > 0 {
+	if fr.hasExtensionFilter() {
 		filteredFiles := make(models.FileMetas)
 		rejectedFiles := []string{}
 
@@ -96,8 +98,12 @@ func (fr *FileReceiver) uploadHandler(c *fiber.Ctx) error {
 		return c.SendStatus(403) // Invalid session = rejected per protocol spec
 	}
 
-	// Get file metadata for logging and routing
-	fileMeta, _ := session.GetFileMeta(fileId)
+	// Get file metadata for logging and routing (Issue #15 fix: check ok)
+	fileMeta, ok := session.GetFileMeta(fileId)
+	if !ok {
+		slog.Warn("Upload for unknown fileId", "fileId", fileId, "session", sessionId)
+		return c.SendStatus(400)
+	}
 
 	// Determine save directory (may be routed based on extension)
 	saveDir := fr.GetSaveDir(fileMeta.Filename)
@@ -233,10 +239,11 @@ func (fr *FileReceiver) registerV3Handler(c *fiber.Ctx) error {
 // preUploadV3Handler implements POST /api/localsend/v3/prepare-upload
 // This handles v3 prepare-upload with optional token verification using exchanged nonces.
 func (fr *FileReceiver) preUploadV3Handler(c *fiber.Ctx) error {
-	// check pin if it's set
-	if fr.expectedPin != "" {
+	// check pin if it's set (constant-time comparison to prevent timing attacks)
+	expectedPin := fr.getExpectedPIN()
+	if expectedPin != "" {
 		pin := c.Query("pin")
-		if pin != fr.expectedPin {
+		if subtle.ConstantTimeCompare([]byte(pin), []byte(expectedPin)) != 1 {
 			return c.SendStatus(401)
 		}
 	}
@@ -273,7 +280,7 @@ func (fr *FileReceiver) preUploadV3Handler(c *fiber.Ctx) error {
 	}
 
 	// Filter files by extension if filter is enabled
-	if len(fr.allowedExtensions) > 0 {
+	if fr.hasExtensionFilter() {
 		filteredFiles := make(models.FileMetas)
 		rejectedFiles := []string{}
 

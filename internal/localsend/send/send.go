@@ -56,13 +56,9 @@ func (fsp *baseSender) AddDir(dirPath string) error {
 }
 
 func (fsp *baseSender) reset() {
-	for k := range fsp.tokens {
-		delete(fsp.tokens, k)
-	}
-
-	for k := range fsp.files {
-		delete(fsp.files, k)
-	}
+	// Issue #23 fix: Use O(1) map reassignment instead of O(n) range-delete
+	fsp.tokens = make(map[string]string)
+	fsp.files = make(models.FileMetas)
 }
 
 // FileCount returns the number of files added to the sender.

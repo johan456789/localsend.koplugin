@@ -1,8 +1,8 @@
 package signaling
 
 import (
-	"localsend-cli/internal/models"
 	"github.com/google/uuid"
+	"localsend-cli/internal/models"
 )
 
 // WsServerMessage represents messages from the signaling server.
@@ -11,10 +11,10 @@ type WsServerMessage struct {
 	Client    *ClientInfo   `json:"client,omitempty"`
 	Peers     *[]ClientInfo `json:"peers,omitempty"` // Use pointer to allow [] when empty but present
 	Peer      *ClientInfo   `json:"peer,omitempty"`
-	PeerID    *uuid.UUID   `json:"peerId,omitempty"`
-	SessionID string       `json:"sessionId,omitempty"`
-	SDP       string       `json:"sdp,omitempty"`
-	Code      int          `json:"code,omitempty"`
+	PeerID    *uuid.UUID    `json:"peerId,omitempty"`
+	SessionID string        `json:"sessionId,omitempty"`
+	SDP       string        `json:"sdp,omitempty"`
+	Code      int           `json:"code,omitempty"`
 }
 
 // WsClientMessage represents messages sent to the signaling server.
@@ -100,4 +100,3 @@ func NewAnswerMessage(sessionID string, target uuid.UUID, sdp string) WsClientMe
 		SDP:       sdp,
 	}
 }
-

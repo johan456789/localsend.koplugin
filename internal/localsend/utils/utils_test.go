@@ -209,3 +209,129 @@ func TestListenWithTLS(t *testing.T) {
 		_ = ListenWithTLS
 	})
 }
+
+// TestGetCertDir tests the certificate directory location (Issue #2 fix)
+// Verifies that certificates are stored next to the binary, not in /tmp
+func TestGetCertDir(t *testing.T) {
+	t.Run("returns path ending with certs", func(t *testing.T) {
+		dir, err := GetCertDir()
+		if err != nil {
+			t.Fatalf("GetCertDir failed: %v", err)
+		}
+
+		if filepath.Base(dir) != "certs" {
+			t.Errorf("expected path to end with 'certs', got %q", dir)
+		}
+	})
+
+	t.Run("does not use tmp directory", func(t *testing.T) {
+		dir, err := GetCertDir()
+		if err != nil {
+			t.Fatalf("GetCertDir failed: %v", err)
+		}
+
+		// Should NOT be in /tmp or os.TempDir()
+		tmpDir := os.TempDir()
+		if filepath.HasPrefix(dir, tmpDir) {
+			t.Errorf("cert directory should NOT be in temp dir, got %q", dir)
+		}
+
+		// Also check for common tmp patterns
+		if filepath.HasPrefix(dir, "/tmp") || filepath.HasPrefix(dir, "/var/tmp") {
+			t.Errorf("cert directory should NOT be in /tmp or /var/tmp, got %q", dir)
+		}
+	})
+
+	t.Run("creates directory with 0700 permissions", func(t *testing.T) {
+		dir, err := GetCertDir()
+		if err != nil {
+			t.Fatalf("GetCertDir failed: %v", err)
+		}
+
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("failed to stat cert directory: %v", err)
+		}
+
+		if !info.IsDir() {
+			t.Error("cert path should be a directory")
+		}
+
+		mode := info.Mode().Perm()
+		expected := os.FileMode(0700)
+		if mode != expected {
+			t.Errorf("cert directory permissions: expected %o, got %o", expected, mode)
+		}
+	})
+
+	t.Run("is next to executable", func(t *testing.T) {
+		dir, err := GetCertDir()
+		if err != nil {
+			t.Fatalf("GetCertDir failed: %v", err)
+		}
+
+		exePath, err := os.Executable()
+		if err != nil {
+			t.Fatalf("failed to get executable path: %v", err)
+		}
+		exePath, _ = filepath.EvalSymlinks(exePath)
+		exeDir := filepath.Dir(exePath)
+
+		expectedDir := filepath.Join(exeDir, "certs")
+		if dir != expectedDir {
+			t.Errorf("expected cert dir to be %q, got %q", expectedDir, dir)
+		}
+	})
+}
+
+// TestGetCertPaths tests the certificate file paths (Issue #2 fix)
+func TestGetCertPaths(t *testing.T) {
+	t.Run("returns correct filenames", func(t *testing.T) {
+		privKey, cert, err := GetCertPaths()
+		if err != nil {
+			t.Fatalf("GetCertPaths failed: %v", err)
+		}
+
+		if filepath.Base(privKey) != "server.key.pem" {
+			t.Errorf("expected private key filename 'server.key.pem', got %q", filepath.Base(privKey))
+		}
+
+		if filepath.Base(cert) != "server.crt" {
+			t.Errorf("expected cert filename 'server.crt', got %q", filepath.Base(cert))
+		}
+	})
+
+	t.Run("paths are in certs directory", func(t *testing.T) {
+		privKey, cert, err := GetCertPaths()
+		if err != nil {
+			t.Fatalf("GetCertPaths failed: %v", err)
+		}
+
+		privKeyDir := filepath.Dir(privKey)
+		certDir := filepath.Dir(cert)
+
+		if filepath.Base(privKeyDir) != "certs" {
+			t.Errorf("private key should be in 'certs' directory, got %q", privKeyDir)
+		}
+
+		if filepath.Base(certDir) != "certs" {
+			t.Errorf("cert should be in 'certs' directory, got %q", certDir)
+		}
+	})
+
+	t.Run("paths are NOT in tmp", func(t *testing.T) {
+		privKey, cert, err := GetCertPaths()
+		if err != nil {
+			t.Fatalf("GetCertPaths failed: %v", err)
+		}
+
+		tmpDir := os.TempDir()
+		if filepath.HasPrefix(privKey, tmpDir) || filepath.HasPrefix(privKey, "/tmp") {
+			t.Errorf("private key should NOT be in temp dir, got %q", privKey)
+		}
+
+		if filepath.HasPrefix(cert, tmpDir) || filepath.HasPrefix(cert, "/tmp") {
+			t.Errorf("cert should NOT be in temp dir, got %q", cert)
+		}
+	})
+}

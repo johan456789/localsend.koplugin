@@ -7,13 +7,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gofiber/fiber/v2"
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/localsend"
 	"localsend-cli/internal/localsend/constants"
 	sess "localsend-cli/internal/localsend/session"
 	lsutils "localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/models"
-	"github.com/gofiber/fiber/v2"
 )
 
 // newTestReceiver creates a FileReceiver for testing with minimal dependencies.
@@ -417,6 +417,98 @@ func TestPreUploadV3Handler_CorrectPIN(t *testing.T) {
 	// Should succeed with correct PIN (may return 200 or other depending on file acceptance)
 	if resp.StatusCode == 401 {
 		t.Errorf("Status = %d; should not be 401 with correct PIN", resp.StatusCode)
+	}
+}
+
+// =============================================================================
+// Upload Handler Tests (POST /api/localsend/v2/upload)
+// =============================================================================
+
+// TestUploadHandler_UnknownFileId demonstrates Issue #15.
+// BUG: GetFileMeta's ok return value is ignored - unknown fileId should return 400.
+func TestUploadHandler_UnknownFileId(t *testing.T) {
+	fr := newTestReceiver()
+
+	// Create a session with a known file
+	testFiles := models.FileMetas{
+		"known-file": {
+			Id:       "known-file",
+			Filename: "test.txt",
+			Size:     100,
+		},
+	}
+	// NewSession accepts all files and starts the session automatically
+	sessionId, err := fr.sessman.NewSession(testFiles, "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	app := fiber.New()
+	app.Post(constants.UploadPath, fr.uploadHandler)
+
+	// Try to upload a file with an unknown fileId
+	body := []byte("test file content")
+	req := httptest.NewRequest("POST", constants.UploadPath+
+		"?sessionId="+sessionId+
+		"&fileId=unknown-file"+ // <-- This fileId was never registered
+		"&token=some-token", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, _ := app.Test(req)
+
+	// BUG: Currently the handler ignores the ok return value from GetFileMeta
+	// and proceeds with an empty FileMeta (zero value), which should instead
+	// return 400 Bad Request for unknown fileId.
+	//
+	// After fix: Should return 400 for unknown fileId
+	if resp.StatusCode != 400 {
+		t.Errorf("Status = %d; want 400 for unknown fileId (Issue #15)", resp.StatusCode)
+	}
+}
+
+// TestUploadHandler_KnownFileId verifies that known fileIds work correctly.
+func TestUploadHandler_KnownFileId(t *testing.T) {
+	fr := newTestReceiver()
+	fr.saveToDir = t.TempDir() // Use temp dir for actual file saving
+
+	// Create a session with a known file
+	testFiles := models.FileMetas{
+		"known-file": {
+			Id:       "known-file",
+			Filename: "test.txt",
+			Size:     17, // matches "test file content"
+		},
+	}
+	// NewSession accepts all files and starts the session automatically
+	sessionId, err := fr.sessman.NewSession(testFiles, "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// Get the session to retrieve the token
+	session, err := fr.sessman.GetSession(sessionId)
+	if err != nil {
+		t.Fatalf("Failed to get session: %v", err)
+	}
+	tokens := session.FileTokens()
+
+	app := fiber.New()
+	app.Post(constants.UploadPath, fr.uploadHandler)
+
+	// Upload with correct fileId and token
+	body := []byte("test file content")
+	req := httptest.NewRequest("POST", constants.UploadPath+
+		"?sessionId="+sessionId+
+		"&fileId=known-file"+
+		"&token="+tokens["known-file"], bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, _ := app.Test(req)
+
+	// Known fileId should succeed (200) or at least not fail with "unknown file" error
+	// Note: May fail with token validation if protocol has changed, but should NOT be 400
+	if resp.StatusCode == 400 {
+		t.Errorf("Status = 400; known fileId should not return 400")
 	}
 }
 

@@ -2,7 +2,9 @@ package send
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -572,6 +574,155 @@ func TestForwardSender_SendFile_AcceptsNormalSizedFiles(t *testing.T) {
 		t.Errorf("normal sized file should not trigger size limit error: %v", err)
 	}
 	// Note: It will fail for other reasons (no server listening), which is expected
+}
+
+// =============================================================================
+// ForwardSender Start() Error Propagation Tests (Issue #16)
+// =============================================================================
+
+// TestForwardSender_Start_PropagatesFileErrors demonstrates Issue #16.
+// BUG: Start() logs errors but returns nil, making caller think all files succeeded.
+func TestForwardSender_Start_PropagatesFileErrors(t *testing.T) {
+	// Create a test server that accepts pre-upload but rejects file uploads
+	app := fiber.New()
+
+	// Pre-upload handler - returns tokens for whatever files are requested
+	app.Post("/api/localsend/v2/prepare-upload", func(c *fiber.Ctx) error {
+		// Parse the request to get file IDs
+		var req struct {
+			Files map[string]interface{} `json:"files"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.SendStatus(400)
+		}
+
+		// Generate tokens for each file in the request
+		tokens := make(map[string]string)
+		for fileId := range req.Files {
+			tokens[fileId] = "token-" + fileId
+		}
+
+		return c.JSON(map[string]interface{}{
+			"sessionId": "test-session",
+			"files":     tokens,
+		})
+	})
+
+	// Upload handler - reject all uploads to simulate failure
+	app.Post("/api/localsend/v2/upload", func(c *fiber.Ctx) error {
+		return c.SendStatus(500) // Simulate server error
+	})
+
+	// Start the test server
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+	defer ln.Close()
+
+	go func() { _ = app.Listener(ln) }()
+	defer func() { _ = app.Shutdown() }()
+
+	// Get the port
+	addr := ln.Addr().(*net.TCPAddr)
+	port := fmt.Sprintf("%d", addr.Port)
+
+	// Create temp files
+	tmpDir := t.TempDir()
+	testFile1 := filepath.Join(tmpDir, "file1.txt")
+	testFile2 := filepath.Join(tmpDir, "file2.txt")
+	_ = os.WriteFile(testFile1, []byte("content1"), 0644)
+	_ = os.WriteFile(testFile2, []byte("content2"), 0644)
+
+	// Setup sender
+	sender := NewForwardSender()
+	target := &models.DeviceInfo{
+		Alias: "TestDevice",
+		IP:    "127.0.0.1",
+	}
+	_ = sender.Init(target, false)
+	sender.SetRemotePort(port)
+	_ = sender.AddFile(testFile1)
+	_ = sender.AddFile(testFile2)
+
+	// Call Start - pre-upload will succeed, but file uploads will fail
+	err = sender.Start()
+
+	// BUG: Currently Start() returns nil even though both file uploads failed.
+	// After fix: Should return an error indicating files failed to send.
+	if err == nil {
+		t.Error("Start() should return error when files fail to send (Issue #16)")
+	}
+}
+
+// TestForwardSender_Start_ReturnsNilOnSuccess verifies Start succeeds when all files transfer.
+func TestForwardSender_Start_ReturnsNilOnSuccess(t *testing.T) {
+	// Create a test server that accepts everything
+	app := fiber.New()
+
+	// Pre-upload handler - returns tokens for whatever files are requested
+	app.Post("/api/localsend/v2/prepare-upload", func(c *fiber.Ctx) error {
+		// Parse the request to get file IDs
+		var req struct {
+			Files map[string]interface{} `json:"files"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.SendStatus(400)
+		}
+
+		// Generate tokens for each file in the request
+		tokens := make(map[string]string)
+		for fileId := range req.Files {
+			tokens[fileId] = "token-" + fileId
+		}
+
+		return c.JSON(map[string]interface{}{
+			"sessionId": "test-session",
+			"files":     tokens,
+		})
+	})
+
+	// Upload handler - accept all uploads
+	app.Post("/api/localsend/v2/upload", func(c *fiber.Ctx) error {
+		return c.SendStatus(200)
+	})
+
+	// Start the test server
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+	defer ln.Close()
+
+	go func() { _ = app.Listener(ln) }()
+	defer func() { _ = app.Shutdown() }()
+
+	// Get the port
+	addr := ln.Addr().(*net.TCPAddr)
+	port := fmt.Sprintf("%d", addr.Port)
+
+	// Create temp file
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "file1.txt")
+	_ = os.WriteFile(testFile, []byte("content"), 0644)
+
+	// Setup sender
+	sender := NewForwardSender()
+	target := &models.DeviceInfo{
+		Alias: "TestDevice",
+		IP:    "127.0.0.1",
+	}
+	_ = sender.Init(target, false)
+	sender.SetRemotePort(port)
+	_ = sender.AddFile(testFile)
+
+	// Call Start - should succeed
+	err = sender.Start()
+
+	// Should return nil when all files transfer successfully
+	if err != nil {
+		t.Errorf("Start() should return nil on success, got: %v", err)
+	}
 }
 
 func TestReverseSender_DownloadHandler(t *testing.T) {

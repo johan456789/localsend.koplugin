@@ -4,6 +4,7 @@ package localsend_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -334,7 +335,7 @@ func TestIntegration_EndToEnd_RealHTTP(t *testing.T) {
 		// Start receiver in background
 		serverErr := make(chan error, 1)
 		go func() {
-			serverErr <- receiver.Start()
+			serverErr <- receiver.Start(context.Background())
 		}()
 
 		// Wait for server to be ready
@@ -410,7 +411,7 @@ func TestIntegration_EndToEnd_RealHTTP(t *testing.T) {
 
 		// Start receiver
 		go func() {
-			_ = receiver.Start()
+			_ = receiver.Start(context.Background())
 		}()
 
 		infoURL := fmt.Sprintf("http://127.0.0.1:%d/api/localsend/v2/info", port)

@@ -233,72 +233,8 @@ describe("I/O Error Handling", function()
         end)
     end)
 
-    describe("os.execute() failure handling", function()
-        describe("setupCertificates", function()
-            it("does not crash when makePath fails", function()
-                path_exists_map["/tmp/koreader/plugins/localsend.koplugin/certs"] = false
-
-                -- Mock makePath to fail
-                _G._test_makePath_should_fail = true
-
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
-
-                -- Should not throw
-                assert.has_no.errors(function()
-                    instance:setupCertificates()
-                end)
-
-                _G._test_makePath_should_fail = nil
-            end)
-
-            it("does not crash when symlink creation fails", function()
-                path_exists_map["/tmp/koreader/plugins/localsend.koplugin/certs"] = true
-                path_exists_map["/tmp/koreader/plugins/localsend.koplugin/certs/server.key.pem"] = true
-                path_exists_map["/tmp/koreader/plugins/localsend.koplugin/certs/server.crt"] = true
-
-                _G.os.execute = function(cmd)
-                    if cmd:match("ln %-sf") then return 1 end
-                    return 0
-                end
-
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
-
-                -- Should not throw
-                assert.has_no.errors(function()
-                    instance:setupCertificates()
-                end)
-            end)
-        end)
-
-        describe("saveCertificates", function()
-            it("does not crash when copy fails", function()
-                path_exists_map["/tmp/server.key.pem"] = true
-                path_exists_map["/tmp/server.crt"] = true
-                path_exists_map["/tmp/koreader/plugins/localsend.koplugin/certs/server.key.pem"] = false
-
-                _G.os.execute = function(cmd)
-                    if cmd:match("cp ") then return 1 end
-                    return 0
-                end
-
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
-
-                -- Should not throw
-                assert.has_no.errors(function()
-                    instance:saveCertificates()
-                end)
-            end)
-        end)
-    end)
+    -- Note: setupCertificates and saveCertificates tests removed.
+    -- Go now manages certificates directly in a certs/ folder next to the binary.
 
     describe("JSON encode failure handling", function()
         describe("exportExtRouting", function()

@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/webrtc/signaling"
-	"github.com/google/uuid"
 )
 
 const (
@@ -332,7 +332,7 @@ func (s *RTCSender) handleTokenResponse(msg interface{}, msgType string, data []
 			return
 		}
 
-		if s.pinAttempts >= 3 {
+		if s.pinAttempts >= maxPINAttempts {
 			s.errors <- fmt.Errorf("max PIN attempts reached")
 			return
 		}

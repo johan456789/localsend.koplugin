@@ -31,8 +31,8 @@ type DCHandshakeMessage struct {
 type DCPinMessage struct {
 	Type string `json:"type"`
 	Pin  string `json:"pin,omitempty"`
-	Try  int    `json:"try,omitempty"`  // Current attempt number
-	Max  int    `json:"max,omitempty"`  // Maximum attempts
+	Try  int    `json:"try,omitempty"` // Current attempt number
+	Max  int    `json:"max,omitempty"` // Maximum attempts
 }
 
 // DCFilesMessage contains file metadata from sender.

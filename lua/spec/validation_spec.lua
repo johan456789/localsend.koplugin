@@ -297,5 +297,51 @@ describe("Validation Functions", function()
             assert.is_false(valid)
             assert.truthy(err:match("letters") or err:match("characters"))
         end)
+
+        -- =====================================================================
+        -- Issue #17: validateDeviceName Nil Check
+        -- =====================================================================
+
+        -- This test SHOULD FAIL on the current codebase.
+        -- The current implementation checks `if name == ""` which passes for nil,
+        -- but then `#name` on line 91 will error because #nil is invalid in Lua.
+        it("handles nil name without error", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            -- Passing nil should not cause an error
+            -- Current code: if name == "" then  -- nil passes this check
+            --               if #name > 64 then  -- ERROR: #nil is invalid!
+            local ok, result = pcall(function()
+                return instance:validateDeviceName(nil)
+            end)
+
+            -- The function should handle nil gracefully
+            assert.is_true(ok, "validateDeviceName should not error on nil input")
+            if ok then
+                -- If it doesn't error, it should treat nil as valid (empty = random name)
+                assert.is_true(result, "nil should be treated as valid (empty name)")
+            end
+        end)
+
+        -- Additional nil edge case tests
+        it("handles nil from settings gracefully", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            -- Simulate what happens when settings return nil for device_name
+            -- This is a common scenario when the setting hasn't been configured
+            local device_name = nil  -- simulates G_reader_settings:readSetting("localsend_device_name")
+
+            local ok, err_or_result = pcall(function()
+                return instance:validateDeviceName(device_name)
+            end)
+
+            assert.is_true(ok, "Should handle nil from settings without error: " .. tostring(err_or_result))
+        end)
     end)
 end)

@@ -197,7 +197,7 @@ describe("Server Restart and Certificate Functions", function()
     end)
 
     describe("rotateCertificates", function()
-        it("removes certificate files", function()
+        it("removes certificate files from certs folder", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
@@ -206,17 +206,17 @@ describe("Server Restart and Certificate Functions", function()
             os_execute_calls = {}
             instance:rotateCertificates()
 
-            -- Should have 4 rm commands for key and cert in both locations
+            -- Should have 2 rm commands for key and cert in certs folder
             local rm_count = 0
             for _, cmd in ipairs(os_execute_calls) do
                 if cmd:match("^'rm' '%-f'") then
                     rm_count = rm_count + 1
                 end
             end
-            assert.equal(4, rm_count, "Should remove 4 certificate files")
+            assert.equal(2, rm_count, "Should remove 2 certificate files")
         end)
 
-        it("removes server.key.pem from storage", function()
+        it("removes server.key.pem from certs folder", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
@@ -227,15 +227,15 @@ describe("Server Restart and Certificate Functions", function()
 
             local found = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("server%.key%.pem") and cmd:match("koreader") then
+                if cmd:match("certs/server%.key%.pem") then
                     found = true
                     break
                 end
             end
-            assert.is_true(found, "Should remove server.key.pem from storage")
+            assert.is_true(found, "Should remove server.key.pem from certs folder")
         end)
 
-        it("removes server.crt from storage", function()
+        it("removes server.crt from certs folder", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
@@ -246,35 +246,12 @@ describe("Server Restart and Certificate Functions", function()
 
             local found = false
             for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("server%.crt") and cmd:match("koreader") then
+                if cmd:match("certs/server%.crt") then
                     found = true
                     break
                 end
             end
-            assert.is_true(found, "Should remove server.crt from storage")
-        end)
-
-        it("removes temp certificate files", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
-            os_execute_calls = {}
-            instance:rotateCertificates()
-
-            local found_tmp_key = false
-            local found_tmp_crt = false
-            for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("/tmp/server%.key%.pem") then
-                    found_tmp_key = true
-                end
-                if cmd:match("/tmp/server%.crt") then
-                    found_tmp_crt = true
-                end
-            end
-            assert.is_true(found_tmp_key, "Should remove /tmp/server.key.pem")
-            assert.is_true(found_tmp_crt, "Should remove /tmp/server.crt")
+            assert.is_true(found, "Should remove server.crt from certs folder")
         end)
 
         it("shows success notification", function()

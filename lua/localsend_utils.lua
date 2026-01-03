@@ -86,8 +86,8 @@ end
 
 -- Validate device name for LocalSend
 function M.validateDeviceName(name)
-    -- Empty name is valid (will use random name)
-    if name == "" then
+    -- Empty or nil name is valid (will use random name)
+    if name == nil or name == "" then
         return true
     end
 

@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"net"
 
+	"github.com/gofiber/fiber/v2"
 	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/localsend/send"
 	"localsend-cli/internal/models"
 	"localsend-cli/internal/utils"
-	"github.com/gofiber/fiber/v2"
 )
 
 // validDeviceTypes are the allowed deviceType values per protocol spec Section 7.1

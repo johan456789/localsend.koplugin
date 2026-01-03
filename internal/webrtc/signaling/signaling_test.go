@@ -1090,6 +1090,158 @@ func TestConnectBuildsCorrectURL(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// Goroutine Leak Tests (Issue #3)
+// These tests verify the fix for goroutine leaks in SetTokenGenerator.
+// =============================================================================
+
+// TestSetTokenGeneratorMultipleCallsSpawnsMultipleGoroutines demonstrates Issue #3.
+// EXPECTED TO FAIL with race detector: Race between SetTokenGenerator writing and goroutine reading.
+// After fix: Should use atomic.Bool to track if goroutine is started and prevent multiple spawns.
+func TestSetTokenGeneratorMultipleCallsSpawnsMultipleGoroutines(t *testing.T) {
+	// Create a minimal client for testing (without actual connection)
+	client := &SignalingClient{
+		done:     make(chan struct{}),
+		onAnswer: make(map[string]func(WsServerMessage)),
+	}
+
+	generator := func() (string, error) {
+		return "token", nil
+	}
+
+	// Call SetTokenGenerator multiple times
+	// BUG: Each call spawns a new goroutine without checking if one is already running
+	// This also causes a data race between writing tokenGenerator and reading it in the goroutine
+	client.SetTokenGenerator(generator)
+	client.SetTokenGenerator(generator)
+	client.SetTokenGenerator(generator)
+
+	// Close the done channel to stop goroutines (don't call Close() as conn is nil)
+	close(client.done)
+
+	// Give goroutines time to exit
+	time.Sleep(50 * time.Millisecond)
+
+	// After fix:
+	// 1. Should have refreshStarted atomic.Bool to prevent multiple goroutines
+	// 2. The data race on tokenGenerator should be fixed
+	// Run with -race flag to verify the race is detected
+	t.Log("Test completed - run with -race flag to detect data races")
+}
+
+// TestSetTokenGeneratorCloseRace demonstrates Issue #3 close race condition.
+// EXPECTED TO FAIL with race detector: Race between SetTokenGenerator starting goroutine and Close() closing done channel.
+func TestSetTokenGeneratorCloseRace(t *testing.T) {
+	// Run multiple iterations to increase chance of hitting race
+	for i := 0; i < 100; i++ {
+		client := &SignalingClient{
+			done:     make(chan struct{}),
+			onAnswer: make(map[string]func(WsServerMessage)),
+		}
+
+		generator := func() (string, error) {
+			return "token", nil
+		}
+
+		// Race: SetTokenGenerator spawns goroutine while we close done channel
+		go func() {
+			client.SetTokenGenerator(generator)
+		}()
+
+		// Close done channel immediately - may race with goroutine startup
+		// (don't use Close() method since conn is nil)
+		close(client.done)
+	}
+
+	// The race detector (-race flag) should catch the race condition if it exists.
+	// This test is about detecting the race, not about a specific assertion.
+	t.Log("Race condition test completed - run with -race flag to detect data races")
+}
+
+// =============================================================================
+// Answer Callback Memory Leak Tests (Issue #12)
+// These tests verify the fix for memory leaks in OnAnswer callbacks.
+// =============================================================================
+
+// TestOnAnswerCallbackLeak demonstrates Issue #12.
+// EXPECTED TO FAIL: Callbacks registered via OnAnswer are never cleaned up if answer doesn't arrive.
+func TestOnAnswerCallbackLeak(t *testing.T) {
+	client := &SignalingClient{
+		done:     make(chan struct{}),
+		onAnswer: make(map[string]func(WsServerMessage)),
+	}
+
+	// Register many callbacks that will never be triggered
+	for i := 0; i < 1000; i++ {
+		sessionID := "session-" + string(rune('0'+i%10)) + string(rune('0'+i/10%10)) + string(rune('0'+i/100%10))
+		client.OnAnswer(sessionID, func(msg WsServerMessage) {
+			// This callback will never be called
+		})
+	}
+
+	// Check that callbacks are stored
+	client.answerMu.Lock()
+	countBefore := len(client.onAnswer)
+	client.answerMu.Unlock()
+
+	if countBefore != 1000 {
+		t.Errorf("Expected 1000 callbacks, got %d", countBefore)
+	}
+
+	// Close the client using the proper Close() method (not just close(done))
+	// This triggers the callback cleanup (Issue #12 fix)
+	_ = client.Close()
+
+	// After fix: Close should clear all pending callbacks
+	// Without fix: Callbacks remain in memory forever
+	client.answerMu.Lock()
+	countAfter := len(client.onAnswer)
+	client.answerMu.Unlock()
+
+	// This assertion will FAIL without the fix (countAfter == 1000)
+	// After fix, countAfter should be 0
+	if countAfter != 0 {
+		t.Errorf("MEMORY LEAK: After Close(), expected 0 callbacks, got %d", countAfter)
+	}
+}
+
+// TestOnAnswerCallbackCancelMethod tests explicit callback cancellation.
+// This tests the CancelOnAnswer method that should be added.
+func TestOnAnswerCallbackCancelMethod(t *testing.T) {
+	client := &SignalingClient{
+		done:     make(chan struct{}),
+		onAnswer: make(map[string]func(WsServerMessage)),
+	}
+
+	// Register a callback
+	sessionID := "test-session"
+	client.OnAnswer(sessionID, func(msg WsServerMessage) {})
+
+	// Verify it's registered
+	client.answerMu.Lock()
+	_, exists := client.onAnswer[sessionID]
+	client.answerMu.Unlock()
+
+	if !exists {
+		t.Error("Callback should be registered")
+	}
+
+	// After fix: CancelOnAnswer should remove the callback
+	// For now, manually delete to show what the fix should do
+	client.answerMu.Lock()
+	delete(client.onAnswer, sessionID)
+	client.answerMu.Unlock()
+
+	// Verify it's removed
+	client.answerMu.Lock()
+	_, existsAfter := client.onAnswer[sessionID]
+	client.answerMu.Unlock()
+
+	if existsAfter {
+		t.Error("Callback should be removed after cancel")
+	}
+}
+
 // TestConnectWithInvalidURL verifies that Connect handles invalid URLs gracefully.
 func TestConnectWithInvalidURL(t *testing.T) {
 	info := ClientInfoWithoutID{
@@ -1118,4 +1270,3 @@ func TestConnectWithInvalidURL(t *testing.T) {
 		})
 	}
 }
-

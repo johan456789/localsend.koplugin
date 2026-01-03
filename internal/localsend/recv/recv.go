@@ -8,7 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"path/filepath"
+	"sync"
 	"time"
 
 	"localsend-cli/internal/localsend"
@@ -17,6 +17,7 @@ import (
 	lsutils "localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/models"
 	"localsend-cli/internal/utils"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -29,10 +30,14 @@ type FileReceiver struct {
 	saveToDir         string
 	discoverier       *localsend.Discoverier
 	expectedPin       string
-	allowedExtensions []string          // New field for extension filtering
-	transferLogPath   string            // Path to transfer log file
-	router            *ExtensionRouter  // Routes files to different dirs by extension
-	listenAddr        string            // Custom listen address (defaults to constants.DefaultListenAddr)
+	allowedExtensions []string         // New field for extension filtering
+	transferLogPath   string           // Path to transfer log file
+	router            *ExtensionRouter // Routes files to different dirs by extension
+	listenAddr        string           // Custom listen address (defaults to constants.DefaultListenAddr)
+
+	// configMu protects configuration fields that can be modified after creation
+	// (expectedPin, allowedExtensions, transferLogPath, router, listenAddr)
+	configMu sync.RWMutex
 
 	// V3 nonce caches for token verification
 	receivedNonceCache  *localsend.NonceCache // nonces received from clients
@@ -62,26 +67,38 @@ func NewFileReceiver(devname string, saveToDir string, supportHttps bool) *FileR
 }
 
 func (fr *FileReceiver) SetPIN(pin string) {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
 	fr.expectedPin = pin
 }
 
 // SetListenAddr sets a custom listen address (e.g., "127.0.0.1:0" for random port).
 // Must be called before Start().
 func (fr *FileReceiver) SetListenAddr(addr string) {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
 	fr.listenAddr = addr
 }
 
 // ListenAddr returns the configured listen address.
 func (fr *FileReceiver) ListenAddr() string {
+	fr.configMu.RLock()
+	defer fr.configMu.RUnlock()
 	return fr.listenAddr
 }
 
 func (fr *FileReceiver) SetTransferLog(path string) {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
 	fr.transferLogPath = path
 }
 
 func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) {
-	if fr.transferLogPath == "" {
+	fr.configMu.RLock()
+	logPath := fr.transferLogPath
+	fr.configMu.RUnlock()
+
+	if logPath == "" {
 		return
 	}
 
@@ -99,7 +116,7 @@ func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) 
 		return
 	}
 
-	f, err := os.OpenFile(fr.transferLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		slog.Error("Failed to open transfer log", "error", err)
 		return
@@ -114,6 +131,8 @@ func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) 
 // Extensions should be lowercase without the leading dot (e.g., "pdf", "epub").
 // If empty or nil, all extensions are accepted.
 func (fr *FileReceiver) SetAllowedExtensions(extensions []string) {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
 	fr.allowedExtensions = extensions
 	if len(extensions) > 0 {
 		slog.Info("File extension filter enabled", "allowed", extensions)
@@ -122,14 +141,20 @@ func (fr *FileReceiver) SetAllowedExtensions(extensions []string) {
 
 // SetExtensionRouter sets the router for extension-based directory routing.
 func (fr *FileReceiver) SetExtensionRouter(router *ExtensionRouter) {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
 	fr.router = router
 }
 
 // GetSaveDir returns the appropriate save directory for a file.
 // Uses the router if configured, otherwise falls back to the default saveToDir.
 func (fr *FileReceiver) GetSaveDir(filename string) string {
-	if fr.router != nil {
-		return fr.router.GetSaveDir(filename)
+	fr.configMu.RLock()
+	router := fr.router
+	fr.configMu.RUnlock()
+
+	if router != nil {
+		return router.GetSaveDir(filename)
 	}
 	return fr.saveToDir
 }
@@ -137,7 +162,26 @@ func (fr *FileReceiver) GetSaveDir(filename string) string {
 // IsExtensionAllowed checks if a filename has an allowed extension.
 // Returns true if no filter is set or if the extension is in the allowed list.
 func (fr *FileReceiver) IsExtensionAllowed(filename string) bool {
-	return utils.IsExtensionAllowed(filename, fr.allowedExtensions)
+	fr.configMu.RLock()
+	allowed := fr.allowedExtensions
+	fr.configMu.RUnlock()
+	return utils.IsExtensionAllowed(filename, allowed)
+}
+
+// getExpectedPIN returns the expected PIN in a thread-safe manner.
+// Used by handlers to check PIN without races.
+func (fr *FileReceiver) getExpectedPIN() string {
+	fr.configMu.RLock()
+	defer fr.configMu.RUnlock()
+	return fr.expectedPin
+}
+
+// hasExtensionFilter returns true if an extension filter is configured.
+// Used by handlers to check if filtering is needed.
+func (fr *FileReceiver) hasExtensionFilter() bool {
+	fr.configMu.RLock()
+	defer fr.configMu.RUnlock()
+	return len(fr.allowedExtensions) > 0
 }
 
 func (fr *FileReceiver) Init() error {
@@ -152,10 +196,11 @@ func (fr *FileReceiver) Init() error {
 	if fr.supportHttps {
 		slog.Info("Generating https certificate")
 
-		// load cert for https server
-		// TODO: save certificate in user config directory
-		privkeyFile := filepath.Join(os.TempDir(), "server.key.pem")
-		certFile := filepath.Join(os.TempDir(), "server.crt")
+		// Get cert paths from the certs directory next to the binary
+		privkeyFile, certFile, err := lsutils.GetCertPaths()
+		if err != nil {
+			return fmt.Errorf("failed to get certificate paths: %w", err)
+		}
 		fr.cert, err = lsutils.LoadOrGenTLScert(privkeyFile, certFile)
 		if err != nil {
 			return fmt.Errorf("failed to load or generate TLS certificate: %w", err)
@@ -177,7 +222,7 @@ func (fr *FileReceiver) Init() error {
 	return nil
 }
 
-func (fr *FileReceiver) Start() error {
+func (fr *FileReceiver) Start(ctx context.Context) error {
 	server := fr.webServer
 
 	// V2 routes
@@ -200,6 +245,12 @@ func (fr *FileReceiver) Start() error {
 	slog.Info("Waiting for files (Ctrl-C to terminate)")
 
 	go func() { _ = fr.advertise() }() // let others know we are here
+
+	// Issue #25 fix: Listen for context cancellation to trigger graceful shutdown
+	go func() {
+		<-ctx.Done()
+		_ = fr.Stop()
+	}()
 
 	return lsutils.ListenWithTLS(fr.webServer, fr.listenAddr, fr.cert, fr.supportHttps)
 }

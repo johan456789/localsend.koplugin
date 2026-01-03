@@ -8,21 +8,21 @@ import (
 // TestParseRTCMessageNonce tests parsing of nonce messages.
 func TestParseRTCMessageNonce(t *testing.T) {
 	jsonData := `{"nonce":"xLJNxeKwfKvx1IYqVE_cYAUF54R547Aq6C_E_p_eilk"}`
-	
+
 	msg, msgType, err := ParseRTCMessage([]byte(jsonData))
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	
+
 	if msgType != "nonce" {
 		t.Errorf("msgType = %q; want 'nonce'", msgType)
 	}
-	
+
 	nonceMsg, ok := msg.(*RTCNonceMessage)
 	if !ok {
 		t.Fatalf("msg is not *RTCNonceMessage")
 	}
-	
+
 	if nonceMsg.Nonce != "xLJNxeKwfKvx1IYqVE_cYAUF54R547Aq6C_E_p_eilk" {
 		t.Errorf("Nonce = %q; want expected value", nonceMsg.Nonce)
 	}
@@ -31,21 +31,21 @@ func TestParseRTCMessageNonce(t *testing.T) {
 // TestParseRTCMessageTokenRequest tests parsing of token request messages.
 func TestParseRTCMessageTokenRequest(t *testing.T) {
 	jsonData := `{"token":"sha256.abc123.def456.ed25519.sig789"}`
-	
+
 	msg, msgType, err := ParseRTCMessage([]byte(jsonData))
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	
+
 	if msgType != "token_request" {
 		t.Errorf("msgType = %q; want 'token_request'", msgType)
 	}
-	
+
 	tokenMsg, ok := msg.(*RTCTokenRequest)
 	if !ok {
 		t.Fatalf("msg is not *RTCTokenRequest")
 	}
-	
+
 	if tokenMsg.Token != "sha256.abc123.def456.ed25519.sig789" {
 		t.Errorf("Token = %q; want expected value", tokenMsg.Token)
 	}
@@ -55,21 +55,21 @@ func TestParseRTCMessageTokenRequest(t *testing.T) {
 // IMPORTANT: FileHeader has both id AND token, so it must be detected before TokenRequest.
 func TestParseRTCMessageFileHeader(t *testing.T) {
 	jsonData := `{"id":"0","token":"1766963574926146000"}`
-	
+
 	msg, msgType, err := ParseRTCMessage([]byte(jsonData))
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	
+
 	if msgType != "file_header" {
 		t.Errorf("msgType = %q; want 'file_header'", msgType)
 	}
-	
+
 	header, ok := msg.(*RTCSendFileHeader)
 	if !ok {
 		t.Fatalf("msg is not *RTCSendFileHeader")
 	}
-	
+
 	if header.ID != "0" {
 		t.Errorf("ID = %q; want '0'", header.ID)
 	}
@@ -81,21 +81,21 @@ func TestParseRTCMessageFileHeader(t *testing.T) {
 // TestParseRTCMessageFileList tests parsing of file list messages.
 func TestParseRTCMessageFileList(t *testing.T) {
 	jsonData := `{"status":"OK","files":[{"id":"0","fileName":"test.md","size":1024,"fileType":"text/markdown"}]}`
-	
+
 	msg, msgType, err := ParseRTCMessage([]byte(jsonData))
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	
+
 	if msgType != "file_list" {
 		t.Errorf("msgType = %q; want 'file_list'", msgType)
 	}
-	
+
 	fileList, ok := msg.(*RTCPinSendingResponse)
 	if !ok {
 		t.Fatalf("msg is not *RTCPinSendingResponse")
 	}
-	
+
 	if fileList.Status != "OK" {
 		t.Errorf("Status = %q; want 'OK'", fileList.Status)
 	}
@@ -110,21 +110,21 @@ func TestParseRTCMessageFileList(t *testing.T) {
 // TestParseRTCMessagePin tests parsing of PIN messages.
 func TestParseRTCMessagePin(t *testing.T) {
 	jsonData := `{"pin":"123456"}`
-	
+
 	msg, msgType, err := ParseRTCMessage([]byte(jsonData))
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	
+
 	if msgType != "pin" {
 		t.Errorf("msgType = %q; want 'pin'", msgType)
 	}
-	
+
 	pinMsg, ok := msg.(*RTCPinMessage)
 	if !ok {
 		t.Fatalf("msg is not *RTCPinMessage")
 	}
-	
+
 	if pinMsg.Pin != "123456" {
 		t.Errorf("Pin = %q; want '123456'", pinMsg.Pin)
 	}
@@ -133,12 +133,12 @@ func TestParseRTCMessagePin(t *testing.T) {
 // TestParseRTCMessagePinResponse tests parsing of PIN response messages.
 func TestParseRTCMessagePinResponse(t *testing.T) {
 	jsonData := `{"status":"OK"}`
-	
+
 	_, msgType, err := ParseRTCMessage([]byte(jsonData))
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	
+
 	if msgType != "status_OK" {
 		t.Errorf("msgType = %q; want 'status_OK'", msgType)
 	}
@@ -147,12 +147,12 @@ func TestParseRTCMessagePinResponse(t *testing.T) {
 // TestParseRTCMessageTooManyAttempts tests parsing of too many attempts status.
 func TestParseRTCMessageTooManyAttempts(t *testing.T) {
 	jsonData := `{"status":"TOO_MANY_ATTEMPTS"}`
-	
+
 	_, msgType, err := ParseRTCMessage([]byte(jsonData))
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	
+
 	if msgType != "status_TOO_MANY_ATTEMPTS" {
 		t.Errorf("msgType = %q; want 'status_TOO_MANY_ATTEMPTS'", msgType)
 	}
@@ -161,12 +161,12 @@ func TestParseRTCMessageTooManyAttempts(t *testing.T) {
 // TestParseRTCMessageUnknown tests that unknown messages return nil.
 func TestParseRTCMessageUnknown(t *testing.T) {
 	jsonData := `{"unknown":"field"}`
-	
+
 	msg, msgType, err := ParseRTCMessage([]byte(jsonData))
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	
+
 	if msg != nil {
 		t.Errorf("msg = %v; want nil", msg)
 	}
@@ -181,17 +181,17 @@ func TestRTCFileListResponseSerialization(t *testing.T) {
 		Status: "OK",
 		Files:  map[string]string{"0": "token123", "1": "token456"},
 	}
-	
+
 	data, err := json.Marshal(response)
 	if err != nil {
 		t.Fatalf("Failed to marshal: %v", err)
 	}
-	
+
 	var parsed RTCFileListResponse
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("Failed to unmarshal: %v", err)
 	}
-	
+
 	if parsed.Status != "OK" {
 		t.Errorf("Status = %q; want 'OK'", parsed.Status)
 	}
@@ -206,12 +206,12 @@ func TestRTCFileListResponseSerialization(t *testing.T) {
 // TestRTCNonceMessageSerialization tests JSON serialization of nonce message.
 func TestRTCNonceMessageSerialization(t *testing.T) {
 	nonce := RTCNonceMessage{Nonce: "test-nonce-base64"}
-	
+
 	data, err := json.Marshal(nonce)
 	if err != nil {
 		t.Fatalf("Failed to marshal: %v", err)
 	}
-	
+
 	expected := `{"nonce":"test-nonce-base64"}`
 	if string(data) != expected {
 		t.Errorf("Serialized = %q; want %q", string(data), expected)
@@ -236,7 +236,7 @@ func TestRTCTokenResponseSerialization(t *testing.T) {
 			expected: `{"status":"PIN_REQUIRED","token":"sha256.def"}`,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, err := json.Marshal(tt.response)
@@ -255,10 +255,10 @@ func TestRTCTokenResponseSerialization(t *testing.T) {
 func TestFileHeaderVsTokenRequestParsing(t *testing.T) {
 	// This message has both "id" and "token" - must be file_header, not token_request
 	fileHeaderJSON := `{"id":"0","token":"1766963574926146000"}`
-	
+
 	// This message has only "token" - must be token_request
 	tokenRequestJSON := `{"token":"sha256.hash.salt.ed25519.sig"}`
-	
+
 	// Test file header
 	msg1, type1, _ := ParseRTCMessage([]byte(fileHeaderJSON))
 	if type1 != "file_header" {
@@ -267,7 +267,7 @@ func TestFileHeaderVsTokenRequestParsing(t *testing.T) {
 	if _, ok := msg1.(*RTCSendFileHeader); !ok {
 		t.Error("File header not parsed as RTCSendFileHeader")
 	}
-	
+
 	// Test token request
 	msg2, type2, _ := ParseRTCMessage([]byte(tokenRequestJSON))
 	if type2 != "token_request" {
@@ -287,21 +287,21 @@ func TestFileHeaderVsTokenRequestParsing(t *testing.T) {
 // From Rust: rtc_file_list_response_encoding (webrtc.rs)
 func TestRustVectorFileListResponsePair(t *testing.T) {
 	expected := `{"status":"PAIR","publicKey":"123"}`
-	
+
 	response := RTCFileListResponse{
 		Status:    "PAIR",
 		PublicKey: "123",
 	}
-	
+
 	data, err := json.Marshal(response)
 	if err != nil {
 		t.Fatalf("Marshal failed: %v", err)
 	}
-	
+
 	if string(data) != expected {
 		t.Errorf("JSON mismatch.\nGot:  %s\nWant: %s", string(data), expected)
 	}
-	
+
 	// Verify round-trip
 	var parsed RTCFileListResponse
 	if err := json.Unmarshal([]byte(expected), &parsed); err != nil {
@@ -321,22 +321,22 @@ func TestRustVectorFileListResponseOK(t *testing.T) {
 		Status: "OK",
 		Files:  map[string]string{"file1": "token1", "file2": "token2"},
 	}
-	
+
 	data, err := json.Marshal(response)
 	if err != nil {
 		t.Fatalf("Marshal failed: %v", err)
 	}
-	
+
 	// Verify it has expected structure
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
-	
+
 	if parsed["status"] != "OK" {
 		t.Errorf("status = %v; want 'OK'", parsed["status"])
 	}
-	
+
 	files, ok := parsed["files"].(map[string]interface{})
 	if !ok {
 		t.Fatal("files is not a map")
@@ -352,11 +352,11 @@ func TestRustVectorFileListResponseOK(t *testing.T) {
 func TestRustVectorChunkProcessing(t *testing.T) {
 	// ChunkSize should be 16 * 1024 = 16384 (from sender.go)
 	const chunkSize = 16 * 1024 // Local constant for testing
-	
+
 	// Input: CHUNK_SIZE * 2 + 5 = 32773 bytes
 	inputSize := chunkSize*2 + 5
 	data := make([]byte, inputSize)
-	
+
 	// Fill with pattern (matching Rust test)
 	for i := 0; i < ChunkSize; i++ {
 		data[i] = 0
@@ -367,7 +367,7 @@ func TestRustVectorChunkProcessing(t *testing.T) {
 	for i := ChunkSize * 2; i < inputSize; i++ {
 		data[i] = 2
 	}
-	
+
 	// Split into chunks
 	var chunks [][]byte
 	for i := 0; i < len(data); i += ChunkSize {
@@ -377,12 +377,12 @@ func TestRustVectorChunkProcessing(t *testing.T) {
 		}
 		chunks = append(chunks, data[i:end])
 	}
-	
+
 	// Verify chunk count
 	if len(chunks) != 3 {
 		t.Errorf("Chunk count = %d; want 3", len(chunks))
 	}
-	
+
 	// Verify chunk sizes
 	if len(chunks[0]) != ChunkSize {
 		t.Errorf("Chunk 0 size = %d; want %d", len(chunks[0]), ChunkSize)
@@ -393,7 +393,7 @@ func TestRustVectorChunkProcessing(t *testing.T) {
 	if len(chunks[2]) != 5 {
 		t.Errorf("Chunk 2 size = %d; want 5", len(chunks[2]))
 	}
-	
+
 	// Verify chunk contents match Rust test pattern
 	allZeros := true
 	for _, b := range chunks[0] {
@@ -405,7 +405,7 @@ func TestRustVectorChunkProcessing(t *testing.T) {
 	if !allZeros {
 		t.Error("Chunk 0 should contain all zeros")
 	}
-	
+
 	allOnes := true
 	for _, b := range chunks[1] {
 		if b != 1 {
@@ -416,7 +416,7 @@ func TestRustVectorChunkProcessing(t *testing.T) {
 	if !allOnes {
 		t.Error("Chunk 1 should contain all ones")
 	}
-	
+
 	allTwos := true
 	for _, b := range chunks[2] {
 		if b != 2 {
@@ -610,4 +610,3 @@ func TestRTCErrorResponseUsage(t *testing.T) {
 		t.Errorf("Serialized = %q; want %q", string(data), expected)
 	}
 }
-

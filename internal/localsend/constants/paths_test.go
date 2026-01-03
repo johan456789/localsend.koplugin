@@ -4,9 +4,9 @@ import "testing"
 
 func TestDeviceTypeCasing(t *testing.T) {
 	tests := []struct {
-		input    string
-		toV3     string
-		fromV3   string
+		input  string
+		toV3   string
+		fromV3 string
 	}{
 		{"mobile", "MOBILE", "mobile"},
 		{"desktop", "DESKTOP", "desktop"},
@@ -30,9 +30,9 @@ func TestDeviceTypeCasing(t *testing.T) {
 
 func TestProtocolCasing(t *testing.T) {
 	tests := []struct {
-		input    string
-		toV3     string
-		fromV3   string
+		input  string
+		toV3   string
+		fromV3 string
 	}{
 		{"http", "HTTP", "http"},
 		{"https", "HTTPS", "https"},

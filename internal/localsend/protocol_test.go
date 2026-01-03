@@ -26,7 +26,7 @@ func TestFingerprintSelfDiscovery(t *testing.T) {
 	// We need to access private fields or use a method that processes announcements
 	// Since we can't easily punch into the UDP read loop, we check the logic in readAndRegister
 	// that we modified.
-	
+
 	if anno.Fingerprint == disc.selfAnno.Fingerprint {
 		// This is the logic we added. If it matches, it should return nil/ignore.
 		t.Log("Fingerprint matches, device would be ignored")

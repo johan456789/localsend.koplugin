@@ -8,12 +8,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spf13/cobra"
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/localsend"
 	"localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/models"
 	"localsend-cli/internal/webrtc/signaling"
-	"github.com/spf13/cobra"
 )
 
 var (

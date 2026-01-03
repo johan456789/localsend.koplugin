@@ -129,13 +129,45 @@ describe("Transfer Log", function()
                     return nil
                 end
                 local pos = 1
+                local byte_pos = 0
+                -- Calculate total byte length
+                local total_bytes = 0
+                for _, line in ipairs(mock_file_content) do
+                    total_bytes = total_bytes + #line + 1  -- +1 for newline
+                end
+
                 return {
                     lines = function(self)
                         return function()
                             if pos > #mock_file_content then return nil end
                             local line = mock_file_content[pos]
+                            byte_pos = byte_pos + #line + 1
                             pos = pos + 1
                             return line
+                        end
+                    end,
+                    seek = function(self, whence, offset)
+                        offset = offset or 0
+                        if whence == "end" then
+                            byte_pos = total_bytes
+                            return total_bytes
+                        elseif whence == "set" then
+                            byte_pos = offset
+                            -- Find which line we're at
+                            local current_bytes = 0
+                            pos = 1
+                            for i, line in ipairs(mock_file_content) do
+                                local line_end = current_bytes + #line + 1
+                                if offset < line_end then
+                                    pos = i
+                                    break
+                                end
+                                current_bytes = line_end
+                                pos = i + 1
+                            end
+                            return byte_pos
+                        else
+                            return byte_pos
                         end
                     end,
                     close = function() end,
@@ -254,6 +286,60 @@ describe("Transfer Log", function()
             local count = instance:getTransferCount()
             -- Counts lines, not valid entries
             assert.equal(3, count)
+        end)
+    end)
+
+    -- Issue #13: Test optimized log reading with position tracking
+    describe("getNewTransfers (Issue #13 optimization)", function()
+        it("returns empty table when log file doesn't exist", function()
+            file_exists = false
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local transfers = instance:getNewTransfers()
+            assert.same({}, transfers)
+            assert.equal(0, instance.last_log_position)
+        end)
+
+        it("returns all entries on first read", function()
+            file_exists = true
+            mock_file_content = {
+                '{"filename":"test.epub","size":1024}',
+                '{"filename":"book.pdf","size":2048}',
+            }
+
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            instance.last_log_position = 0
+
+            local transfers = instance:getNewTransfers()
+            assert.equal(2, #transfers)
+            assert.is_true(instance.last_log_position > 0)
+        end)
+
+        it("returns only new entries on subsequent reads", function()
+            file_exists = true
+            mock_file_content = {
+                '{"filename":"test.epub","size":1024}',
+            }
+
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            instance.last_log_position = 0
+
+            -- First read
+            local transfers1 = instance:getNewTransfers()
+            assert.equal(1, #transfers1)
+
+            -- Second read (no new entries)
+            local transfers2 = instance:getNewTransfers()
+            assert.equal(0, #transfers2)
         end)
     end)
 end)

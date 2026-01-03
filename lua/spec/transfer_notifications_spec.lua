@@ -142,13 +142,45 @@ describe("checkForNewTransfers", function()
             if path == "/tmp/localsend_transfers.log" and mode == "r" then
                 if not transfer_log_exists then return nil end
                 local pos = 1
+                local byte_pos = 0
+                -- Calculate total byte length
+                local total_bytes = 0
+                for _, line in ipairs(transfer_log_content) do
+                    total_bytes = total_bytes + #line + 1  -- +1 for newline
+                end
+
                 return {
                     lines = function(self)
                         return function()
                             if pos > #transfer_log_content then return nil end
                             local line = transfer_log_content[pos]
+                            byte_pos = byte_pos + #line + 1
                             pos = pos + 1
                             return line
+                        end
+                    end,
+                    seek = function(self, whence, offset)
+                        offset = offset or 0
+                        if whence == "end" then
+                            byte_pos = total_bytes
+                            return total_bytes
+                        elseif whence == "set" then
+                            byte_pos = offset
+                            -- Find which line we're at
+                            local current_bytes = 0
+                            pos = 1
+                            for i, line in ipairs(transfer_log_content) do
+                                local line_end = current_bytes + #line + 1
+                                if offset < line_end then
+                                    pos = i
+                                    break
+                                end
+                                current_bytes = line_end
+                                pos = i + 1
+                            end
+                            return byte_pos
+                        else
+                            return byte_pos
                         end
                     end,
                     close = function() end,
@@ -236,14 +268,15 @@ describe("checkForNewTransfers", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.isRunning = function() return true end
-            instance.last_transfer_count = 1 -- Already saw this one
+            -- Set position to end of file (already read)
+            instance.last_log_position = #transfer_log_content[1] + 1
 
             instance:checkForNewTransfers()
 
             assert.equal(0, #notifications_shown)
         end)
 
-        it("updates last_transfer_count after checking", function()
+        it("updates last_log_position after checking (Issue #13 optimization)", function()
             is_running = true
             transfer_log_exists = true
             transfer_log_content = {
@@ -255,11 +288,12 @@ describe("checkForNewTransfers", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.isRunning = function() return true end
-            instance.last_transfer_count = 0
+            instance.last_log_position = 0
 
             instance:checkForNewTransfers()
 
-            assert.equal(1, instance.last_transfer_count)
+            -- Position should be updated to track where we left off
+            assert.is_true(instance.last_log_position > 0)
         end)
 
         it("schedules next check in 5 seconds", function()
@@ -314,7 +348,11 @@ describe("checkForNewTransfers", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.isRunning = function() return true end
-            instance.last_transfer_count = 2
+
+            -- Simulate having already read the first 2 files by setting position
+            -- Each line is ~36-37 chars + newline, so position after 2 lines is ~75 bytes
+            local pos_after_two = #transfer_log_content[1] + 1 + #transfer_log_content[2] + 1
+            instance.last_log_position = pos_after_two
 
             -- Add a new file
             table.insert(transfer_log_content, '{"filename":"new.pdf","size":3072}')

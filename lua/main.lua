@@ -157,6 +157,7 @@ local LocalSend = WidgetContainer:extend{
     name = "LocalSend",
     is_doc_only = false,
     last_transfer_count = 0,
+    last_log_position = 0,  -- Issue #13: Track file position for efficient log reading
 }
 
 function LocalSend:init()
@@ -311,6 +312,44 @@ function LocalSend:getTransferLog()
     return transfers
 end
 
+-- Issue #13: Optimized log reading - only reads new entries since last check
+-- This is more efficient for e-reader CPUs that poll every 5 seconds
+function LocalSend:getNewTransfers()
+    local transfers = {}
+    if not util.pathExists(transfer_log_file) then
+        self.last_log_position = 0
+        return transfers
+    end
+
+    local f = io.open(transfer_log_file, "r")
+    if not f then
+        self.last_log_position = 0
+        return transfers
+    end
+
+    -- Check if file was truncated (position beyond file size)
+    local file_size = f:seek("end")
+    if self.last_log_position > file_size then
+        self.last_log_position = 0
+    end
+
+    -- Seek to last known position
+    f:seek("set", self.last_log_position)
+
+    for line in f:lines() do
+        local ok, entry = pcall(json.decode, line)
+        if ok and entry then
+            table.insert(transfers, entry)
+        end
+    end
+
+    -- Save new position
+    self.last_log_position = f:seek()
+    f:close()
+
+    return transfers
+end
+
 function LocalSend:getTransferCount()
     local count = 0
     if not util.pathExists(transfer_log_file) then
@@ -331,35 +370,30 @@ end
 function LocalSend:clearTransferLog()
     os.remove(transfer_log_file)
     self.last_transfer_count = 0
+    self.last_log_position = 0  -- Reset position tracking when log is cleared
 end
 
+-- Issue #13: Optimized checkForNewTransfers using position-tracked reading
 function LocalSend:checkForNewTransfers()
     if not self:isRunning() then
         return
     end
 
-    local current_count = self:getTransferCount()
-    if current_count > self.last_transfer_count then
-        local new_count = current_count - self.last_transfer_count
-        local transfers = self:getTransferLog()
-
-        -- Get the most recent transfer
-        local latest = transfers[#transfers]
-        if latest then
-            local text
-            if new_count == 1 then
-                text = T(_("File received: %1"), latest.filename)
-            else
-                text = T(_("%1 files received. Latest: %2"), new_count, latest.filename)
-            end
-
-            UIManager:show(InfoMessage:new{
-                text = text,
-                timeout = 5,
-            })
+    -- Use optimized getNewTransfers() instead of reading the whole file
+    local new_transfers = self:getNewTransfers()
+    if #new_transfers > 0 then
+        local latest = new_transfers[#new_transfers]
+        local text
+        if #new_transfers == 1 then
+            text = T(_("File received: %1"), latest.filename)
+        else
+            text = T(_("%1 files received. Latest: %2"), #new_transfers, latest.filename)
         end
 
-        self.last_transfer_count = current_count
+        UIManager:show(InfoMessage:new{
+            text = text,
+            timeout = 5,
+        })
     end
 
     -- Schedule next check only if still running
@@ -1000,7 +1034,8 @@ function LocalSend:buildExtensionRoutingMenu()
                 self.routing_enabled = not self.routing_enabled
                 G_reader_settings:flipNilOrFalse("LocalSend_routing_enabled")
             end,
-            help_text = _("When enabled, files are routed to directories based on their extension. When disabled, all files go to the main save directory."),
+            help_text = _("When enabled, files are routed to directories based on extension. " ..
+                "When disabled, all files go to the main save directory."),
         })
         table.insert(menu, { text = "---" })
     end
@@ -1073,7 +1108,8 @@ function LocalSend:buildExtensionRoutingMenu()
                 self.routing_accept_all = not self.routing_accept_all
                 G_reader_settings:flipNilOrFalse("LocalSend_routing_accept_all")
             end,
-            help_text = _("When enabled, files without a specific route are saved to the main save directory. When disabled, only routed file types are accepted."),
+            help_text = _("When enabled, files without a specific route are saved to the main " ..
+                "save directory. When disabled, only routed file types are accepted."),
         })
     end
 
@@ -1245,22 +1281,28 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
     -- Also copy any additional .lua files (for future-proofing)
     -- This ensures new Lua modules are picked up without hardcoding names
     -- Note: glob pattern must remain unquoted for shell expansion
+    -- Issue #19: Wrap in pcall to ensure handle is always closed on error
     local ls_handle = io.popen(util.shell_escape({"ls"}) .. " " .. util.shell_escape({extracted_plugin}) .. "/*.lua 2>/dev/null")
     if ls_handle then
-        for lua_file in ls_handle:lines() do
-            local _, filename = util.splitFilePathName(lua_file)
-            -- Skip files we already copied
-            if filename and filename ~= "main.lua" and filename ~= "_meta.lua" then
-                local dst = plugin_path .. "/" .. filename
-                local cp_result = os.execute(util.shell_escape({"cp", lua_file, dst}))
-                if cp_result ~= 0 then
-                    logger.warn("[LocalSend] Failed to copy additional lua file:", filename)
-                else
-                    logger.dbg("[LocalSend] Copied additional lua file:", filename)
+        local process_ok, process_err = pcall(function()
+            for lua_file in ls_handle:lines() do
+                local _, filename = util.splitFilePathName(lua_file)
+                -- Skip files we already copied
+                if filename and filename ~= "main.lua" and filename ~= "_meta.lua" then
+                    local dst = plugin_path .. "/" .. filename
+                    local cp_result = os.execute(util.shell_escape({"cp", lua_file, dst}))
+                    if cp_result ~= 0 then
+                        logger.warn("[LocalSend] Failed to copy additional lua file:", filename)
+                    else
+                        logger.dbg("[LocalSend] Copied additional lua file:", filename)
+                    end
                 end
             end
+        end)
+        ls_handle:close()  -- Always close, even on error
+        if not process_ok then
+            logger.err("[LocalSend] Error processing lua files:", process_err)
         end
-        ls_handle:close()
     end
 
     -- Make binary executable
@@ -1375,7 +1417,7 @@ function LocalSend:checkForUpdates()
             })
         else
             -- Can't auto-update (unknown arch or no matching asset)
-            local reason = ""
+            local reason
             if not arch then
                 reason = _("\n\nAuto-update not available: unknown device architecture.")
             else

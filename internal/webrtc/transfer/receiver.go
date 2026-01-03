@@ -152,8 +152,16 @@ func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]st
 			continue
 		}
 
+		// Sanitize filename to prevent path traversal attacks.
+		// A malicious sender could send "../../../etc/passwd" to write outside saveDir.
+		safeFilename := filepath.Base(targetFile.FileName)
+		if safeFilename == "." || safeFilename == "/" || safeFilename == "" {
+			slog.Warn("Invalid filename rejected", "filename", targetFile.FileName, "id", id)
+			continue
+		}
+
 		// Atomically create file with unique name (prevents race conditions)
-		file, path, err := session.CreateUniqueFile(saveDir, targetFile.FileName)
+		file, path, err := session.CreateUniqueFile(saveDir, safeFilename)
 		if err != nil {
 			slog.Error("Failed to create unique file", "error", err)
 			continue

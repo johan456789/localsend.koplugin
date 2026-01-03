@@ -12,6 +12,38 @@ import (
 	"localsend-cli/internal/models"
 )
 
+// filterFilesByExtension filters files based on allowed extensions.
+// Returns the filtered files, or an error status code if all files were rejected.
+func (fr *FileReceiver) filterFilesByExtension(files models.FileMetas, remoteIP string) (models.FileMetas, int) {
+	if !fr.hasExtensionFilter() {
+		return files, 0
+	}
+
+	filteredFiles := make(models.FileMetas)
+	rejectedFiles := []string{}
+
+	for id, fileMeta := range files {
+		if fr.IsExtensionAllowed(fileMeta.Filename) {
+			filteredFiles[id] = fileMeta
+		} else {
+			rejectedFiles = append(rejectedFiles, fileMeta.Filename)
+		}
+	}
+
+	// Log rejected files
+	if len(rejectedFiles) > 0 {
+		slog.Info("Rejected files due to extension filter", "files", rejectedFiles)
+	}
+
+	// If all files were rejected, return an error
+	if len(filteredFiles) == 0 {
+		slog.Warn("All files rejected by extension filter", "remote", remoteIP)
+		return nil, 403
+	}
+
+	return filteredFiles, 0
+}
+
 func (fr *FileReceiver) preUploadHandler(c *fiber.Ctx) error {
 	// check pin if it's set (constant-time comparison to prevent timing attacks)
 	expectedPin := fr.getExpectedPIN()
@@ -36,32 +68,11 @@ func (fr *FileReceiver) preUploadHandler(c *fiber.Ctx) error {
 	}
 
 	// Filter files by extension if filter is enabled
-	if fr.hasExtensionFilter() {
-		filteredFiles := make(models.FileMetas)
-		rejectedFiles := []string{}
-
-		for id, fileMeta := range metaReq.Files {
-			if fr.IsExtensionAllowed(fileMeta.Filename) {
-				filteredFiles[id] = fileMeta
-			} else {
-				rejectedFiles = append(rejectedFiles, fileMeta.Filename)
-			}
-		}
-
-		// Log rejected files
-		if len(rejectedFiles) > 0 {
-			slog.Info("Rejected files due to extension filter", "files", rejectedFiles)
-		}
-
-		// If all files were rejected, return an error
-		if len(filteredFiles) == 0 {
-			slog.Warn("All files rejected by extension filter", "remote", c.IP())
-			return c.SendStatus(403)
-		}
-
-		// Replace the files with only the allowed ones
-		metaReq.Files = filteredFiles
+	filteredFiles, errStatus := fr.filterFilesByExtension(metaReq.Files, c.IP())
+	if errStatus != 0 {
+		return c.SendStatus(errStatus)
 	}
+	metaReq.Files = filteredFiles
 
 	// new session - store client IP for validation per protocol spec Section 4.2
 	sessionId, err := fr.sessman.NewSession(metaReq.Files, c.IP())
@@ -280,32 +291,11 @@ func (fr *FileReceiver) preUploadV3Handler(c *fiber.Ctx) error {
 	}
 
 	// Filter files by extension if filter is enabled
-	if fr.hasExtensionFilter() {
-		filteredFiles := make(models.FileMetas)
-		rejectedFiles := []string{}
-
-		for id, fileMeta := range metaReq.Files {
-			if fr.IsExtensionAllowed(fileMeta.Filename) {
-				filteredFiles[id] = fileMeta
-			} else {
-				rejectedFiles = append(rejectedFiles, fileMeta.Filename)
-			}
-		}
-
-		// Log rejected files
-		if len(rejectedFiles) > 0 {
-			slog.Info("Rejected files due to extension filter", "files", rejectedFiles)
-		}
-
-		// If all files were rejected, return an error
-		if len(filteredFiles) == 0 {
-			slog.Warn("All files rejected by extension filter", "remote", c.IP())
-			return c.SendStatus(403)
-		}
-
-		// Replace the files with only the allowed ones
-		metaReq.Files = filteredFiles
+	filteredFiles, errStatus := fr.filterFilesByExtension(metaReq.Files, c.IP())
+	if errStatus != 0 {
+		return c.SendStatus(errStatus)
 	}
+	metaReq.Files = filteredFiles
 
 	// new session - store client IP for validation per protocol spec Section 4.2
 	sessionId, err := fr.sessman.NewSession(metaReq.Files, c.IP())

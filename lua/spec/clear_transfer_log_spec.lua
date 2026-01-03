@@ -134,33 +134,33 @@ describe("clearTransferLog", function()
     end)
 
     describe("counter reset", function()
-        it("should reset last_transfer_count to 0", function()
+        it("should reset last_log_position to 0", function()
             LocalSend = require("main")
+            -- Set position to something non-zero
+            LocalSend._ServerState.last_log_position = 500
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
-
-            -- Set count to something non-zero
-            instance.last_transfer_count = 10
 
             instance:clearTransferLog()
 
-            assert.equal(0, instance.last_transfer_count,
-                "Should reset last_transfer_count to 0")
+            assert.equal(0, LocalSend._ServerState.last_log_position,
+                "Should reset last_log_position to 0")
         end)
 
-        it("should work when count is already 0", function()
+        it("should work when position is already 0", function()
             LocalSend = require("main")
+            LocalSend._ServerState.last_log_position = 0
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
-
-            instance.last_transfer_count = 0
 
             assert.has_no.errors(function()
                 instance:clearTransferLog()
             end)
-            assert.equal(0, instance.last_transfer_count)
+            assert.equal(0, LocalSend._ServerState.last_log_position)
         end)
     end)
 

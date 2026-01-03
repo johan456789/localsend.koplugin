@@ -67,7 +67,7 @@ describe("stop() wrapper function", function()
 
     before_each(function()
         notifications_shown = {}
-        _G.LocalSend_user_stopped = nil
+        -- Note: ServerState resets automatically when module is reloaded (package.loaded["main"] = nil)
 
         _G.G_reader_settings = {
             readSetting = function() return nil end,
@@ -116,11 +116,11 @@ describe("stop() wrapper function", function()
     end)
 
     after_each(function()
-        _G.LocalSend_user_stopped = nil
+        -- ServerState cleanup happens automatically via module reload in before_each
     end)
 
     describe("user_stopped flag", function()
-        it("should set global user_stopped flag", function()
+        it("should set user_stopped flag in ServerState", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
@@ -129,7 +129,7 @@ describe("stop() wrapper function", function()
 
             instance:stop()
 
-            assert.is_true(_G.LocalSend_user_stopped,
+            assert.is_true(LocalSend._ServerState.user_stopped,
                 "Should set user_stopped flag")
         end)
 
@@ -141,7 +141,7 @@ describe("stop() wrapper function", function()
 
             local flag_was_set = false
             instance.stopServer = function()
-                flag_was_set = _G.LocalSend_user_stopped
+                flag_was_set = LocalSend._ServerState.user_stopped
                 return true
             end
 

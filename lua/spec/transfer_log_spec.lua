@@ -294,13 +294,16 @@ describe("Transfer Log", function()
         it("returns empty table when log file doesn't exist", function()
             file_exists = false
             LocalSend = require("main")
+            -- Reset ServerState for test
+            LocalSend._ServerState.last_log_position = 0
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
             local transfers = instance:getNewTransfers()
             assert.same({}, transfers)
-            assert.equal(0, instance.last_log_position)
+            assert.equal(0, LocalSend._ServerState.last_log_position)
         end)
 
         it("returns all entries on first read", function()
@@ -311,14 +314,16 @@ describe("Transfer Log", function()
             }
 
             LocalSend = require("main")
+            -- Reset ServerState for test
+            LocalSend._ServerState.last_log_position = 0
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
-            instance.last_log_position = 0
 
             local transfers = instance:getNewTransfers()
             assert.equal(2, #transfers)
-            assert.is_true(instance.last_log_position > 0)
+            assert.is_true(LocalSend._ServerState.last_log_position > 0)
         end)
 
         it("returns only new entries on subsequent reads", function()
@@ -328,10 +333,12 @@ describe("Transfer Log", function()
             }
 
             LocalSend = require("main")
+            -- Reset ServerState for test
+            LocalSend._ServerState.last_log_position = 0
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
-            instance.last_log_position = 0
 
             -- First read
             local transfers1 = instance:getNewTransfers()

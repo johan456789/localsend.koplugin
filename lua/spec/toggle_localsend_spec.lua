@@ -72,7 +72,7 @@ describe("onToggleLocalSend", function()
     end)
 
     before_each(function()
-        _G.LocalSend_user_stopped = nil
+        -- Note: ServerState resets automatically when module is reloaded (package.loaded["main"] = nil)
 
         _G.G_reader_settings = {
             readSetting = function() return nil end,
@@ -107,7 +107,7 @@ describe("onToggleLocalSend", function()
     end)
 
     after_each(function()
-        _G.LocalSend_user_stopped = nil
+        -- ServerState cleanup happens automatically via module reload in before_each
     end)
 
     describe("when server is running", function()
@@ -176,9 +176,9 @@ describe("onToggleLocalSend", function()
         end)
 
         it("should clear user_stopped flag", function()
-            _G.LocalSend_user_stopped = true
-
             LocalSend = require("main")
+            LocalSend._ServerState.user_stopped = true
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
@@ -188,14 +188,14 @@ describe("onToggleLocalSend", function()
 
             instance:onToggleLocalSend()
 
-            assert.is_nil(_G.LocalSend_user_stopped,
+            assert.is_false(LocalSend._ServerState.user_stopped,
                 "Should clear user_stopped flag when starting")
         end)
 
         it("should clear flag before calling start()", function()
-            _G.LocalSend_user_stopped = true
-
             LocalSend = require("main")
+            LocalSend._ServerState.user_stopped = true
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
@@ -203,12 +203,12 @@ describe("onToggleLocalSend", function()
             local flag_during_start = nil
             instance.isRunning = function() return false end
             instance.start = function()
-                flag_during_start = _G.LocalSend_user_stopped
+                flag_during_start = LocalSend._ServerState.user_stopped
             end
 
             instance:onToggleLocalSend()
 
-            assert.is_nil(flag_during_start,
+            assert.is_false(flag_during_start,
                 "Flag should be cleared before start is called")
         end)
     end)

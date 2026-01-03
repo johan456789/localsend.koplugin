@@ -548,7 +548,7 @@ describe("start() function", function()
             instance:start()
 
             assert.is_true(#scheduled_callbacks > 0, "Should schedule callback")
-            assert.equal(5, scheduled_callbacks[1].delay, "Should schedule with 5 second delay")
+            assert.equal(10, scheduled_callbacks[1].delay, "Should schedule with 10 second delay")
         end)
 
         it("should show success notification with device name", function()

@@ -74,7 +74,7 @@ describe("init() function", function()
 
     before_each(function()
         settings = {}
-        _G.LocalSend_user_stopped = nil
+        -- Note: ServerState resets automatically when module is reloaded (package.loaded["main"] = nil)
 
         _G.G_reader_settings = {
             readSetting = function(self, key) return settings[key] end,
@@ -109,7 +109,7 @@ describe("init() function", function()
     end)
 
     after_each(function()
-        _G.LocalSend_user_stopped = nil
+        -- ServerState cleanup happens automatically via module reload in before_each
     end)
 
     describe("settings loading", function()
@@ -350,7 +350,7 @@ describe("init() function", function()
     describe("autostart logic", function()
         it("should call start() when autostart enabled and not user_stopped", function()
             settings["LocalSend_autostart"] = true
-            _G.LocalSend_user_stopped = nil
+            -- ServerState.user_stopped is false by default after fresh module load
 
             LocalSend = require("main")
 
@@ -381,9 +381,9 @@ describe("init() function", function()
 
         it("should NOT call start() when user_stopped flag is set", function()
             settings["LocalSend_autostart"] = true
-            _G.LocalSend_user_stopped = true
 
             LocalSend = require("main")
+            LocalSend._ServerState.user_stopped = true
 
             local start_called = false
             LocalSend.start = function() start_called = true end

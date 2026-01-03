@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
@@ -145,15 +146,11 @@ func VerifyTokenTimestamp(publicKey VerifyingKey, token string) error {
 }
 
 // VerifyTokenNonce verifies a token was generated with the expected nonce.
+// Uses constant-time comparison to prevent timing attacks.
 func VerifyTokenNonce(publicKey VerifyingKey, token string, expectedNonce []byte) error {
 	return VerifyToken(publicKey, token, func(salt []byte) error {
-		if len(salt) != len(expectedNonce) {
-			return errors.New("nonce length mismatch")
-		}
-		for i := range salt {
-			if salt[i] != expectedNonce[i] {
-				return errors.New("nonce mismatch")
-			}
+		if subtle.ConstantTimeCompare(salt, expectedNonce) != 1 {
+			return errors.New("nonce mismatch")
 		}
 		return nil
 	})

@@ -32,11 +32,12 @@ type FileReceiver struct {
 	expectedPin       string
 	allowedExtensions []string         // New field for extension filtering
 	transferLogPath   string           // Path to transfer log file
+	transferLogFile   *os.File         // Persistent file handle for transfer log
 	router            *ExtensionRouter // Routes files to different dirs by extension
 	listenAddr        string           // Custom listen address (defaults to constants.DefaultListenAddr)
 
 	// configMu protects configuration fields that can be modified after creation
-	// (expectedPin, allowedExtensions, transferLogPath, router, listenAddr)
+	// (expectedPin, allowedExtensions, transferLogPath, transferLogFile, router, listenAddr)
 	configMu sync.RWMutex
 
 	// V3 nonce caches for token verification
@@ -90,15 +91,41 @@ func (fr *FileReceiver) ListenAddr() string {
 func (fr *FileReceiver) SetTransferLog(path string) {
 	fr.configMu.Lock()
 	defer fr.configMu.Unlock()
+
+	// Close existing file handle if any
+	if fr.transferLogFile != nil {
+		_ = fr.transferLogFile.Close()
+		fr.transferLogFile = nil
+	}
+
 	fr.transferLogPath = path
+
+	// Open the new log file if path is provided
+	if path != "" {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			slog.Error("Failed to open transfer log", "path", path, "error", err)
+			return
+		}
+		fr.transferLogFile = f
+	}
+}
+
+// closeTransferLog closes the transfer log file handle.
+func (fr *FileReceiver) closeTransferLog() {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
+	if fr.transferLogFile != nil {
+		_ = fr.transferLogFile.Close()
+		fr.transferLogFile = nil
+	}
 }
 
 func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) {
-	fr.configMu.RLock()
-	logPath := fr.transferLogPath
-	fr.configMu.RUnlock()
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
 
-	if logPath == "" {
+	if fr.transferLogFile == nil {
 		return
 	}
 
@@ -116,15 +143,8 @@ func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) 
 		return
 	}
 
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		slog.Error("Failed to open transfer log", "error", err)
-		return
-	}
-	defer func() { _ = f.Close() }()
-
-	_, _ = f.Write(data)
-	_, _ = f.WriteString("\n")
+	_, _ = fr.transferLogFile.Write(data)
+	_, _ = fr.transferLogFile.WriteString("\n")
 }
 
 // SetAllowedExtensions sets the list of allowed file extensions.
@@ -272,6 +292,7 @@ func (fr *FileReceiver) Stop() error {
 
 	fr.sessman.Stop()
 	_ = fr.discoverier.Shutdown()
+	fr.closeTransferLog()
 
 	// Graceful shutdown with 5 second timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

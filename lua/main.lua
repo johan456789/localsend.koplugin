@@ -122,6 +122,15 @@ end
 local data_dir = DataStorage:getFullDataDir()
 local plugin_path = data_dir .. "/plugins/localsend.koplugin"
 
+-- Module-local state that persists across widget instances (view switches)
+-- This is preferred over _G globals for tracking state within a single KOReader session
+local ServerState = {
+    user_stopped = false,  -- True when user explicitly stopped the server
+    was_running_before_suspend = false,  -- True if server was running before suspend/standby
+    last_log_position = 0,  -- Track transfer log read position across instances
+    polling_generation = 0,  -- Generation counter to invalidate stale polling callbacks
+}
+
 -- Load plugin metadata safely (Issue #4 fix: wrap dofile in pcall)
 local plugin_meta
 local meta_path = plugin_path .. "/_meta.lua"
@@ -156,8 +165,6 @@ end
 local LocalSend = WidgetContainer:extend{
     name = "LocalSend",
     is_doc_only = false,
-    last_transfer_count = 0,
-    last_log_position = 0,  -- Issue #13: Track file position for efficient log reading
 }
 
 function LocalSend:init()
@@ -182,8 +189,8 @@ function LocalSend:init()
     -- Only autostart if:
     -- 1. autostart setting is enabled
     -- 2. user hasn't explicitly stopped the server this session
-    -- (The global flag is cleared on KOReader restart, so autostart works on fresh launch)
-    if self.autostart and not _G.LocalSend_user_stopped then
+    -- (ServerState resets on KOReader restart, so autostart works on fresh launch)
+    if self.autostart and not ServerState.user_stopped then
         self:start()
     end
 
@@ -198,6 +205,48 @@ function LocalSend:onExit()
     if self:isRunning() then
         self:stopServer(true)
         logger.dbg("[LocalSend] Server stopped on KOReader exit")
+    end
+end
+
+-- Stop server before device suspends (WiFi will be disabled)
+function LocalSend:onSuspend()
+    logger.dbg("[LocalSend] onSuspend")
+    if self:isRunning() then
+        ServerState.was_running_before_suspend = true
+        self:stopServer(true)
+        logger.dbg("[LocalSend] Server stopped for suspend")
+    else
+        ServerState.was_running_before_suspend = false
+    end
+end
+
+-- Restart server after device resumes (if it was running before)
+function LocalSend:onResume()
+    logger.dbg("[LocalSend] onResume")
+    if ServerState.was_running_before_suspend and not ServerState.user_stopped then
+        -- Delay slightly to let WiFi reconnect
+        UIManager:scheduleIn(2, function()
+            self:start(true)  -- silent=true to suppress notification
+        end)
+    end
+end
+
+-- Same handling for standby (light sleep)
+function LocalSend:onEnterStandby()
+    logger.dbg("[LocalSend] onEnterStandby")
+    if self:isRunning() then
+        ServerState.was_running_before_suspend = true
+        self:stopServer(true)
+        logger.dbg("[LocalSend] Server stopped for standby")
+    else
+        ServerState.was_running_before_suspend = false
+    end
+end
+
+function LocalSend:onLeaveStandby()
+    logger.dbg("[LocalSend] onLeaveStandby")
+    if ServerState.was_running_before_suspend and not ServerState.user_stopped then
+        self:start(true)  -- silent=true to suppress notification
     end
 end
 
@@ -314,27 +363,28 @@ end
 
 -- Issue #13: Optimized log reading - only reads new entries since last check
 -- This is more efficient for e-reader CPUs that poll every 5 seconds
+-- Uses ServerState.last_log_position to persist across widget instances
 function LocalSend:getNewTransfers()
     local transfers = {}
     if not util.pathExists(transfer_log_file) then
-        self.last_log_position = 0
+        ServerState.last_log_position = 0
         return transfers
     end
 
     local f = io.open(transfer_log_file, "r")
     if not f then
-        self.last_log_position = 0
+        ServerState.last_log_position = 0
         return transfers
     end
 
     -- Check if file was truncated (position beyond file size)
     local file_size = f:seek("end")
-    if self.last_log_position > file_size then
-        self.last_log_position = 0
+    if ServerState.last_log_position > file_size then
+        ServerState.last_log_position = 0
     end
 
     -- Seek to last known position
-    f:seek("set", self.last_log_position)
+    f:seek("set", ServerState.last_log_position)
 
     for line in f:lines() do
         local ok, entry = pcall(json.decode, line)
@@ -344,7 +394,7 @@ function LocalSend:getNewTransfers()
     end
 
     -- Save new position
-    self.last_log_position = f:seek()
+    ServerState.last_log_position = f:seek()
     f:close()
 
     return transfers
@@ -369,12 +419,17 @@ end
 
 function LocalSend:clearTransferLog()
     os.remove(transfer_log_file)
-    self.last_transfer_count = 0
-    self.last_log_position = 0  -- Reset position tracking when log is cleared
+    ServerState.last_log_position = 0  -- Reset position tracking when log is cleared
 end
 
 -- Issue #13: Optimized checkForNewTransfers using position-tracked reading
-function LocalSend:checkForNewTransfers()
+-- Uses generation counter to prevent stale callbacks from old widget instances
+function LocalSend:checkForNewTransfers(my_generation)
+    -- If generation doesn't match, this callback is from an old instance - stop polling
+    if my_generation ~= ServerState.polling_generation then
+        return
+    end
+
     if not self:isRunning() then
         return
     end
@@ -396,32 +451,46 @@ function LocalSend:checkForNewTransfers()
         })
     end
 
-    -- Schedule next check only if still running
-    if self:isRunning() then
-        UIManager:scheduleIn(5, function()
-            self:checkForNewTransfers()
+    -- Schedule next check only if still running and generation still matches
+    -- Using 10 second interval to reduce battery drain on e-readers
+    if self:isRunning() and my_generation == ServerState.polling_generation then
+        UIManager:scheduleIn(10, function()
+            self:checkForNewTransfers(my_generation)
         end)
     end
 end
 
-function LocalSend:start()
+-- Start the LocalSend server
+-- @param silent boolean If true, suppress the startup notification (used for resume from sleep)
+function LocalSend:start(silent)
+    -- If server is already running, just take over polling responsibility
     if self:isRunning() then
-        logger.dbg("[LocalSend] Server already running")
+        logger.dbg("[LocalSend] Server already running, taking over polling")
+        -- Increment generation to invalidate any old polling callbacks
+        ServerState.polling_generation = ServerState.polling_generation + 1
+        local my_generation = ServerState.polling_generation
+        UIManager:scheduleIn(10, function()
+            self:checkForNewTransfers(my_generation)
+        end)
         return
     end
 
     -- Validate save directory
     local valid, err = self:validateSaveDir(self.save_dir)
     if not valid then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = T(_("Invalid save directory: %1"), err),
-        })
+        if not silent then
+            UIManager:show(InfoMessage:new{
+                icon = "notice-warning",
+                text = T(_("Invalid save directory: %1"), err),
+            })
+        end
         return
     end
 
-    -- Clear old transfer log and reset count
-    self:clearTransferLog()
+    -- Clear old transfer log and reset count (only on fresh start, not resume)
+    if not silent then
+        self:clearTransferLog()
+    end
 
     -- Build command arguments table
     local args = {binary_path, "recv", "-d", self.save_dir, "-l", transfer_log_file}
@@ -494,51 +563,65 @@ function LocalSend:start()
 
         -- Verify it actually started
         if ready then
-            -- Start checking for new transfers
-            UIManager:scheduleIn(5, function()
-                self:checkForNewTransfers()
+            -- Increment generation and start polling for new transfers
+            ServerState.polling_generation = ServerState.polling_generation + 1
+            local my_generation = ServerState.polling_generation
+            UIManager:scheduleIn(10, function()
+                self:checkForNewTransfers(my_generation)
             end)
 
-            -- Build concise startup message
-            local network_info = Device.retrieveNetworkInfo and Device:retrieveNetworkInfo() or nil
-            local pin_status = self.pin ~= "" and _("PIN: enabled") or nil
+            if not silent then
+                -- Build concise startup message
+                local network_info = Device.retrieveNetworkInfo and Device:retrieveNetworkInfo() or nil
+                local pin_status = self.pin ~= "" and _("PIN: enabled") or nil
 
-            local message_parts = {
-                T(_("Device: %1"), effective_name),
-            }
+                local message_parts = {
+                    T(_("Device: %1"), effective_name),
+                }
 
-            -- Try to extract IP and show with port for manual connection
-            local ip_addr = network_info and network_info:match("(%d+%.%d+%.%d+%.%d+)")
-            if ip_addr then
-                table.insert(message_parts, T(_("IP: %1"), ip_addr .. ":" .. self.port))
-            elseif network_info and network_info ~= "" then
-                -- Fallback: show raw network info if we can't extract IP
-                table.insert(message_parts, network_info)
+                -- Try to extract IP and show with port for manual connection
+                local ip_addr = network_info and network_info:match("(%d+%.%d+%.%d+%.%d+)")
+                if ip_addr then
+                    table.insert(message_parts, T(_("IP: %1"), ip_addr .. ":" .. self.port))
+                elseif network_info and network_info ~= "" then
+                    -- Fallback: show raw network info if we can't extract IP
+                    table.insert(message_parts, network_info)
+                end
+
+                if pin_status then
+                    table.insert(message_parts, pin_status)
+                end
+
+                local info = InfoMessage:new{
+                    timeout = 5,
+                    text = _("LocalSend Ready") .. "\n" .. table.concat(message_parts, "\n"),
+                }
+                UIManager:show(info)
+            else
+                logger.dbg("[LocalSend] Server restarted after resume")
             end
-
-            if pin_status then
-                table.insert(message_parts, pin_status)
-            end
-
-            local info = InfoMessage:new{
-                timeout = 5,
-                text = _("LocalSend Ready") .. "\n" .. table.concat(message_parts, "\n"),
-            }
-            UIManager:show(info)
         else
             self:closeFirewall()
-            UIManager:show(InfoMessage:new{
-                icon = "notice-warning",
-                text = _("LocalSend process failed to start within 5 seconds. Check if the binary works."),
-            })
+            if not silent then
+                UIManager:show(InfoMessage:new{
+                    icon = "notice-warning",
+                    text = _("LocalSend process failed to start within 5 seconds. Check if the binary works."),
+                })
+            else
+                logger.warn("[LocalSend] Failed to restart server after resume")
+            end
         end
     else
         self:closeFirewall()
-        local info = InfoMessage:new{
-            icon = "notice-warning",
-            text = _("Failed to start LocalSend server."),
-        }
-        UIManager:show(info)
+        if not silent then
+            local info = InfoMessage:new{
+                icon = "notice-warning",
+                text = _("Failed to start LocalSend server."),
+            }
+            UIManager:show(info)
+        else
+            logger.warn("[LocalSend] Failed to start server after resume")
+        end
     end
 end
 
@@ -626,7 +709,7 @@ end
 function LocalSend:stop()
     -- Mark that user explicitly stopped the server this session
     -- This prevents autostart from restarting it when opening a new document
-    _G.LocalSend_user_stopped = true
+    ServerState.user_stopped = true
 
     local ok, err = self:stopServer(false)
     if not ok then
@@ -660,7 +743,7 @@ function LocalSend:onToggleLocalSend()
     else
         -- User is explicitly starting the server, clear the stopped flag
         -- so autostart can work again if they open another document
-        _G.LocalSend_user_stopped = nil
+        ServerState.user_stopped = false
         self:start()
     end
 end
@@ -1608,5 +1691,9 @@ function LocalSend:onDispatcherRegisterActions()
     Dispatcher:registerAction("toggle_localsend_server",
         { category = "none", event = "ToggleLocalSend", title = _("Toggle LocalSend server"), general = true })
 end
+
+-- Expose ServerState for testing purposes
+-- Production code should NOT access this directly
+LocalSend._ServerState = ServerState
 
 return LocalSend

@@ -202,7 +202,9 @@ describe("checkForNewTransfers", function()
             }
             instance.isRunning = function() return false end
 
-            instance:checkForNewTransfers()
+            -- Pass current generation
+            local gen = LocalSend._ServerState.polling_generation
+            instance:checkForNewTransfers(gen)
 
             assert.equal(0, #notifications_shown, "Should not show notification")
             assert.equal(0, #scheduled_callbacks, "Should not schedule next check")
@@ -218,13 +220,18 @@ describe("checkForNewTransfers", function()
             }
 
             LocalSend = require("main")
+            -- Reset ServerState for test
+            LocalSend._ServerState.last_log_position = 0
+            LocalSend._ServerState.polling_generation = 0
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.isRunning = function() return true end
-            instance.last_transfer_count = 0
 
-            instance:checkForNewTransfers()
+            -- Pass current generation
+            local gen = LocalSend._ServerState.polling_generation
+            instance:checkForNewTransfers(gen)
 
             assert.equal(1, #notifications_shown)
             -- Template function uses %1, %2 placeholders - check for those or actual filename
@@ -242,13 +249,18 @@ describe("checkForNewTransfers", function()
             }
 
             LocalSend = require("main")
+            -- Reset ServerState for test
+            LocalSend._ServerState.last_log_position = 0
+            LocalSend._ServerState.polling_generation = 0
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.isRunning = function() return true end
-            instance.last_transfer_count = 0
 
-            instance:checkForNewTransfers()
+            -- Pass current generation
+            local gen = LocalSend._ServerState.polling_generation
+            instance:checkForNewTransfers(gen)
 
             assert.equal(1, #notifications_shown)
             -- Template function uses %1, %2 placeholders
@@ -264,14 +276,18 @@ describe("checkForNewTransfers", function()
             }
 
             LocalSend = require("main")
+            -- Set position to end of file (already read)
+            LocalSend._ServerState.last_log_position = #transfer_log_content[1] + 1
+            LocalSend._ServerState.polling_generation = 0
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.isRunning = function() return true end
-            -- Set position to end of file (already read)
-            instance.last_log_position = #transfer_log_content[1] + 1
 
-            instance:checkForNewTransfers()
+            -- Pass current generation
+            local gen = LocalSend._ServerState.polling_generation
+            instance:checkForNewTransfers(gen)
 
             assert.equal(0, #notifications_shown)
         end)
@@ -284,32 +300,43 @@ describe("checkForNewTransfers", function()
             }
 
             LocalSend = require("main")
+            -- Reset ServerState for test
+            LocalSend._ServerState.last_log_position = 0
+            LocalSend._ServerState.polling_generation = 0
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.isRunning = function() return true end
-            instance.last_log_position = 0
 
-            instance:checkForNewTransfers()
+            -- Pass current generation
+            local gen = LocalSend._ServerState.polling_generation
+            instance:checkForNewTransfers(gen)
 
             -- Position should be updated to track where we left off
-            assert.is_true(instance.last_log_position > 0)
+            assert.is_true(LocalSend._ServerState.last_log_position > 0)
         end)
 
-        it("schedules next check in 5 seconds", function()
+        it("schedules next check in 10 seconds", function()
             is_running = true
             transfer_log_exists = false
 
             LocalSend = require("main")
+            -- Reset ServerState for test
+            LocalSend._ServerState.last_log_position = 0
+            LocalSend._ServerState.polling_generation = 0
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.isRunning = function() return true end
 
-            instance:checkForNewTransfers()
+            -- Pass current generation
+            local gen = LocalSend._ServerState.polling_generation
+            instance:checkForNewTransfers(gen)
 
             assert.equal(1, #scheduled_callbacks)
-            assert.equal(5, scheduled_callbacks[1].delay)
+            assert.equal(10, scheduled_callbacks[1].delay)
         end)
 
         it("does not schedule next check when server stopped during check", function()
@@ -317,6 +344,10 @@ describe("checkForNewTransfers", function()
             transfer_log_exists = false
 
             LocalSend = require("main")
+            -- Reset ServerState for test
+            LocalSend._ServerState.last_log_position = 0
+            LocalSend._ServerState.polling_generation = 0
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
@@ -328,7 +359,9 @@ describe("checkForNewTransfers", function()
                 return check_count <= 1 -- Running first time, stopped second time
             end
 
-            instance:checkForNewTransfers()
+            -- Pass current generation
+            local gen = LocalSend._ServerState.polling_generation
+            instance:checkForNewTransfers(gen)
 
             assert.equal(0, #scheduled_callbacks, "Should not schedule when server stopped")
         end)
@@ -344,20 +377,23 @@ describe("checkForNewTransfers", function()
             }
 
             LocalSend = require("main")
+            -- Simulate having already read the first 2 files by setting position
+            -- Each line is ~36-37 chars + newline, so position after 2 lines is ~75 bytes
+            local pos_after_two = #transfer_log_content[1] + 1 + #transfer_log_content[2] + 1
+            LocalSend._ServerState.last_log_position = pos_after_two
+            LocalSend._ServerState.polling_generation = 0
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.isRunning = function() return true end
 
-            -- Simulate having already read the first 2 files by setting position
-            -- Each line is ~36-37 chars + newline, so position after 2 lines is ~75 bytes
-            local pos_after_two = #transfer_log_content[1] + 1 + #transfer_log_content[2] + 1
-            instance.last_log_position = pos_after_two
-
             -- Add a new file
             table.insert(transfer_log_content, '{"filename":"new.pdf","size":3072}')
 
-            instance:checkForNewTransfers()
+            -- Pass current generation
+            local gen = LocalSend._ServerState.polling_generation
+            instance:checkForNewTransfers(gen)
 
             assert.equal(1, #notifications_shown)
             -- Template function uses %1 placeholder

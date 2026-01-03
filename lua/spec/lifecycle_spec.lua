@@ -249,9 +249,9 @@ describe("LocalSend Lifecycle", function()
 
         it("should NOT autostart after user explicitly stops server", function()
             G_reader_settings._settings["LocalSend_autostart"] = true
-            _G.LocalSend_user_stopped = nil -- Clear any previous state
 
             LocalSend = require("main")
+            LocalSend._ServerState.user_stopped = false -- Clear any previous state
 
             -- First instance - autostart should work
             local start_count = 0
@@ -270,12 +270,7 @@ describe("LocalSend Lifecycle", function()
             instance1:stop()
 
             -- Simulate opening a new document (new plugin instance)
-            package.loaded["main"] = nil
-            LocalSend = require("main")
-            LocalSend.start = function(self)
-                start_count = start_count + 1
-            end
-
+            -- Note: ServerState persists because it's a module-local table
             local instance2 = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
@@ -285,13 +280,13 @@ describe("LocalSend Lifecycle", function()
                 "Should NOT autostart after user explicitly stopped server")
 
             -- Cleanup
-            _G.LocalSend_user_stopped = nil
+            LocalSend._ServerState.user_stopped = false
         end)
 
         it("should clear user_stopped flag when user manually starts", function()
-            _G.LocalSend_user_stopped = true -- Simulate user had stopped
-
             LocalSend = require("main")
+            LocalSend._ServerState.user_stopped = true -- Simulate user had stopped
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
@@ -302,17 +297,17 @@ describe("LocalSend Lifecycle", function()
             -- User manually starts via toggle
             instance:onToggleLocalSend()
 
-            assert.is_nil(_G.LocalSend_user_stopped,
+            assert.is_false(LocalSend._ServerState.user_stopped,
                 "Manual start should clear the user_stopped flag")
 
             -- Cleanup
-            _G.LocalSend_user_stopped = nil
+            LocalSend._ServerState.user_stopped = false
         end)
 
         it("should set user_stopped flag when user manually stops", function()
-            _G.LocalSend_user_stopped = nil
-
             LocalSend = require("main")
+            LocalSend._ServerState.user_stopped = false
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
@@ -322,18 +317,18 @@ describe("LocalSend Lifecycle", function()
             -- User manually stops
             instance:stop()
 
-            assert.is_true(_G.LocalSend_user_stopped,
+            assert.is_true(LocalSend._ServerState.user_stopped,
                 "Manual stop should set the user_stopped flag")
 
             -- Cleanup
-            _G.LocalSend_user_stopped = nil
+            LocalSend._ServerState.user_stopped = false
         end)
 
         it("should allow autostart after user manually restarts", function()
             G_reader_settings._settings["LocalSend_autostart"] = true
-            _G.LocalSend_user_stopped = nil
 
             LocalSend = require("main")
+            LocalSend._ServerState.user_stopped = false
 
             local start_count = 0
             LocalSend.start = function(self)
@@ -349,22 +344,16 @@ describe("LocalSend Lifecycle", function()
             -- User stops
             instance1.stopServer = function() return true end
             instance1:stop()
-            assert.is_true(_G.LocalSend_user_stopped)
+            assert.is_true(LocalSend._ServerState.user_stopped)
 
             -- User manually restarts via toggle
             instance1.isRunning = function() return false end
             instance1:onToggleLocalSend()
             -- onToggleLocalSend calls start(), so count is now 2
             assert.equal(2, start_count, "Manual restart should call start")
-            assert.is_nil(_G.LocalSend_user_stopped, "Flag should be cleared")
+            assert.is_false(LocalSend._ServerState.user_stopped, "Flag should be cleared")
 
-            -- Simulate opening new document
-            package.loaded["main"] = nil
-            LocalSend = require("main")
-            LocalSend.start = function(self)
-                start_count = start_count + 1
-            end
-
+            -- Simulate opening new document - ServerState persists across instances
             local instance2 = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
@@ -374,7 +363,335 @@ describe("LocalSend Lifecycle", function()
                 "Should autostart after user manually restarted")
 
             -- Cleanup
-            _G.LocalSend_user_stopped = nil
+            LocalSend._ServerState.user_stopped = false
+        end)
+    end)
+
+    describe("suspend/resume behavior", function()
+        it("should have onSuspend method defined", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            assert.is_function(instance.onSuspend)
+        end)
+
+        it("should have onResume method defined", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            assert.is_function(instance.onResume)
+        end)
+
+        it("should have onEnterStandby method defined", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            assert.is_function(instance.onEnterStandby)
+        end)
+
+        it("should have onLeaveStandby method defined", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            assert.is_function(instance.onLeaveStandby)
+        end)
+
+        it("onSuspend should stop server and set was_running_before_suspend", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = false
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local stop_called = false
+            instance.isRunning = function() return true end
+            instance.stopServer = function() stop_called = true; return true end
+
+            instance:onSuspend()
+
+            assert.is_true(stop_called, "onSuspend should stop the server")
+            assert.is_true(LocalSend._ServerState.was_running_before_suspend,
+                "was_running_before_suspend should be true")
+
+            -- Cleanup
+            LocalSend._ServerState.was_running_before_suspend = false
+        end)
+
+        it("onSuspend should clear was_running_before_suspend if server not running", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = true -- Previously set
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            instance.isRunning = function() return false end
+
+            instance:onSuspend()
+
+            assert.is_false(LocalSend._ServerState.was_running_before_suspend,
+                "was_running_before_suspend should be false when server not running")
+        end)
+
+        it("onResume should restart server if was_running_before_suspend is true", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = true
+            LocalSend._ServerState.user_stopped = false
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local scheduled_callback = nil
+            -- Note: scheduleIn is called as method (UIManager:scheduleIn), so first arg is self
+            package.loaded["ui/uimanager"].scheduleIn = function(self, delay, callback)
+                scheduled_callback = callback
+            end
+
+            local start_called = false
+            local start_silent = nil
+            instance.start = function(self, silent)
+                start_called = true
+                start_silent = silent
+            end
+
+            instance:onResume()
+
+            -- The callback should have been scheduled
+            assert.is_function(scheduled_callback, "Should schedule a callback")
+
+            -- Execute the scheduled callback
+            scheduled_callback()
+
+            assert.is_true(start_called, "start should be called after resume")
+            assert.is_true(start_silent, "start should be called with silent=true")
+
+            -- Cleanup
+            LocalSend._ServerState.was_running_before_suspend = false
+        end)
+
+        it("onResume should NOT restart server if user_stopped is true", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = true
+            LocalSend._ServerState.user_stopped = true
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local start_called = false
+            instance.start = function(self, silent)
+                start_called = true
+            end
+
+            instance:onResume()
+
+            assert.is_false(start_called,
+                "start should NOT be called when user_stopped is true")
+
+            -- Cleanup
+            LocalSend._ServerState.was_running_before_suspend = false
+            LocalSend._ServerState.user_stopped = false
+        end)
+
+        it("onResume should NOT restart server if was_running_before_suspend is false", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = false
+            LocalSend._ServerState.user_stopped = false
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local start_called = false
+            instance.start = function(self, silent)
+                start_called = true
+            end
+
+            instance:onResume()
+
+            assert.is_false(start_called,
+                "start should NOT be called when server was not running before suspend")
+        end)
+
+        it("onEnterStandby should stop server and set was_running_before_suspend", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = false
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local stop_called = false
+            instance.isRunning = function() return true end
+            instance.stopServer = function() stop_called = true; return true end
+
+            instance:onEnterStandby()
+
+            assert.is_true(stop_called, "onEnterStandby should stop the server")
+            assert.is_true(LocalSend._ServerState.was_running_before_suspend,
+                "was_running_before_suspend should be true")
+
+            -- Cleanup
+            LocalSend._ServerState.was_running_before_suspend = false
+        end)
+
+        it("onLeaveStandby should restart server immediately (no delay)", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = true
+            LocalSend._ServerState.user_stopped = false
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local start_called = false
+            local start_silent = nil
+            instance.start = function(self, silent)
+                start_called = true
+                start_silent = silent
+            end
+
+            instance:onLeaveStandby()
+
+            -- onLeaveStandby calls start directly, no delay
+            assert.is_true(start_called, "start should be called after leaving standby")
+            assert.is_true(start_silent, "start should be called with silent=true")
+
+            -- Cleanup
+            LocalSend._ServerState.was_running_before_suspend = false
+        end)
+
+        it("onLeaveStandby should NOT restart server if user_stopped is true", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = true
+            LocalSend._ServerState.user_stopped = true
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local start_called = false
+            instance.start = function(self, silent)
+                start_called = true
+            end
+
+            instance:onLeaveStandby()
+
+            assert.is_false(start_called,
+                "start should NOT be called when user_stopped is true")
+
+            -- Cleanup
+            LocalSend._ServerState.was_running_before_suspend = false
+            LocalSend._ServerState.user_stopped = false
+        end)
+    end)
+
+    describe("start(silent) behavior", function()
+        it("start(true) should not show success notification", function()
+            LocalSend = require("main")
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            -- Mock necessary functions
+            local is_running = false
+            instance.save_dir = "/mnt/us/documents"
+            instance.validateSaveDir = function() return true end
+            instance.clearTransferLog = function() end
+            instance.openFirewall = function() end
+            instance.exportExtRouting = function() return nil end
+            -- isRunning returns false initially, then true after os.execute
+            instance.isRunning = function() return is_running end
+
+            -- Make os.execute succeed and set server as running
+            local original_execute = os.execute
+            os.execute = function() is_running = true; return 0 end
+
+            -- Clear notifications
+            notifications_shown = {}
+
+            -- Start with silent=true
+            instance:start(true)
+
+            -- Restore
+            os.execute = original_execute
+
+            -- Should NOT have shown the "LocalSend Ready" notification
+            local found_ready_notification = false
+            for _, msg in ipairs(notifications_shown) do
+                if msg and msg:match("LocalSend Ready") then
+                    found_ready_notification = true
+                    break
+                end
+            end
+
+            assert.is_false(found_ready_notification,
+                "start(true) should not show 'LocalSend Ready' notification")
+        end)
+
+        it("start(true) should not clear transfer log", function()
+            LocalSend = require("main")
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local clear_log_called = false
+            local is_running = false
+            instance.save_dir = "/mnt/us/documents"
+            instance.validateSaveDir = function() return true end
+            instance.clearTransferLog = function() clear_log_called = true end
+            instance.openFirewall = function() end
+            instance.exportExtRouting = function() return nil end
+            -- isRunning returns false initially, then true after os.execute
+            instance.isRunning = function() return is_running end
+
+            local original_execute = os.execute
+            os.execute = function() is_running = true; return 0 end
+
+            -- Start with silent=true
+            instance:start(true)
+
+            os.execute = original_execute
+
+            assert.is_false(clear_log_called,
+                "start(true) should not clear transfer log (preserve across sleep)")
+        end)
+
+        it("start(false) should clear transfer log", function()
+            LocalSend = require("main")
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local clear_log_called = false
+            local is_running = false
+            instance.save_dir = "/mnt/us/documents"
+            instance.validateSaveDir = function() return true end
+            instance.clearTransferLog = function() clear_log_called = true end
+            instance.openFirewall = function() end
+            instance.exportExtRouting = function() return nil end
+            -- isRunning returns false initially, then true after os.execute
+            instance.isRunning = function() return is_running end
+
+            local original_execute = os.execute
+            os.execute = function() is_running = true; return 0 end
+
+            -- Start with silent=false (or nil)
+            instance:start()
+
+            os.execute = original_execute
+
+            assert.is_true(clear_log_called,
+                "start() without silent should clear transfer log")
         end)
     end)
 end)

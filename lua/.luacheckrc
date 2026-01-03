@@ -16,5 +16,6 @@ redefined = false
 
 -- Files to ignore (test mocks define globals)
 exclude_files = {
+    "lua/spec/*",
     "spec/*",
 }

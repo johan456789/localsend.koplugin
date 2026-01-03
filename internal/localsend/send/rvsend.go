@@ -57,6 +57,16 @@ func (rs *ReverseSender) Init(target *models.DeviceInfo, https bool) error {
 		if err != nil {
 			return fmt.Errorf("failed to get certificate paths: %w", err)
 		}
+
+		// Check if certs already exist
+		_, keyErr := os.Stat(privkeyFile)
+		_, certErr := os.Stat(certFile)
+		if keyErr == nil && certErr == nil {
+			slog.Info("Loading https certificate")
+		} else {
+			slog.Info("Generating https certificate")
+		}
+
 		cert, err := lsutils.LoadOrGenTLScert(privkeyFile, certFile)
 		if err != nil {
 			return err

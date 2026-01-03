@@ -194,13 +194,21 @@ func (fr *FileReceiver) Init() error {
 	}
 
 	if fr.supportHttps {
-		slog.Info("Generating https certificate")
-
 		// Get cert paths from the certs directory next to the binary
 		privkeyFile, certFile, err := lsutils.GetCertPaths()
 		if err != nil {
 			return fmt.Errorf("failed to get certificate paths: %w", err)
 		}
+
+		// Check if certs already exist
+		_, keyErr := os.Stat(privkeyFile)
+		_, certErr := os.Stat(certFile)
+		if keyErr == nil && certErr == nil {
+			slog.Info("Loading https certificate")
+		} else {
+			slog.Info("Generating https certificate")
+		}
+
 		fr.cert, err = lsutils.LoadOrGenTLScert(privkeyFile, certFile)
 		if err != nil {
 			return fmt.Errorf("failed to load or generate TLS certificate: %w", err)

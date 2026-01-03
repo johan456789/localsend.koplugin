@@ -133,6 +133,7 @@ describe("start() function", function()
             scheduleIn = function(self, delay, callback)
                 table.insert(scheduled_callbacks, { delay = delay, callback = callback })
             end,
+            unschedule = function() end,
         }
 
         -- Mock os.execute
@@ -718,7 +719,8 @@ describe("start() function", function()
 
             instance:start()
 
-            assert.equal(3, poll_count, "Should stop polling after server becomes ready")
+            -- 3 polls in the readiness loop + 1 from _updateCache() = 4 total
+            assert.equal(4, poll_count, "Should stop polling after server becomes ready (3 polls + 1 cache update)")
         end)
     end)
 

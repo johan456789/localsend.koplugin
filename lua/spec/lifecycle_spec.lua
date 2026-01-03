@@ -42,6 +42,7 @@ describe("LocalSend Lifecycle", function()
             show = function() end,
             close = function() end,
             scheduleIn = function() end,
+            unschedule = function() end,
         }
 
         -- Mock WidgetContainer
@@ -164,16 +165,26 @@ describe("LocalSend Lifecycle", function()
                 "onExit should be defined for cleanup on KOReader exit")
         end)
 
-        it("should NOT have onCloseWidget method defined", function()
+        it("should have onCloseWidget method that cleans up tasks but NOT server", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            -- onCloseWidget should NOT exist because it's called on document switch
-            -- which would incorrectly stop the server
-            assert.is_nil(rawget(LocalSend, "onCloseWidget"),
-                "onCloseWidget should NOT be defined - it fires on document switch!")
+            -- onCloseWidget SHOULD exist to clean up scheduled Lua tasks
+            -- But it should NOT stop the server (server persists across document switches)
+            assert.is_function(instance.onCloseWidget,
+                "onCloseWidget should be defined for task cleanup")
+
+            -- Verify it doesn't stop the server
+            local stop_called = false
+            instance.stopServer = function() stop_called = true; return true end
+            instance.isRunning = function() return true end
+
+            instance:onCloseWidget()
+
+            assert.is_false(stop_called,
+                "onCloseWidget should NOT stop the server - it fires on document switch!")
         end)
 
         it("onExit should stop server if running", function()

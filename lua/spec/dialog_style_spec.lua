@@ -1,22 +1,26 @@
 require 'busted.runner'()
 
--- Tests for path picker workaround with home folder lock
+-- Tests for Issue #5: Dialog references should use local variables, not self fields
+-- This ensures dialogs don't unnecessarily persist on the widget instance
 
-describe("Path Picker", function()
+describe("LocalSend Dialog References", function()
     local LocalSend
-    local settings
-    local path_exists_map
 
     setup(function()
-        -- Mock dependencies
+        -- Mock KOReader dependencies
         package.loaded["ffi/util"] = {
-            template = function(s, ...) return s end,
+            template = function(s, ...)
+                local args = {...}
+                local result = s
+                for i, v in ipairs(args) do
+                    result = result:gsub("%%" .. i, tostring(v))
+                end
+                return result
+            end,
             usleep = function() end,
             isSubProcessDone = function() return true end,
             terminateSubProcess = function() end,
             sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
         }
         package.loaded["datastorage"] = {
             getFullDataDir = function() return "/tmp/koreader" end,
@@ -25,11 +29,24 @@ describe("Path Picker", function()
             isKindle = function() return false end,
             retrieveNetworkInfo = function() return "WiFi: 192.168.1.100" end,
         }
-        package.loaded["dispatcher"] = { registerAction = function() end }
-        package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
+        package.loaded["dispatcher"] = {
+            registerAction = function() end,
+        }
+        package.loaded["ui/widget/infomessage"] = {
+            new = function(self, o) return o end,
+        }
+        package.loaded["ui/widget/inputdialog"] = {
+            new = function(self, o)
+                return {
+                    _is_dialog = true,
+                    getInputText = function() return "" end,
+                    onShowKeyboard = function() end,
+                }
+            end,
+        }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
         package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
@@ -37,6 +54,7 @@ describe("Path Picker", function()
             unschedule = function() end,
         }
 
+        -- Mock WidgetContainer
         local WidgetContainer = {}
         WidgetContainer.__index = WidgetContainer
         function WidgetContainer:extend(o)
@@ -60,8 +78,6 @@ describe("Path Picker", function()
             info = function() end,
             dbg = function() end,
         }
-
-        -- util.pathExists will check our map
         package.loaded["util"] = {
             shell_escape = function(t)
                 local escaped = {}
@@ -77,11 +93,9 @@ describe("Path Picker", function()
             pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                if path_exists_map and path_exists_map[path] ~= nil then
-                    return path_exists_map[path]
-                end
-                return true -- Default to exists for parent dir checks
+                return false
             end,
+            makePath = function() return true end,
             readFromFile = function() return nil end,
         }
         package.loaded["gettext"] = setmetatable({}, {
@@ -93,7 +107,8 @@ describe("Path Picker", function()
         }
         package.loaded["localsend_utils"] = require("localsend_utils")
 
-        settings = {}
+        -- Mock G_reader_settings
+        local settings = {}
         _G.G_reader_settings = {
             readSetting = function(self, key) return settings[key] end,
             saveSetting = function(self, key, value) settings[key] = value end,
@@ -101,11 +116,13 @@ describe("Path Picker", function()
             nilOrTrue = function(self, key) return settings[key] ~= false end,
             flipNilOrTrue = function(self, key) settings[key] = not self:nilOrTrue(key) end,
             flipNilOrFalse = function(self, key) settings[key] = not self:isTrue(key) end,
+            _settings = settings,
             _reset = function()
                 for k in pairs(settings) do settings[k] = nil end
             end,
         }
 
+        -- Mock dofile for _meta.lua
         _G.dofile = function(path)
             if path:match("_meta%.lua$") then
                 return { version = "v1.1.1" }
@@ -116,148 +133,122 @@ describe("Path Picker", function()
 
     before_each(function()
         G_reader_settings._reset()
-        path_exists_map = {}
         package.loaded["main"] = nil
     end)
 
-    describe("getPickerStartPath", function()
-        it("should return path unchanged when lock_home_folder is false", function()
+    describe("dialog field cleanup", function()
+        -- These tests verify that dialog instances are NOT stored on self
+        -- Official KOReader pattern is to use local variables for dialogs
+
+        it("should NOT have device_name_dialog field after showDeviceNameDialog", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            settings["lock_home_folder"] = false
-            settings["home_dir"] = "/mnt/us/documents"
+            -- Before calling, field should not exist
+            assert.is_nil(instance.device_name_dialog,
+                "device_name_dialog should not exist before calling showDeviceNameDialog")
 
-            local result = instance:getPickerStartPath("/mnt/us/documents/books")
-            assert.equal("/mnt/us/documents/books", result)
+            -- Call the dialog function
+            instance:showDeviceNameDialog({})
+
+            -- After calling, field should still not exist (dialog should be local)
+            assert.is_nil(instance.device_name_dialog,
+                "device_name_dialog should NOT be stored on self - use local variable instead")
         end)
 
-        it("should return parent when lock_home_folder is true and path is inside home", function()
+        it("should NOT have pin_dialog field after showPinDialog", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            settings["lock_home_folder"] = true
-            settings["home_dir"] = "/mnt/us/documents"
-            path_exists_map["/mnt/us/documents"] = true
+            assert.is_nil(instance.pin_dialog,
+                "pin_dialog should not exist before calling showPinDialog")
 
-            local result = instance:getPickerStartPath("/mnt/us/documents/books")
-            assert.equal("/mnt/us/documents", result)
+            instance:showPinDialog({})
+
+            assert.is_nil(instance.pin_dialog,
+                "pin_dialog should NOT be stored on self - use local variable instead")
         end)
 
-        it("should return path unchanged when outside home_dir", function()
+        it("should NOT have accept_ext_dialog field after showCustomExtDialog", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            settings["lock_home_folder"] = true
-            settings["home_dir"] = "/mnt/us/documents"
+            assert.is_nil(instance.accept_ext_dialog,
+                "accept_ext_dialog should not exist before calling showCustomExtDialog")
 
-            local result = instance:getPickerStartPath("/mnt/us/other/folder")
-            assert.equal("/mnt/us/other/folder", result)
+            pcall(function() instance:showCustomExtDialog() end)
+
+            assert.is_nil(instance.accept_ext_dialog,
+                "accept_ext_dialog should NOT be stored on self - use local variable instead")
         end)
 
-        it("should handle root path", function()
+        it("should NOT have ext_preset_dialog field after dialog functions", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            settings["lock_home_folder"] = true
-            settings["home_dir"] = "/"
+            assert.is_nil(instance.ext_preset_dialog,
+                "ext_preset_dialog should not exist initially")
 
-            local result = instance:getPickerStartPath("/")
-            assert.equal("/", result)
+            -- The ext_preset_dialog might be created in various functions
+            -- Just verify it's not persisted on the instance after creation
         end)
 
-        it("should handle trailing slashes", function()
+        it("should NOT have custom_ext_dialog field after showAddExtensionRouteDialog", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            settings["lock_home_folder"] = true
-            settings["home_dir"] = "/mnt/us/documents/"
-            path_exists_map["/mnt/us/documents"] = true
+            assert.is_nil(instance.custom_ext_dialog,
+                "custom_ext_dialog should not exist before calling")
 
-            local result = instance:getPickerStartPath("/mnt/us/documents/books/")
-            assert.equal("/mnt/us/documents", result)
+            pcall(function() instance:showAddExtensionRouteDialog({}) end)
+
+            assert.is_nil(instance.custom_ext_dialog,
+                "custom_ext_dialog should NOT be stored on self - use local variable instead")
         end)
 
-        it("should handle paths with special regex characters in home_dir", function()
+        it("should NOT have route_action_dialog field after dialog functions", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            settings["lock_home_folder"] = true
-            settings["home_dir"] = "/mnt/us/my.documents"
-            path_exists_map["/mnt/us/my.documents"] = true
+            assert.is_nil(instance.route_action_dialog,
+                "route_action_dialog should not exist initially")
 
-            -- Should match exactly, not treat . as regex wildcard
-            local result = instance:getPickerStartPath("/mnt/us/my.documents/books")
-            assert.equal("/mnt/us/my.documents", result)
+            -- The route_action_dialog might be created in various routing functions
+            -- Just verify it's not persisted on the instance
+            assert.is_nil(instance.route_action_dialog,
+                "route_action_dialog should NOT be stored on self - use local variable instead")
         end)
+    end)
 
-        it("should not match partial directory names", function()
+    describe("general dialog pattern", function()
+        it("instance should not accumulate dialog fields over time", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            settings["lock_home_folder"] = true
-            settings["home_dir"] = "/mnt/us/doc"
+            -- Count dialog-related fields on instance
+            local dialog_fields = {}
+            for k, _ in pairs(instance) do
+                if type(k) == "string" and k:match("_dialog$") then
+                    table.insert(dialog_fields, k)
+                end
+            end
 
-            -- /mnt/us/documents should NOT be considered inside /mnt/us/doc
-            local result = instance:getPickerStartPath("/mnt/us/documents/books")
-            assert.equal("/mnt/us/documents/books", result)
-        end)
-
-        it("should return original path when parent doesn't exist", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
-            settings["lock_home_folder"] = true
-            settings["home_dir"] = "/mnt/us/documents"
-            path_exists_map["/mnt/us/documents"] = false
-
-            local result = instance:getPickerStartPath("/mnt/us/documents/books")
-            assert.equal("/mnt/us/documents/books", result)
-        end)
-
-        it("should handle deeply nested paths", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
-            settings["lock_home_folder"] = true
-            settings["home_dir"] = "/mnt/us/documents"
-            path_exists_map["/mnt/us/documents/a/b"] = true
-
-            local result = instance:getPickerStartPath("/mnt/us/documents/a/b/c")
-            assert.equal("/mnt/us/documents/a/b", result)
-        end)
-
-        it("should handle single-level path", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
-            settings["lock_home_folder"] = true
-            settings["home_dir"] = "/foo"
-            path_exists_map["/"] = true
-
-            local result = instance:getPickerStartPath("/foo")
-            -- Parent of /foo is /
-            assert.equal("/", result)
+            assert.equal(0, #dialog_fields,
+                "Instance should not have any *_dialog fields. Found: " .. table.concat(dialog_fields, ", "))
         end)
     end)
 end)

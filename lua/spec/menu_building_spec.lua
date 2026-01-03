@@ -325,20 +325,20 @@ describe("Menu Building", function()
 
             assert.is_function(menu_items.localsend.text_func)
 
-            -- When not running
-            instance.isRunning = function() return false end
+            -- When not running (use cached value)
+            instance._cached_running = false
             local text_not_running = menu_items.localsend.text_func()
             assert.equal("LocalSend", text_not_running)
 
-            -- When running
-            instance.isRunning = function() return true end
-            instance.getTransferCount = function() return 0 end
+            -- When running (use cached value)
+            instance._cached_running = true
+            instance._cached_transfer_count = 0
             local text_running = menu_items.localsend.text_func()
             -- Template uses %1 placeholder, so match "(running)" or the template pattern
             assert.truthy(text_running:match("running") or text_running:match("LocalSend"))
 
-            -- When running with transfers
-            instance.getTransferCount = function() return 5 end
+            -- When running with transfers (use cached value)
+            instance._cached_transfer_count = 5
             local text_with_transfers = menu_items.localsend.text_func()
             -- Template uses %1 placeholder for count
             assert.truthy(text_with_transfers:match("received") or text_with_transfers:match("%%1") or text_with_transfers:match("5"))
@@ -701,12 +701,12 @@ describe("Menu Building", function()
             assert.is_not_nil(transfers_item)
             assert.is_function(transfers_item.enabled_func)
 
-            -- When no transfers, should be disabled
-            instance.getTransferCount = function() return 0 end
+            -- When no transfers, should be disabled (use cached value)
+            instance._cached_transfer_count = 0
             assert.is_false(transfers_item.enabled_func())
 
-            -- When transfers exist, should be enabled
-            instance.getTransferCount = function() return 5 end
+            -- When transfers exist, should be enabled (use cached value)
+            instance._cached_transfer_count = 5
             assert.is_true(transfers_item.enabled_func())
         end)
     end)

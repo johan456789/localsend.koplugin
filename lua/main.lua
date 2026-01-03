@@ -186,6 +186,20 @@ function LocalSend:init()
     self.routing_enabled = G_reader_settings:isTrue("LocalSend_routing_enabled") -- Whether routing is active
     self.last_transfer_count = 0
 
+    -- Cache for menu rendering (avoids disk I/O on every menu open)
+    -- Updated via _updateCache() on state changes
+    self._cached_running = false
+    self._cached_transfer_count = 0
+
+    -- Create instance-specific task references for proper unscheduling
+    -- (See UIManager docs: anonymous functions cannot be unscheduled)
+    self.check_transfer_task = function()
+        self:_checkForNewTransfers()
+    end
+    self.resume_start_task = function()
+        self:start(true)  -- silent=true to suppress notification
+    end
+
     -- Only autostart if:
     -- 1. autostart setting is enabled
     -- 2. user hasn't explicitly stopped the server this session
@@ -193,6 +207,9 @@ function LocalSend:init()
     if self.autostart and not ServerState.user_stopped then
         self:start()
     end
+
+    -- Sync cache with actual state (server may be running from previous widget instance)
+    self:_updateCache()
 
     self.ui.menu:registerToMainMenu(self)
     self:onDispatcherRegisterActions()
@@ -225,9 +242,7 @@ function LocalSend:onResume()
     logger.dbg("[LocalSend] onResume")
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
         -- Delay slightly to let WiFi reconnect
-        UIManager:scheduleIn(2, function()
-            self:start(true)  -- silent=true to suppress notification
-        end)
+        UIManager:scheduleIn(2, self.resume_start_task)
     end
 end
 
@@ -248,6 +263,43 @@ function LocalSend:onLeaveStandby()
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
         self:start(true)  -- silent=true to suppress notification
     end
+end
+
+-- Unschedule helpers for proper task cleanup
+-- These use stored task references so UIManager can actually unschedule them
+function LocalSend:_unschedulePolling()
+    if self.check_transfer_task then
+        UIManager:unschedule(self.check_transfer_task)
+    end
+end
+
+function LocalSend:_unscheduleResume()
+    if self.resume_start_task then
+        UIManager:unschedule(self.resume_start_task)
+    end
+end
+
+-- Update cached state values (called on state changes to avoid disk I/O in menu)
+function LocalSend:_updateCache()
+    self._cached_running = self:isRunning()
+    self._cached_transfer_count = self:getTransferCount()
+end
+
+-- Cleanup scheduled tasks when widget is destroyed (document switch, view change)
+-- Note: Server process continues running - only Lua-side tasks are cleaned up
+function LocalSend:onCloseWidget()
+    logger.dbg("[LocalSend] onCloseWidget")
+
+    -- Unschedule polling task
+    self:_unschedulePolling()
+    self.check_transfer_task = nil
+
+    -- Unschedule any pending resume task
+    self:_unscheduleResume()
+    self.resume_start_task = nil
+
+    -- Note: Server process continues running - new widget instance
+    -- will take over polling responsibility in init() if server is running
 end
 
 function LocalSend:openFirewall()
@@ -422,14 +474,9 @@ function LocalSend:clearTransferLog()
     ServerState.last_log_position = 0  -- Reset position tracking when log is cleared
 end
 
--- Issue #13: Optimized checkForNewTransfers using position-tracked reading
--- Uses generation counter to prevent stale callbacks from old widget instances
-function LocalSend:checkForNewTransfers(my_generation)
-    -- If generation doesn't match, this callback is from an old instance - stop polling
-    if my_generation ~= ServerState.polling_generation then
-        return
-    end
-
+-- Internal polling method called by the stored task reference
+-- No generation counter needed - proper unscheduling handles stale callbacks
+function LocalSend:_checkForNewTransfers()
     if not self:isRunning() then
         return
     end
@@ -437,6 +484,9 @@ function LocalSend:checkForNewTransfers(my_generation)
     -- Use optimized getNewTransfers() instead of reading the whole file
     local new_transfers = self:getNewTransfers()
     if #new_transfers > 0 then
+        -- Update cache to reflect new transfer count
+        self:_updateCache()
+
         local latest = new_transfers[#new_transfers]
         local text
         if #new_transfers == 1 then
@@ -451,13 +501,19 @@ function LocalSend:checkForNewTransfers(my_generation)
         })
     end
 
-    -- Schedule next check only if still running and generation still matches
+    -- Schedule next check only if still running
     -- Using 10 second interval to reduce battery drain on e-readers
-    if self:isRunning() and my_generation == ServerState.polling_generation then
-        UIManager:scheduleIn(10, function()
-            self:checkForNewTransfers(my_generation)
-        end)
+    if self:isRunning() then
+        UIManager:scheduleIn(10, self.check_transfer_task)
     end
+end
+
+-- Legacy wrapper for backwards compatibility (still used by some code paths)
+-- @param my_generation number|nil Generation counter (deprecated, ignored)
+function LocalSend:checkForNewTransfers(my_generation)
+    -- Generation counter is now deprecated - proper task unscheduling handles stale callbacks
+    -- Just delegate to the internal method
+    self:_checkForNewTransfers()
 end
 
 -- Start the LocalSend server
@@ -466,12 +522,11 @@ function LocalSend:start(silent)
     -- If server is already running, just take over polling responsibility
     if self:isRunning() then
         logger.dbg("[LocalSend] Server already running, taking over polling")
-        -- Increment generation to invalidate any old polling callbacks
-        ServerState.polling_generation = ServerState.polling_generation + 1
-        local my_generation = ServerState.polling_generation
-        UIManager:scheduleIn(10, function()
-            self:checkForNewTransfers(my_generation)
-        end)
+        -- Sync cache with actual state
+        self:_updateCache()
+        -- Unschedule any existing polling task before starting new one
+        self:_unschedulePolling()
+        UIManager:scheduleIn(10, self.check_transfer_task)
         return
     end
 
@@ -563,12 +618,11 @@ function LocalSend:start(silent)
 
         -- Verify it actually started
         if ready then
-            -- Increment generation and start polling for new transfers
-            ServerState.polling_generation = ServerState.polling_generation + 1
-            local my_generation = ServerState.polling_generation
-            UIManager:scheduleIn(10, function()
-                self:checkForNewTransfers(my_generation)
-            end)
+            -- Update cache now that server is running
+            self:_updateCache()
+
+            -- Start polling for new transfers using stored task reference
+            UIManager:scheduleIn(10, self.check_transfer_task)
 
             if not silent then
                 -- Build concise startup message
@@ -696,6 +750,7 @@ function LocalSend:stopServer(force)
         if not isProcAlive(pid) then
             os.remove(pid_file)
             self:closeFirewall()
+            self:_updateCache()
             return true
         end
         return false, "LocalSend process did not exit"
@@ -703,6 +758,7 @@ function LocalSend:stopServer(force)
 
     os.remove(pid_file)
     self:closeFirewall()
+    self:_updateCache()
     return true
 end
 
@@ -816,7 +872,8 @@ function LocalSend:showSaveDirPicker(touchmenu_instance)
 end
 
 function LocalSend:showDeviceNameDialog(touchmenu_instance)
-    self.device_name_dialog = InputDialog:new{
+    local dialog  -- Local variable instead of self.dialog
+    dialog = InputDialog:new{
         title = _("Device name"),
         description = _("Leave empty for default ('KOReader')"),
         input = self.device_name,
@@ -827,14 +884,14 @@ function LocalSend:showDeviceNameDialog(touchmenu_instance)
                     text = _("Cancel"),
                     id = "close",
                     callback = function()
-                        UIManager:close(self.device_name_dialog)
+                        UIManager:close(dialog)
                     end,
                 },
                 {
                     text = _("Save"),
                     is_enter_default = true,
                     callback = function()
-                        local new_name = self.device_name_dialog:getInputText()
+                        local new_name = dialog:getInputText()
                         local valid, err = self:validateDeviceName(new_name)
                         if not valid then
                             UIManager:show(InfoMessage:new{
@@ -845,19 +902,20 @@ function LocalSend:showDeviceNameDialog(touchmenu_instance)
                         end
                         self.device_name = new_name
                         G_reader_settings:saveSetting("LocalSend_device_name", self.device_name)
-                        UIManager:close(self.device_name_dialog)
+                        UIManager:close(dialog)
                         touchmenu_instance:updateItems()
                     end,
                 },
             },
         },
     }
-    UIManager:show(self.device_name_dialog)
-    self.device_name_dialog:onShowKeyboard()
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
 end
 
 function LocalSend:showPinDialog(touchmenu_instance)
-    self.pin_dialog = InputDialog:new{
+    local dialog
+    dialog = InputDialog:new{
         title = _("PIN code"),
         description = _("Leave empty to disable PIN protection"),
         input = self.pin,
@@ -868,28 +926,29 @@ function LocalSend:showPinDialog(touchmenu_instance)
                     text = _("Cancel"),
                     id = "close",
                     callback = function()
-                        UIManager:close(self.pin_dialog)
+                        UIManager:close(dialog)
                     end,
                 },
                 {
                     text = _("Save"),
                     is_enter_default = true,
                     callback = function()
-                        self.pin = self.pin_dialog:getInputText()
+                        self.pin = dialog:getInputText()
                         G_reader_settings:saveSetting("LocalSend_pin", self.pin)
-                        UIManager:close(self.pin_dialog)
+                        UIManager:close(dialog)
                         touchmenu_instance:updateItems()
                     end,
                 },
             },
         },
     }
-    UIManager:show(self.pin_dialog)
-    self.pin_dialog:onShowKeyboard()
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
 end
 
 function LocalSend:showCustomExtDialog()
-    self.accept_ext_dialog = InputDialog:new{
+    local dialog
+    dialog = InputDialog:new{
         title = _("Custom extensions"),
         description = _("Comma-separated list (e.g., 'epub,pdf,mobi')"),
         input = self.accept_ext,
@@ -900,23 +959,23 @@ function LocalSend:showCustomExtDialog()
                     text = _("Cancel"),
                     id = "close",
                     callback = function()
-                        UIManager:close(self.accept_ext_dialog)
+                        UIManager:close(dialog)
                     end,
                 },
                 {
                     text = _("Save"),
                     is_enter_default = true,
                     callback = function()
-                        self.accept_ext = self.accept_ext_dialog:getInputText()
+                        self.accept_ext = dialog:getInputText()
                         G_reader_settings:saveSetting("LocalSend_accept_ext", self.accept_ext)
-                        UIManager:close(self.accept_ext_dialog)
+                        UIManager:close(dialog)
                     end,
                 },
             },
         },
     }
-    UIManager:show(self.accept_ext_dialog)
-    self.accept_ext_dialog:onShowKeyboard()
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
 end
 
 function LocalSend:buildExtensionPresetsMenu()
@@ -1006,6 +1065,7 @@ function LocalSend:showAddExtensionRouteDialog(touchmenu_instance)
         { "azw3", "cbz", "cbr" },
     }
 
+    local dialog
     local buttons = {}
     for _, row in ipairs(ext_presets) do
         local button_row = {}
@@ -1013,7 +1073,7 @@ function LocalSend:showAddExtensionRouteDialog(touchmenu_instance)
             table.insert(button_row, {
                 text = ext,
                 callback = function()
-                    UIManager:close(self.ext_preset_dialog)
+                    UIManager:close(dialog)
                     self:showExtensionDirPicker(ext, touchmenu_instance)
                 end,
             })
@@ -1026,21 +1086,22 @@ function LocalSend:showAddExtensionRouteDialog(touchmenu_instance)
         {
             text = _("Custom..."),
             callback = function()
-                UIManager:close(self.ext_preset_dialog)
+                UIManager:close(dialog)
                 self:showCustomExtensionDialog(touchmenu_instance)
             end,
         },
     })
 
-    self.ext_preset_dialog = ButtonDialog:new{
+    dialog = ButtonDialog:new{
         title = _("Select extension to route"),
         buttons = buttons,
     }
-    UIManager:show(self.ext_preset_dialog)
+    UIManager:show(dialog)
 end
 
 function LocalSend:showCustomExtensionDialog(touchmenu_instance)
-    self.custom_ext_dialog = InputDialog:new{
+    local dialog
+    dialog = InputDialog:new{
         title = _("Extension to route"),
         description = _("Enter file extension (without dot)"),
         input = "",
@@ -1051,17 +1112,17 @@ function LocalSend:showCustomExtensionDialog(touchmenu_instance)
                     text = _("Cancel"),
                     id = "close",
                     callback = function()
-                        UIManager:close(self.custom_ext_dialog)
+                        UIManager:close(dialog)
                     end,
                 },
                 {
                     text = _("Next"),
                     is_enter_default = true,
                     callback = function()
-                        local ext = self.custom_ext_dialog:getInputText()
+                        local ext = dialog:getInputText()
                         if ext and ext ~= "" then
                             ext = string.lower(ext:gsub("^%.", "")) -- Remove leading dot if present
-                            UIManager:close(self.custom_ext_dialog)
+                            UIManager:close(dialog)
                             self:showExtensionDirPicker(ext, touchmenu_instance)
                         end
                     end,
@@ -1069,8 +1130,8 @@ function LocalSend:showCustomExtensionDialog(touchmenu_instance)
             },
         },
     }
-    UIManager:show(self.custom_ext_dialog)
-    self.custom_ext_dialog:onShowKeyboard()
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
 end
 
 function LocalSend:showExtensionDirPicker(ext, touchmenu_instance)
@@ -1132,14 +1193,15 @@ function LocalSend:buildExtensionRoutingMenu()
             callback = function(touchmenu_instance)
                 -- Show options: change directory or remove
                 local ButtonDialog = require("ui/widget/buttondialog")
-                self.route_action_dialog = ButtonDialog:new{
+                local dialog
+                dialog = ButtonDialog:new{
                     title = T(_("Route for .%1"), captured_ext),
                     buttons = {
                         {
                             {
                                 text = _("Change directory"),
                                 callback = function()
-                                    UIManager:close(self.route_action_dialog)
+                                    UIManager:close(dialog)
                                     self:showExtensionDirPicker(captured_ext, touchmenu_instance)
                                 end,
                             },
@@ -1148,7 +1210,7 @@ function LocalSend:buildExtensionRoutingMenu()
                             {
                                 text = _("Remove route"),
                                 callback = function()
-                                    UIManager:close(self.route_action_dialog)
+                                    UIManager:close(dialog)
                                     self:removeExtensionRoute(captured_ext)
                                     if touchmenu_instance then
                                         touchmenu_instance:updateItems()
@@ -1162,7 +1224,7 @@ function LocalSend:buildExtensionRoutingMenu()
                         },
                     },
                 }
-                UIManager:show(self.route_action_dialog)
+                UIManager:show(dialog)
             end,
         })
     end
@@ -1518,10 +1580,9 @@ end
 function LocalSend:addToMainMenu(menu_items)
     menu_items.localsend = {
         text_func = function()
-            if self:isRunning() then
-                local count = self:getTransferCount()
-                if count > 0 then
-                    return T(_("LocalSend (%1 received)"), count)
+            if self._cached_running then
+                if self._cached_transfer_count > 0 then
+                    return T(_("LocalSend (%1 received)"), self._cached_transfer_count)
                 end
                 return _("LocalSend (running)")
             end
@@ -1531,7 +1592,7 @@ function LocalSend:addToMainMenu(menu_items)
         sub_item_table = {
             {
                 text_func = function()
-                    if self:isRunning() then
+                    if self._cached_running then
                         return _("Stop server")
                     else
                         return _("Start server")
@@ -1540,19 +1601,21 @@ function LocalSend:addToMainMenu(menu_items)
                 keep_menu_open = true,
                 callback = function(touchmenu_instance)
                     self:onToggleLocalSend()
-                    ffiutil.sleep(1)
-                    touchmenu_instance:updateItems()
+                    UIManager:scheduleIn(1, function()
+                        if touchmenu_instance then
+                            touchmenu_instance:updateItems()
+                        end
+                    end)
                 end,
             },
             {
                 text_func = function()
-                    local count = self:getTransferCount()
-                    if count > 0 then
-                        return T(_("Recent transfers (%1)"), count)
+                    if self._cached_transfer_count > 0 then
+                        return T(_("Recent transfers (%1)"), self._cached_transfer_count)
                     end
                     return _("Recent transfers")
                 end,
-                enabled_func = function() return self:getTransferCount() > 0 end,
+                enabled_func = function() return self._cached_transfer_count > 0 end,
                 callback = function()
                     self:showRecentTransfers()
                 end,
@@ -1562,7 +1625,7 @@ function LocalSend:addToMainMenu(menu_items)
                     return T(_("Save directory (%1)"), self.save_dir)
                 end,
                 keep_menu_open = true,
-                enabled_func = function() return not self:isRunning() end,
+                enabled_func = function() return not self._cached_running end,
                 callback = function(touchmenu_instance)
                     self:showSaveDirPicker(touchmenu_instance)
                 end,

@@ -329,8 +329,14 @@ end
 function LocalSend:_onResume()
     logger.dbg("[LocalSend] onResume")
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
-        ServerState.was_running_before_suspend = false
-        self:start(true)  -- silent=true to suppress notification
+        if NetworkMgr:isConnected() then
+            -- Network already available (fast reconnect or didn't disconnect)
+            ServerState.was_running_before_suspend = false
+            self:start(true)  -- silent=true to suppress notification
+        else
+            -- Network not ready yet - keep flag set and let _onNetworkConnected handle it
+            logger.dbg("[LocalSend] Waiting for network to restart server")
+        end
     end
 end
 
@@ -352,8 +358,14 @@ end
 function LocalSend:_onLeaveStandby()
     logger.dbg("[LocalSend] onLeaveStandby")
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
-        ServerState.was_running_before_suspend = false
-        self:start(true)  -- silent=true to suppress notification
+        if NetworkMgr:isConnected() then
+            -- Network already available
+            ServerState.was_running_before_suspend = false
+            self:start(true)  -- silent=true to suppress notification
+        else
+            -- Network not ready yet - keep flag set and let _onNetworkConnected handle it
+            logger.dbg("[LocalSend] Waiting for network to restart server")
+        end
     end
 end
 

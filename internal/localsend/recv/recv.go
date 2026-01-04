@@ -258,10 +258,11 @@ func (fr *FileReceiver) Init() error {
 		fr.identity.Fingerprint = utils.SHA256ofCert(fr.cert.Leaf)
 	}
 
-	// start advertisement
+	// start advertisement (non-fatal if it fails - server can still work without discovery)
 	fr.discoverier, err = localsend.NewDiscoverier(fr.identity, fr.supportHttps)
 	if err != nil {
-		return fmt.Errorf("failed to create discoverer: %w", err)
+		slog.Warn("Failed to create discoverer (device won't be discoverable)", "error", err)
+		// Continue without discovery - server can still accept connections by IP
 	}
 
 	// start session cleanup task
@@ -292,7 +293,8 @@ func (fr *FileReceiver) Start(ctx context.Context) error {
 
 	slog.Info("Waiting for files (Ctrl-C to terminate)")
 
-	go func() { _ = fr.advertise() }() // let others know we are here
+	// Start discovery/advertisement (with retry if network wasn't available at init)
+	go fr.startDiscoveryWithRetry(ctx)
 
 	// Listen for context cancellation to trigger graceful shutdown
 	go func() {
@@ -303,7 +305,42 @@ func (fr *FileReceiver) Start(ctx context.Context) error {
 	return lsutils.ListenWithTLS(fr.webServer, fr.listenAddr, fr.cert, fr.supportHttps)
 }
 
+// startDiscoveryWithRetry starts the discovery/advertisement loop.
+// If discoverer wasn't created at Init (no network), it retries every 5 seconds until success or context cancellation.
+func (fr *FileReceiver) startDiscoveryWithRetry(ctx context.Context) {
+	// If discoverer already exists, just start it
+	if fr.discoverier != nil {
+		_ = fr.discoverier.Listen()
+		return
+	}
+
+	// Discoverer doesn't exist - retry creating it periodically
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			var err error
+			fr.discoverier, err = localsend.NewDiscoverier(fr.identity, fr.supportHttps)
+			if err != nil {
+				// Still no network, keep trying
+				continue
+			}
+			slog.Info("Discovery started (network became available)")
+			// Success - start the listen loop (blocks until shutdown)
+			_ = fr.discoverier.Listen()
+			return
+		}
+	}
+}
+
 func (fr *FileReceiver) advertise() error {
+	if fr.discoverier == nil {
+		return nil // Discovery not available
+	}
 	return fr.discoverier.Listen()
 }
 
@@ -311,7 +348,9 @@ func (fr *FileReceiver) Stop() error {
 	slog.Info("Stop receiving")
 
 	fr.sessman.Stop()
-	_ = fr.discoverier.Shutdown()
+	if fr.discoverier != nil {
+		_ = fr.discoverier.Shutdown()
+	}
 	fr.closeTransferLog()
 
 	// Graceful shutdown with 5 second timeout

@@ -97,6 +97,7 @@ describe("LocalSend Task Scheduling", function()
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                 return false
             end,
+            makePath = function(path) return true end,
         }
         package.loaded["gettext"] = setmetatable({}, {
             __call = function(_, s) return s end,
@@ -301,12 +302,14 @@ describe("LocalSend Task Scheduling", function()
     describe("onResume uses NetworkMgr:runWhenConnected", function()
         it("onResume should call start via NetworkMgr:runWhenConnected", function()
             LocalSend = require("main")
-            LocalSend._ServerState.was_running_before_suspend = true
             LocalSend._ServerState.user_stopped = false
 
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
+
+            -- Set flag AFTER widget creation (simulating suspend after widget exists)
+            LocalSend._ServerState.was_running_before_suspend = true
 
             -- Track start calls
             local start_called = false
@@ -463,6 +466,112 @@ describe("LocalSend Task Scheduling", function()
             assert.equal(1, #scheduled_tasks, "Should schedule next sentinel check")
             assert.equal(instance.check_sentinel_task, scheduled_tasks[1].callback)
             assert.equal(2, scheduled_tasks[1].delay, "Should schedule with 2 second interval")
+        end)
+
+        it("should update cache and cleanup when server dies", function()
+            -- Bug 3: _checkSentinelFile should detect server death and update state
+            LocalSend = require("main")
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            -- Simulate server was running (cache says true)
+            instance._cached_running = true
+            package.loaded["pluginshare"].localsend_running = true
+
+            -- But now isRunning returns false (server died)
+            instance.isRunning = function() return false end
+
+            scheduled_tasks = {}
+            instance:_checkSentinelFile()
+
+            -- Should have updated cache to reflect server death
+            assert.is_false(instance._cached_running,
+                "_checkSentinelFile should update cache when server dies")
+
+            -- Should have cleared PluginShare
+            assert.is_nil(package.loaded["pluginshare"].localsend_running,
+                "_checkSentinelFile should clear PluginShare when server dies")
+
+            -- Should NOT schedule next check (server is dead)
+            assert.equal(0, #scheduled_tasks,
+                "Should not schedule next check when server is dead")
+        end)
+    end)
+
+    describe("task reference recovery after onCloseWidget", function()
+        -- Bug 1: Task references should be recreated if nil when starting server
+
+        it("_onServerStarted should recreate check_sentinel_task if nil", function()
+            LocalSend = require("main")
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            -- Simulate onCloseWidget having nullified the task
+            instance.check_sentinel_task = nil
+
+            -- Mock dependencies for _onServerStarted
+            instance.isRunning = function() return true end
+
+            scheduled_tasks = {}
+            instance:_onServerStarted(true, "TestDevice")
+
+            -- check_sentinel_task should have been recreated
+            assert.is_function(instance.check_sentinel_task,
+                "check_sentinel_task should be recreated if nil")
+
+            -- Should have scheduled the recreated task
+            assert.equal(1, #scheduled_tasks,
+                "Should schedule the recreated sentinel task")
+            assert.equal(instance.check_sentinel_task, scheduled_tasks[1].callback,
+                "Should schedule the newly created check_sentinel_task")
+        end)
+
+        it("polling should work after resume even if onCloseWidget was called", function()
+            -- End-to-end test: suspend -> onCloseWidget -> resume -> server should poll
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = false
+            LocalSend._ServerState.user_stopped = false
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            -- Simulate server running initially
+            local server_running = true
+            instance.isRunning = function() return server_running end
+            instance.stopServer = function()
+                server_running = false
+                return true
+            end
+
+            -- Step 1: Suspend - should set was_running_before_suspend
+            instance:_onSuspend()
+            assert.is_true(LocalSend._ServerState.was_running_before_suspend)
+            assert.is_false(server_running)
+
+            -- Step 2: onCloseWidget called during suspend - nullifies tasks
+            instance:onCloseWidget()
+            assert.is_nil(instance.check_sentinel_task)
+
+            -- Step 3: Resume - should restart server
+            -- Since we can't fully mock start(), we'll test _onServerStarted directly
+            -- which is where the task recreation happens
+            server_running = true  -- Server "starts" again
+            scheduled_tasks = {}
+
+            -- Simulate what happens after start() succeeds: _onServerStarted is called
+            instance:_onServerStarted(true, "TestDevice")
+
+            -- After _onServerStarted, check_sentinel_task should exist and be scheduled
+            assert.is_function(instance.check_sentinel_task,
+                "check_sentinel_task should be recreated after resume")
+
+            -- Cleanup
+            LocalSend._ServerState.was_running_before_suspend = false
         end)
     end)
 end)

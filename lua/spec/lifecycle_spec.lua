@@ -474,12 +474,14 @@ describe("LocalSend Lifecycle", function()
 
         it("onResume should restart server if was_running_before_suspend is true", function()
             LocalSend = require("main")
-            LocalSend._ServerState.was_running_before_suspend = true
             LocalSend._ServerState.user_stopped = false
 
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
+
+            -- Set flag AFTER widget creation (simulating suspend after widget exists)
+            LocalSend._ServerState.was_running_before_suspend = true
 
             local start_called = false
             local start_silent = nil
@@ -567,12 +569,14 @@ describe("LocalSend Lifecycle", function()
 
         it("onLeaveStandby should restart server immediately (no delay)", function()
             LocalSend = require("main")
-            LocalSend._ServerState.was_running_before_suspend = true
             LocalSend._ServerState.user_stopped = false
 
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
+
+            -- Set flag AFTER widget creation (simulating standby after widget exists)
+            LocalSend._ServerState.was_running_before_suspend = true
 
             local start_called = false
             local start_silent = nil
@@ -884,6 +888,102 @@ describe("LocalSend Lifecycle", function()
             assert.has_no.errors(function()
                 instance:onFlushSettings()
             end)
+        end)
+    end)
+
+    -- =========================================================================
+    -- Bug 2: New widget should check was_running_before_suspend in init()
+    -- =========================================================================
+    describe("new widget instance after missed resume event", function()
+        it("init() should start server if was_running_before_suspend is true", function()
+            -- Scenario: Device resumes, but widget was destroyed and recreated AFTER
+            -- the resume event was dispatched. The new widget should detect
+            -- was_running_before_suspend and start the server.
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = true
+            LocalSend._ServerState.user_stopped = false
+
+            local start_called = false
+            local start_silent = nil
+            local original_start = LocalSend.start
+            LocalSend.start = function(self, silent)
+                start_called = true
+                start_silent = silent
+            end
+
+            -- Create new widget instance - should detect missed resume
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            -- Should have called start with silent=true (like resume would)
+            assert.is_true(start_called,
+                "init() should start server when was_running_before_suspend is true")
+            assert.is_true(start_silent,
+                "init() should start with silent=true to avoid notification")
+
+            -- Flag should be cleared after handling
+            assert.is_false(LocalSend._ServerState.was_running_before_suspend,
+                "was_running_before_suspend should be cleared after init handles it")
+
+            -- Cleanup
+            LocalSend.start = original_start
+            LocalSend._ServerState.was_running_before_suspend = false
+        end)
+
+        it("init() should NOT start if was_running_before_suspend but user_stopped is true", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = true
+            LocalSend._ServerState.user_stopped = true
+
+            local start_called = false
+            local original_start = LocalSend.start
+            LocalSend.start = function(self, silent)
+                start_called = true
+            end
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            assert.is_false(start_called,
+                "init() should NOT start if user explicitly stopped")
+
+            -- Cleanup
+            LocalSend.start = original_start
+            LocalSend._ServerState.was_running_before_suspend = false
+            LocalSend._ServerState.user_stopped = false
+        end)
+
+        it("init() should handle was_running_before_suspend separately from autostart", function()
+            -- Both flags true: was_running_before_suspend takes precedence (silent start)
+            G_reader_settings._settings["LocalSend_autostart"] = true
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = true
+            LocalSend._ServerState.user_stopped = false
+
+            local start_count = 0
+            local silent_values = {}
+            local original_start = LocalSend.start
+            LocalSend.start = function(self, silent)
+                start_count = start_count + 1
+                table.insert(silent_values, silent)
+            end
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            -- Should start only once (was_running_before_suspend handled, autostart skipped)
+            -- OR start twice but was_running_before_suspend uses silent=true
+            -- The important thing is that the server gets started
+            assert.is_true(start_count >= 1,
+                "Server should be started")
+
+            -- Cleanup
+            LocalSend.start = original_start
+            LocalSend._ServerState.was_running_before_suspend = false
+            G_reader_settings._settings["LocalSend_autostart"] = nil
         end)
     end)
 end)

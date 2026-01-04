@@ -211,11 +211,21 @@ function LocalSend:init()
     -- Clean up orphaned resources from previous crashes
     self:_cleanupOrphanedResources()
 
+    -- Handle missed resume event: if was_running_before_suspend is true, a previous
+    -- widget instance was destroyed during suspend/resume and this new instance
+    -- needs to restart the server. This takes priority over autostart.
+    if ServerState.was_running_before_suspend and not ServerState.user_stopped then
+        ServerState.was_running_before_suspend = false  -- Clear flag before starting
+        NetworkMgr:runWhenConnected(function()
+            if not ServerState.user_stopped then
+                self:start(true)  -- silent=true like normal resume
+            end
+        end)
     -- Only autostart if:
     -- 1. autostart setting is enabled
     -- 2. user hasn't explicitly stopped the server this session
     -- (ServerState resets on KOReader restart, so autostart works on fresh launch)
-    if self.autostart and not ServerState.user_stopped then
+    elseif self.autostart and not ServerState.user_stopped then
         -- Use NetworkMgr:runWhenConnected for reliable startup after WiFi is ready
         NetworkMgr:runWhenConnected(function()
             -- Re-check user_stopped in case they toggled it while waiting for network
@@ -460,6 +470,14 @@ function LocalSend:_onServerStarted(silent, effective_name)
 
     -- Register event handlers now that server is running
     self:registerEvents()
+
+    -- Recreate task references if they were nullified by onCloseWidget
+    -- This can happen during suspend/resume cycles when the widget is closed
+    if not self.check_sentinel_task then
+        self.check_sentinel_task = function()
+            self:_checkSentinelFile()
+        end
+    end
 
     -- Start fast sentinel polling for responsive notifications
     self:_unschedulePolling()  -- Ensure no duplicate polling
@@ -721,6 +739,9 @@ end
 -- When content changes, triggers an immediate full log check
 function LocalSend:_checkSentinelFile()
     if not self:isRunning() then
+        -- Server died unexpectedly - clean up state so UI reflects reality
+        self:_cleanupServerState()
+        logger.dbg("[LocalSend] Server died, cleaned up state")
         return
     end
 

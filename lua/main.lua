@@ -269,7 +269,15 @@ end
 -- Only register power/network handlers when server is running or expected to run
 -- This reduces event processing overhead when the plugin is idle
 function LocalSend:registerEvents()
-    if self:isRunning() or (self.autostart and not ServerState.user_stopped) then
+    -- Keep handlers registered if:
+    -- 1. Server is currently running
+    -- 2. Autostart is enabled and user hasn't stopped it
+    -- 3. Server was running before suspend/disconnect (so we can restart on resume)
+    local should_register = self:isRunning()
+        or (self.autostart and not ServerState.user_stopped)
+        or ServerState.was_running_before_suspend
+        or ServerState.was_running_before_disconnect
+    if should_register then
         -- Server running or expected to run: register handlers
         self.onSuspend = self._onSuspend
         self.onResume = self._onResume
@@ -311,12 +319,15 @@ end
 function LocalSend:_onResume()
     logger.dbg("[LocalSend] onResume")
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
-        -- Use NetworkMgr:runWhenConnected for reliable restart after WiFi reconnects
-        NetworkMgr:runWhenConnected(function()
-            if not ServerState.user_stopped then
-                self:start(true)  -- silent=true to suppress notification
-            end
-        end)
+        -- Check if network is already connected (fast resume with WiFi still up)
+        if NetworkMgr:isConnected() then
+            ServerState.was_running_before_suspend = false
+            self:start(true)  -- silent=true to suppress notification
+        else
+            -- Network not ready yet - onNetworkConnected will handle restart
+            -- Keep was_running_before_suspend=true so onNetworkConnected knows to restart
+            logger.dbg("[LocalSend] Waiting for network to reconnect before restarting")
+        end
     end
 end
 
@@ -338,6 +349,8 @@ end
 function LocalSend:_onLeaveStandby()
     logger.dbg("[LocalSend] onLeaveStandby")
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
+        -- Clear the flag now that we're handling the resume
+        ServerState.was_running_before_suspend = false
         self:start(true)  -- silent=true to suppress notification
     end
 end
@@ -357,7 +370,13 @@ end
 -- Handle network reconnect
 function LocalSend:_onNetworkConnected()
     logger.dbg("[LocalSend] onNetworkConnected")
-    if ServerState.was_running_before_disconnect and not ServerState.user_stopped then
+    -- Restart if we were waiting for network after suspend OR after disconnect
+    local should_restart = (ServerState.was_running_before_suspend or ServerState.was_running_before_disconnect)
+        and not ServerState.user_stopped
+    if should_restart then
+        -- Clear both flags
+        ServerState.was_running_before_suspend = false
+        ServerState.was_running_before_disconnect = false
         self:start(true)  -- silent=true to suppress notification
         logger.dbg("[LocalSend] Server restarted after network reconnect")
     end
@@ -1209,7 +1228,7 @@ function LocalSend:showAddExtensionRouteDialog(touchmenu_instance)
     -- Common extension presets for e-readers
     local ButtonDialog = require("ui/widget/buttondialog")
     local ext_presets = {
-        { "epub", "PDF", "mobi" },
+        { "epub", "pdf", "mobi" },
         { "azw3", "cbz", "cbr" },
     }
 
@@ -1293,9 +1312,7 @@ function LocalSend:showExtensionDirPicker(ext, touchmenu_instance)
             local valid, err = self:validateSaveDir(path)
             if valid then
                 self:addExtensionRoute(ext, path)
-                if touchmenu_instance then
-                    touchmenu_instance:updateItems()
-                end
+                self:refreshRoutingMenu(touchmenu_instance)
                 UIManager:show(InfoMessage:new{
                     text = T(_(".%1 files will be saved to:\n%2"), ext, path),
                     timeout = 3,
@@ -1309,6 +1326,28 @@ function LocalSend:showExtensionDirPicker(ext, touchmenu_instance)
         end,
     }
     UIManager:show(path_chooser)
+end
+
+-- Refresh the routing menu by rebuilding its item_table in-place
+-- This is needed because TouchMenu caches sub_item_table_func results
+function LocalSend:refreshRoutingMenu(touchmenu_instance)
+    if not touchmenu_instance then return end
+    -- Rebuild the menu items
+    local new_items = self:buildExtensionRoutingMenu()
+    -- Clear and repopulate the existing item_table in-place
+    local item_table = touchmenu_instance.item_table
+    if not item_table then
+        -- Fallback for test mocks or edge cases
+        touchmenu_instance:updateItems()
+        return
+    end
+    for i = #item_table, 1, -1 do
+        item_table[i] = nil
+    end
+    for i, item in ipairs(new_items) do
+        item_table[i] = item
+    end
+    touchmenu_instance:updateItems()
 end
 
 function LocalSend:buildExtensionRoutingMenu()
@@ -1360,9 +1399,7 @@ function LocalSend:buildExtensionRoutingMenu()
                                 callback = function()
                                     UIManager:close(dialog)
                                     self:removeExtensionRoute(captured_ext)
-                                    if touchmenu_instance then
-                                        touchmenu_instance:updateItems()
-                                    end
+                                    self:refreshRoutingMenu(touchmenu_instance)
                                     UIManager:show(InfoMessage:new{
                                         text = T(_("Route for .%1 removed"), captured_ext),
                                         timeout = 2,

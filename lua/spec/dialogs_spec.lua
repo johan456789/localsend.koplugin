@@ -148,6 +148,7 @@ describe("Dialog Functions", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
         package.loaded["ui/uimanager"] = {
             show = function() end,
@@ -401,6 +402,7 @@ describe("Dialog Functions", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
         package.loaded["ui/uimanager"] = {
                 show = function() end,
@@ -488,6 +490,7 @@ describe("Dialog Functions", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
         package.loaded["ui/uimanager"] = {
                 show = function() end,
@@ -586,6 +589,7 @@ describe("Dialog Functions", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
         package.loaded["ui/uimanager"] = {
                 show = function() end,
@@ -659,12 +663,12 @@ describe("Dialog Functions", function()
             for _, row in ipairs(dialog.buttons) do
                 for _, button in ipairs(row) do
                     if button.text == "epub" then found_epub = true end
-                    if button.text == "PDF" then found_pdf = true end
+                    if button.text == "pdf" then found_pdf = true end
                 end
             end
 
             assert.is_true(found_epub, "Should have epub button")
-            assert.is_true(found_pdf, "Should have PDF button")
+            assert.is_true(found_pdf, "Should have pdf button")
         end)
 
         it("should have Custom option", function()
@@ -766,6 +770,7 @@ describe("Dialog Functions", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
         package.loaded["ui/uimanager"] = {
                 show = function() end,

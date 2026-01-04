@@ -38,6 +38,7 @@ describe("showRecentTransfers", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
         package.loaded["ui/uimanager"] = {
             show = function() end,

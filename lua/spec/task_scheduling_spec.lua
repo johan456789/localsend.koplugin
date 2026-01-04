@@ -36,6 +36,7 @@ describe("LocalSend Task Scheduling", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
 
         -- Track scheduled and unscheduled tasks

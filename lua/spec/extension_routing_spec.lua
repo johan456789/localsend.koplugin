@@ -32,6 +32,7 @@ describe("Extension Routing", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
         package.loaded["ui/uimanager"] = {
             show = function() end,
@@ -446,6 +447,7 @@ describe("Extension Routing", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
         package.loaded["ui/uimanager"] = {
                 show = function(self, dialog)
@@ -525,6 +527,7 @@ describe("Extension Routing", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
         package.loaded["ui/uimanager"] = {
                 show = function(self, dialog)
@@ -605,6 +608,7 @@ describe("Extension Routing", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
         package.loaded["ui/uimanager"] = {
                 show = function(self, dialog)
@@ -703,6 +707,7 @@ describe("Extension Routing", function()
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
             runWhenConnected = function(self, callback) callback() end,
+            isConnected = function() return true end,
         }
         package.loaded["ui/uimanager"] = {
                 show = function(self, dialog)

@@ -424,7 +424,7 @@ func TestPreUploadV3Handler_CorrectPIN(t *testing.T) {
 // Upload Handler Tests (POST /api/localsend/v2/upload)
 // =============================================================================
 
-// TestUploadHandler_UnknownFileId demonstrates Issue #15.
+// TestUploadHandler_UnknownFileId tests handling of unknown file IDs.
 // BUG: GetFileMeta's ok return value is ignored - unknown fileId should return 400.
 func TestUploadHandler_UnknownFileId(t *testing.T) {
 	fr := newTestReceiver()
@@ -462,7 +462,7 @@ func TestUploadHandler_UnknownFileId(t *testing.T) {
 	//
 	// After fix: Should return 400 for unknown fileId
 	if resp.StatusCode != 400 {
-		t.Errorf("Status = %d; want 400 for unknown fileId (Issue #15)", resp.StatusCode)
+		t.Errorf("Status = %d; want 400 for unknown fileId", resp.StatusCode)
 	}
 }
 

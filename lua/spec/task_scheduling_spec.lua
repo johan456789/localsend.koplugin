@@ -32,7 +32,11 @@ describe("LocalSend Task Scheduling", function()
         }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
 
         -- Track scheduled and unscheduled tasks
         package.loaded["ui/uimanager"] = {
@@ -44,7 +48,11 @@ describe("LocalSend Task Scheduling", function()
             unschedule = function(self, callback)
                 table.insert(unscheduled_tasks, callback)
             end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
         }
+        package.loaded["pluginshare"] = {}
 
         -- Mock WidgetContainer
         local WidgetContainer = {}
@@ -288,8 +296,8 @@ describe("LocalSend Task Scheduling", function()
         end)
     end)
 
-    describe("onResume uses stored task reference", function()
-        it("onResume should schedule resume_start_task (not anonymous function)", function()
+    describe("onResume uses NetworkMgr:runWhenConnected", function()
+        it("onResume should call start via NetworkMgr:runWhenConnected", function()
             LocalSend = require("main")
             LocalSend._ServerState.was_running_before_suspend = true
             LocalSend._ServerState.user_stopped = false
@@ -298,15 +306,22 @@ describe("LocalSend Task Scheduling", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
+            -- Track start calls
+            local start_called = false
+            local start_silent = nil
+            instance.start = function(self, silent)
+                start_called = true
+                start_silent = silent
+            end
+
             -- Clear any tasks scheduled during init
             scheduled_tasks = {}
 
-            instance:onResume()
+            instance:_onResume()
 
-            assert.equal(1, #scheduled_tasks, "Should schedule one task")
-            assert.equal(2, scheduled_tasks[1].delay, "Should have 2 second delay")
-            assert.equal(instance.resume_start_task, scheduled_tasks[1].callback,
-                "Should schedule the stored resume_start_task, not an anonymous function")
+            -- NetworkMgr:runWhenConnected mock calls callback immediately
+            assert.is_true(start_called, "start should be called via NetworkMgr:runWhenConnected")
+            assert.is_true(start_silent, "start should be called with silent=true")
 
             -- Cleanup
             LocalSend._ServerState.was_running_before_suspend = false
@@ -331,7 +346,7 @@ describe("LocalSend Task Scheduling", function()
             instance:_checkForNewTransfers()
 
             assert.equal(1, #scheduled_tasks, "Should schedule one task")
-            assert.equal(10, scheduled_tasks[1].delay, "Should have 10 second delay")
+            assert.equal(15, scheduled_tasks[1].delay, "Should have 15 second delay (POLLING_INTERVAL_IDLE)")
             assert.equal(instance.check_transfer_task, scheduled_tasks[1].callback,
                 "Should schedule the stored check_transfer_task, not an anonymous function")
         end)

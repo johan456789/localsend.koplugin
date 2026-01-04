@@ -87,7 +87,7 @@ func TestExtensionRouter_HasRoutes(t *testing.T) {
 }
 
 // =============================================================================
-// Security Tests - Path Traversal (Issue #18)
+// Security Tests - Path Traversal
 // =============================================================================
 
 // TestLoadFromFile_PathTraversal tests that LoadFromFile rejects paths

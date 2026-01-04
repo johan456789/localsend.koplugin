@@ -28,12 +28,21 @@ describe("Menu Building", function()
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/buttondialog"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function() end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
         }
+        package.loaded["pluginshare"] = {}
 
         local WidgetContainer = {}
         WidgetContainer.__index = WidgetContainer
@@ -410,12 +419,12 @@ describe("Menu Building", function()
             assert.is_not_nil(settings_item)
             assert.is_function(settings_item.enabled_func)
 
-            -- When not running, should be enabled
-            instance.isRunning = function() return false end
+            -- When not running (cached), should be enabled
+            instance._cached_running = false
             assert.is_true(settings_item.enabled_func())
 
-            -- When running, should be disabled
-            instance.isRunning = function() return true end
+            -- When running (cached), should be disabled
+            instance._cached_running = true
             assert.is_false(settings_item.enabled_func())
         end)
 
@@ -708,6 +717,80 @@ describe("Menu Building", function()
             -- When transfers exist, should be enabled (use cached value)
             instance._cached_transfer_count = 5
             assert.is_true(transfers_item.enabled_func())
+        end)
+    end)
+
+    -- =========================================================================
+    -- Settings menu cache consistency
+    -- =========================================================================
+    describe("Settings menu cache consistency", function()
+        it("Settings submenu enabled_func should use _cached_running not isRunning()", function()
+            LocalSend = require("main")
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            -- Get the menu items
+            local menu_items = {}
+            instance:addToMainMenu(menu_items)
+
+            -- Find the Settings submenu
+            local settings_item = nil
+            for _, item in ipairs(menu_items.localsend.sub_item_table) do
+                if item.text == "Settings" then
+                    settings_item = item
+                    break
+                end
+            end
+
+            assert.is_not_nil(settings_item, "Settings menu item should exist")
+            assert.is_function(settings_item.enabled_func, "Settings should have enabled_func")
+
+            -- Set cached value to true (running)
+            instance._cached_running = true
+            -- But isRunning returns false
+            instance.isRunning = function() return false end
+
+            -- enabled_func should use cached value, not call isRunning
+            local is_enabled = settings_item.enabled_func()
+
+            -- If using cache: enabled = not true = false
+            -- If calling isRunning: enabled = not false = true
+            assert.is_false(is_enabled,
+                "Settings enabled_func should use _cached_running, not call isRunning()")
+        end)
+
+        it("Settings submenu enabled_func should return true when _cached_running is false", function()
+            LocalSend = require("main")
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local menu_items = {}
+            instance:addToMainMenu(menu_items)
+
+            -- Find Settings item
+            local settings_item = nil
+            for _, item in ipairs(menu_items.localsend.sub_item_table) do
+                if item.text == "Settings" then
+                    settings_item = item
+                    break
+                end
+            end
+
+            -- Set cached value to false (not running)
+            instance._cached_running = false
+            -- isRunning returns true (inconsistent - to test which is used)
+            instance.isRunning = function() return true end
+
+            local is_enabled = settings_item.enabled_func()
+
+            -- If using cache: enabled = not false = true
+            -- If calling isRunning: enabled = not true = false
+            assert.is_true(is_enabled,
+                "Settings enabled_func should use _cached_running, not call isRunning()")
         end)
     end)
 end)

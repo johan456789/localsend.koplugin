@@ -8,7 +8,7 @@ import (
 	"localsend-cli/internal/models"
 )
 
-// TestRecvSessManagerLifecycle tests the fix for Issue #1 - goroutine leak
+// TestRecvSessManagerLifecycle tests session manager lifecycle to prevent goroutine leaks
 func TestRecvSessManagerLifecycle(t *testing.T) {
 	t.Run("Start and Stop work correctly", func(t *testing.T) {
 		mgr := NewRecvSessManager()

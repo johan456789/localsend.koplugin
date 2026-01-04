@@ -37,13 +37,22 @@ describe("LocalSend Lifecycle", function()
         }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function() end,
             unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
+            unschedule = function() end,
         }
+        package.loaded["pluginshare"] = {}
 
         -- Mock WidgetContainer
         local WidgetContainer = {}
@@ -86,6 +95,7 @@ describe("LocalSend Lifecycle", function()
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                 return false
             end,
+            makePath = function(path) return true end,
         }
         package.loaded["gettext"] = setmetatable({}, {
             __call = function(_, s) return s end,
@@ -379,39 +389,50 @@ describe("LocalSend Lifecycle", function()
     end)
 
     describe("suspend/resume behavior", function()
-        it("should have onSuspend method defined", function()
+        it("should have _onSuspend implementation defined", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
-            assert.is_function(instance.onSuspend)
+            assert.is_function(instance._onSuspend)
         end)
 
-        it("should have onResume method defined", function()
+        it("should have _onResume implementation defined", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
-            assert.is_function(instance.onResume)
+            assert.is_function(instance._onResume)
         end)
 
-        it("should have onEnterStandby method defined", function()
+        it("should have _onEnterStandby implementation defined", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
-            assert.is_function(instance.onEnterStandby)
+            assert.is_function(instance._onEnterStandby)
         end)
 
-        it("should have onLeaveStandby method defined", function()
+        it("should have _onLeaveStandby implementation defined", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
-            assert.is_function(instance.onLeaveStandby)
+            assert.is_function(instance._onLeaveStandby)
         end)
 
-        it("onSuspend should stop server and set was_running_before_suspend", function()
+        it("onSuspend should be registered when autostart is enabled", function()
+            _G.G_reader_settings._settings["LocalSend_autostart"] = true
+            package.loaded["main"] = nil  -- Force reload
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            assert.is_function(instance.onSuspend, "onSuspend should be registered when autostart is enabled")
+            _G.G_reader_settings._settings["LocalSend_autostart"] = nil
+        end)
+
+        it("_onSuspend should stop server and set was_running_before_suspend", function()
             LocalSend = require("main")
             LocalSend._ServerState.was_running_before_suspend = false
 
@@ -423,9 +444,9 @@ describe("LocalSend Lifecycle", function()
             instance.isRunning = function() return true end
             instance.stopServer = function() stop_called = true; return true end
 
-            instance:onSuspend()
+            instance:_onSuspend()
 
-            assert.is_true(stop_called, "onSuspend should stop the server")
+            assert.is_true(stop_called, "_onSuspend should stop the server")
             assert.is_true(LocalSend._ServerState.was_running_before_suspend,
                 "was_running_before_suspend should be true")
 
@@ -443,7 +464,7 @@ describe("LocalSend Lifecycle", function()
 
             instance.isRunning = function() return false end
 
-            instance:onSuspend()
+            instance:_onSuspend()
 
             assert.is_false(LocalSend._ServerState.was_running_before_suspend,
                 "was_running_before_suspend should be false when server not running")
@@ -458,12 +479,6 @@ describe("LocalSend Lifecycle", function()
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            local scheduled_callback = nil
-            -- Note: scheduleIn is called as method (UIManager:scheduleIn), so first arg is self
-            package.loaded["ui/uimanager"].scheduleIn = function(self, delay, callback)
-                scheduled_callback = callback
-            end
-
             local start_called = false
             local start_silent = nil
             instance.start = function(self, silent)
@@ -471,14 +486,9 @@ describe("LocalSend Lifecycle", function()
                 start_silent = silent
             end
 
-            instance:onResume()
+            instance:_onResume()
 
-            -- The callback should have been scheduled
-            assert.is_function(scheduled_callback, "Should schedule a callback")
-
-            -- Execute the scheduled callback
-            scheduled_callback()
-
+            -- NetworkMgr:runWhenConnected mock calls callback immediately
             assert.is_true(start_called, "start should be called after resume")
             assert.is_true(start_silent, "start should be called with silent=true")
 
@@ -494,13 +504,14 @@ describe("LocalSend Lifecycle", function()
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
+        package.loaded["pluginshare"] = {}
 
             local start_called = false
             instance.start = function(self, silent)
                 start_called = true
             end
 
-            instance:onResume()
+            instance:_onResume()
 
             assert.is_false(start_called,
                 "start should NOT be called when user_stopped is true")
@@ -524,7 +535,7 @@ describe("LocalSend Lifecycle", function()
                 start_called = true
             end
 
-            instance:onResume()
+            instance:_onResume()
 
             assert.is_false(start_called,
                 "start should NOT be called when server was not running before suspend")
@@ -542,7 +553,7 @@ describe("LocalSend Lifecycle", function()
             instance.isRunning = function() return true end
             instance.stopServer = function() stop_called = true; return true end
 
-            instance:onEnterStandby()
+            instance:_onEnterStandby()
 
             assert.is_true(stop_called, "onEnterStandby should stop the server")
             assert.is_true(LocalSend._ServerState.was_running_before_suspend,
@@ -568,7 +579,7 @@ describe("LocalSend Lifecycle", function()
                 start_silent = silent
             end
 
-            instance:onLeaveStandby()
+            instance:_onLeaveStandby()
 
             -- onLeaveStandby calls start directly, no delay
             assert.is_true(start_called, "start should be called after leaving standby")
@@ -592,7 +603,7 @@ describe("LocalSend Lifecycle", function()
                 start_called = true
             end
 
-            instance:onLeaveStandby()
+            instance:_onLeaveStandby()
 
             assert.is_false(start_called,
                 "start should NOT be called when user_stopped is true")
@@ -703,6 +714,174 @@ describe("LocalSend Lifecycle", function()
 
             assert.is_true(clear_log_called,
                 "start() without silent should clear transfer log")
+        end)
+    end)
+
+    -- =========================================================================
+    -- Network disconnect/reconnect handling
+    -- =========================================================================
+    describe("network disconnect/reconnect behavior", function()
+        it("should have _onNetworkDisconnected implementation defined", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            assert.is_function(instance._onNetworkDisconnected,
+                "_onNetworkDisconnected implementation should be defined to handle WiFi loss")
+        end)
+
+        it("should have _onNetworkConnected implementation defined", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            assert.is_function(instance._onNetworkConnected,
+                "_onNetworkConnected implementation should be defined to handle WiFi reconnection")
+        end)
+
+        it("ServerState should have was_running_before_disconnect field", function()
+            LocalSend = require("main")
+
+            assert.is_not_nil(LocalSend._ServerState.was_running_before_disconnect,
+                "ServerState should track was_running_before_disconnect")
+        end)
+
+        it("onNetworkDisconnected should stop server if running", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_disconnect = false
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local stop_called = false
+            instance.isRunning = function() return true end
+            instance.stopServer = function() stop_called = true; return true end
+
+            instance:_onNetworkDisconnected()
+
+            assert.is_true(stop_called,
+                "onNetworkDisconnected should stop the server")
+            assert.is_true(LocalSend._ServerState.was_running_before_disconnect,
+                "should set was_running_before_disconnect for potential reconnect")
+
+            -- Cleanup
+            LocalSend._ServerState.was_running_before_disconnect = false
+        end)
+
+        it("onNetworkDisconnected should set was_running_before_disconnect=false if not running", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_disconnect = true -- Previously set
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            instance.isRunning = function() return false end
+
+            instance:_onNetworkDisconnected()
+
+            assert.is_false(LocalSend._ServerState.was_running_before_disconnect,
+                "should clear was_running_before_disconnect when server not running")
+        end)
+
+        it("onNetworkConnected should restart server if was_running_before_disconnect", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_disconnect = true
+            LocalSend._ServerState.user_stopped = false
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local start_called = false
+            local start_silent = nil
+            instance.start = function(self, silent)
+                start_called = true
+                start_silent = silent
+            end
+
+            instance:_onNetworkConnected()
+
+            assert.is_true(start_called,
+                "onNetworkConnected should restart server if it was running before disconnect")
+            assert.is_true(start_silent,
+                "onNetworkConnected should call start with silent=true")
+
+            -- Cleanup
+            LocalSend._ServerState.was_running_before_disconnect = false
+        end)
+
+        it("onNetworkConnected should NOT restart if user_stopped is true", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_disconnect = true
+            LocalSend._ServerState.user_stopped = true
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local start_called = false
+            instance.start = function(self, silent)
+                start_called = true
+            end
+
+            instance:_onNetworkConnected()
+
+            assert.is_false(start_called,
+                "onNetworkConnected should NOT restart if user explicitly stopped")
+
+            -- Cleanup
+            LocalSend._ServerState.user_stopped = false
+            LocalSend._ServerState.was_running_before_disconnect = false
+        end)
+
+        it("onNetworkConnected should NOT restart if was_running_before_disconnect is false", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_disconnect = false
+            LocalSend._ServerState.user_stopped = false
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local start_called = false
+            instance.start = function(self, silent)
+                start_called = true
+            end
+
+            instance:_onNetworkConnected()
+
+            assert.is_false(start_called,
+                "onNetworkConnected should NOT restart if server was not running before disconnect")
+        end)
+    end)
+
+    -- =========================================================================
+    -- onFlushSettings lifecycle handler
+    -- =========================================================================
+    describe("onFlushSettings lifecycle", function()
+        it("should have onFlushSettings method defined", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            assert.is_function(instance.onFlushSettings,
+                "onFlushSettings should be defined for proper KOReader lifecycle compliance")
+        end)
+
+        it("onFlushSettings should not error when called", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            assert.has_no.errors(function()
+                instance:onFlushSettings()
+            end)
         end)
     end)
 end)

@@ -154,7 +154,13 @@ describe("Self-Update", function()
             end,
         }
 
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback)
+                -- In tests, just execute the callback immediately
+                callback()
+            end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
@@ -163,6 +169,7 @@ describe("Self-Update", function()
                 if callback then callback() end
             end,
         }
+        package.loaded["pluginshare"] = {}
 
         -- Mock io.popen for curl and uname
         local original_io_popen = io.popen
@@ -587,6 +594,64 @@ describe("Self-Update", function()
             instance:checkForUpdates()
 
             assert.is_true(confirm_shown, "Should offer update from 1.0.0 to 1.1.0")
+        end)
+    end)
+
+    -- =========================================================================
+    -- NetworkMgr:runWhenOnline optimization
+    -- =========================================================================
+    describe("NetworkMgr:runWhenOnline usage", function()
+        it("checkForUpdates should use NetworkMgr:runWhenOnline", function()
+            -- Track if runWhenOnline was used
+            local run_when_online_called = false
+            package.loaded["ui/network/manager"] = {
+                isOnline = function() return true end,
+                runWhenOnline = function(self, callback)
+                    run_when_online_called = true
+                    -- Don't actually run the callback
+                end,
+            }
+
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            instance:checkForUpdates()
+
+            assert.is_true(run_when_online_called,
+                "checkForUpdates should use NetworkMgr:runWhenOnline instead of manual isOnline check")
+        end)
+
+        it("checkForUpdates should NOT show manual 'No network' error when offline", function()
+            -- When offline, runWhenOnline handles prompting - we should not show our own error
+            package.loaded["ui/network/manager"] = {
+                isOnline = function() return false end,
+                runWhenOnline = function(self, callback)
+                    -- Simulate KOReader behavior: when offline, it prompts user, doesn't call callback
+                end,
+            }
+
+            notifications_shown = {}
+
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            instance:checkForUpdates()
+
+            -- Should NOT have shown "No network connection" error
+            local found_network_error = false
+            for _, notif in ipairs(notifications_shown) do
+                if notif.text and notif.text:match("No network connection") then
+                    found_network_error = true
+                    break
+                end
+            end
+
+            assert.is_false(found_network_error,
+                "checkForUpdates should NOT show manual 'No network connection' error - let runWhenOnline handle it")
         end)
     end)
 end)

@@ -30,3 +30,4 @@ dist
 
 # Binaries
 localsend-armhf
+.lua_env/

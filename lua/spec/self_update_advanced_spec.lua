@@ -145,7 +145,11 @@ describe("Self-Update Advanced", function()
             end,
         }
 
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
@@ -153,6 +157,7 @@ describe("Self-Update Advanced", function()
                 if callback then callback() end
             end,
         }
+        package.loaded["pluginshare"] = {}
 
         package.loaded["logger"] = {
             err = function(...)

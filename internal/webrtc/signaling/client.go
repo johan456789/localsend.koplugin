@@ -46,7 +46,7 @@ type SignalingClient struct {
 	// Token refresh support
 	baseInfo       ClientInfoWithoutID // Client info without token (for refresh)
 	tokenGenerator atomic.Value        // func() (string, error) - stored atomically for thread safety
-	refreshStarted atomic.Bool         // Prevents multiple token refresh goroutines (Issue #3 fix)
+	refreshStarted atomic.Bool         // Prevents multiple token refresh goroutines
 }
 
 // Connect establishes a WebSocket connection to the signaling server.
@@ -232,7 +232,7 @@ func (c *SignalingClient) tokenRefreshLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			// Load token generator atomically (Issue #3 fix)
+			// Load token generator atomically
 			genVal := c.tokenGenerator.Load()
 			if genVal == nil {
 				continue
@@ -262,7 +262,7 @@ func (c *SignalingClient) tokenRefreshLoop() {
 
 // SetTokenGenerator sets a function to generate new tokens for refresh.
 // If set, the client will periodically refresh the token during long sessions.
-// Thread-safe: uses atomic operations to prevent data races (Issue #3 fix).
+// Thread-safe: uses atomic operations to prevent data races.
 func (c *SignalingClient) SetTokenGenerator(gen func() (string, error)) {
 	// Store generator atomically to prevent data race with tokenRefreshLoop
 	if gen != nil {
@@ -301,13 +301,13 @@ func (c *SignalingClient) handlePeerUpdate(msg WsServerMessage) {
 }
 
 // Close closes the signaling connection.
-// Clears all pending answer callbacks to prevent memory leaks (Issue #12 fix).
+// Clears all pending answer callbacks to prevent memory leaks.
 func (c *SignalingClient) Close() error {
 	var closeErr error
 	c.closeOnce.Do(func() {
 		close(c.done)
 
-		// Clear pending answer callbacks to prevent memory leak (Issue #12 fix)
+		// Clear pending answer callbacks to prevent memory leak
 		c.answerMu.Lock()
 		c.onAnswer = make(map[string]func(WsServerMessage))
 		c.answerMu.Unlock()

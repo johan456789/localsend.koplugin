@@ -31,7 +31,7 @@ const (
 	stateReceivingFiles
 )
 
-// Configuration constants (Issue #22: extracted from magic numbers)
+// Configuration constants
 const (
 	maxPINAttempts     = 3  // Maximum incorrect PIN attempts before closing connection
 	tokenPreviewLength = 30 // Max characters to show in token preview logs

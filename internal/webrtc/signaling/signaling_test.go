@@ -990,7 +990,7 @@ func TestSdpDecompressEmptyInput(t *testing.T) {
 }
 
 // =============================================================================
-// Context Propagation Tests (Issue #18)
+// Context Propagation Tests
 // =============================================================================
 
 // TestConnectWithContextCancellation verifies that ConnectWithContext respects context cancellation.
@@ -1091,11 +1091,11 @@ func TestConnectBuildsCorrectURL(t *testing.T) {
 }
 
 // =============================================================================
-// Goroutine Leak Tests (Issue #3)
+// Goroutine Leak Tests
 // These tests verify the fix for goroutine leaks in SetTokenGenerator.
 // =============================================================================
 
-// TestSetTokenGeneratorMultipleCallsSpawnsMultipleGoroutines demonstrates Issue #3.
+// TestSetTokenGeneratorMultipleCallsSpawnsMultipleGoroutines tests goroutine spawn prevention.
 // EXPECTED TO FAIL with race detector: Race between SetTokenGenerator writing and goroutine reading.
 // After fix: Should use atomic.Bool to track if goroutine is started and prevent multiple spawns.
 func TestSetTokenGeneratorMultipleCallsSpawnsMultipleGoroutines(t *testing.T) {
@@ -1129,7 +1129,7 @@ func TestSetTokenGeneratorMultipleCallsSpawnsMultipleGoroutines(t *testing.T) {
 	t.Log("Test completed - run with -race flag to detect data races")
 }
 
-// TestSetTokenGeneratorCloseRace demonstrates Issue #3 close race condition.
+// TestSetTokenGeneratorCloseRace tests the close race condition.
 // EXPECTED TO FAIL with race detector: Race between SetTokenGenerator starting goroutine and Close() closing done channel.
 func TestSetTokenGeneratorCloseRace(t *testing.T) {
 	// Run multiple iterations to increase chance of hitting race
@@ -1159,11 +1159,11 @@ func TestSetTokenGeneratorCloseRace(t *testing.T) {
 }
 
 // =============================================================================
-// Answer Callback Memory Leak Tests (Issue #12)
+// Answer Callback Memory Leak Tests
 // These tests verify the fix for memory leaks in OnAnswer callbacks.
 // =============================================================================
 
-// TestOnAnswerCallbackLeak demonstrates Issue #12.
+// TestOnAnswerCallbackLeak tests that callbacks are cleaned up on close.
 // EXPECTED TO FAIL: Callbacks registered via OnAnswer are never cleaned up if answer doesn't arrive.
 func TestOnAnswerCallbackLeak(t *testing.T) {
 	client := &SignalingClient{
@@ -1189,7 +1189,7 @@ func TestOnAnswerCallbackLeak(t *testing.T) {
 	}
 
 	// Close the client using the proper Close() method (not just close(done))
-	// This triggers the callback cleanup (Issue #12 fix)
+	// This triggers the callback cleanup
 	_ = client.Close()
 
 	// After fix: Close should clear all pending callbacks

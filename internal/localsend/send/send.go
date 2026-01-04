@@ -56,7 +56,7 @@ func (fsp *baseSender) AddDir(dirPath string) error {
 }
 
 func (fsp *baseSender) reset() {
-	// Issue #23 fix: Use O(1) map reassignment instead of O(n) range-delete
+	// Use O(1) map reassignment instead of O(n) range-delete
 	fsp.tokens = make(map[string]string)
 	fsp.files = make(models.FileMetas)
 }

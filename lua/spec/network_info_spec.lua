@@ -111,12 +111,21 @@ describe("Network Info Display", function()
             end,
         }
 
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function(self, delay, callback) end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
         }
+        package.loaded["pluginshare"] = {}
 
         _G.os.execute = function() return 0 end
         _G.os.remove = function() return true end

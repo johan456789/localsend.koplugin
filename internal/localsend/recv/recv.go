@@ -274,7 +274,7 @@ func (fr *FileReceiver) Start(ctx context.Context) error {
 
 	go func() { _ = fr.advertise() }() // let others know we are here
 
-	// Issue #25 fix: Listen for context cancellation to trigger graceful shutdown
+	// Listen for context cancellation to trigger graceful shutdown
 	go func() {
 		<-ctx.Done()
 		_ = fr.Stop()

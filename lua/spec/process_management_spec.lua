@@ -38,12 +38,21 @@ describe("Process Management", function()
         package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function() end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
         }
+        package.loaded["pluginshare"] = {}
 
         local WidgetContainer = {}
         WidgetContainer.__index = WidgetContainer
@@ -260,39 +269,12 @@ describe("Process Management", function()
             assert.is_true(instance:isRunning())
         end)
 
-        it("returns true on second check if first fails (double-check)", function()
+        -- Note: Double-check behavior was removed for simplification
+        -- These tests now verify single-check behavior
+        it("returns false on single check when process not visible", function()
             pid_file_exists = true
             pid_file_content = "12345"
 
-            -- Process becomes visible on second check (simulating race condition)
-            local check_count = 0
-            package.loaded["util"].pathExists = function(path)
-                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                if path == "/tmp/localsend_koreader.pid" then return pid_file_exists end
-                if path == "/proc/12345" then
-                    check_count = check_count + 1
-                    return check_count >= 2 -- Fail first check, succeed on second
-                end
-                return false
-            end
-
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
-            local result = instance:isRunning()
-
-            assert.is_true(result, "Should return true after double-check succeeds")
-            assert.is_true(check_count >= 2, "Should have checked at least twice")
-        end)
-
-        it("returns false if both checks fail", function()
-            pid_file_exists = true
-            pid_file_content = "12345"
-
-            -- Process never visible
             package.loaded["util"].pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
@@ -308,7 +290,29 @@ describe("Process Management", function()
 
             local result = instance:isRunning()
 
-            assert.is_false(result, "Should return false if both checks fail")
+            assert.is_false(result, "Should return false when process not visible")
+        end)
+
+        it("returns true when process is visible", function()
+            pid_file_exists = true
+            pid_file_content = "12345"
+
+            package.loaded["util"].pathExists = function(path)
+                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
+                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
+                if path == "/tmp/localsend_koreader.pid" then return pid_file_exists end
+                if path == "/proc/12345" then return true end
+                return false
+            end
+
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local result = instance:isRunning()
+
+            assert.is_true(result, "Should return true when process is visible")
         end)
     end)
 
@@ -324,49 +328,20 @@ describe("Process Management", function()
             -- Mock closeFirewall to avoid side effects
             instance.closeFirewall = function() end
 
-            local ok = instance:stopServer(false)
+            local ok = instance:stopServer()
             assert.is_true(ok)
         end)
 
-        it("sends SIGTERM first via terminateSubProcess", function()
+        it("sends SIGKILL directly for guaranteed termination", function()
             pid_file_exists = true
             pid_file_content = "12345"
             proc_exists_map[12345] = true
 
-            -- terminateSubProcess will be called and terminate the process
-            -- (the mock in setup handles this)
-
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-            instance.closeFirewall = function() end
-
-            local ok = instance:stopServer(false)
-
-            assert.is_true(ok)
-            assert.equal(1, #terminate_calls, "Should call terminateSubProcess once")
-            assert.equal(12345, terminate_calls[1], "Should terminate PID 12345")
-        end)
-
-        it("sends SIGKILL when force=true and process doesn't exit after SIGTERM", function()
-            pid_file_exists = true
-            pid_file_content = "12345"
-            proc_exists_map[12345] = true
-
-            -- Override terminateSubProcess to NOT kill the process
-            -- so that SIGKILL is required
-            package.loaded["ffi/util"].terminateSubProcess = function(pid)
-                table.insert(terminate_calls, pid)
-                -- Process doesn't die from SIGTERM
-            end
-
-            local kill_count = 0
+            local kill_9_called = false
             _G.os.execute = function(cmd)
                 table.insert(kill_calls, cmd)
-                -- Match quoted format from util.args: 'kill' '-KILL' '12345'
-                if cmd:match("'kill' '%-KILL'") then
-                    kill_count = kill_count + 1
+                if cmd:match("kill %-9") then
+                    kill_9_called = true
                     proc_exists_map[12345] = false
                 end
                 return 0
@@ -378,22 +353,28 @@ describe("Process Management", function()
             }
             instance.closeFirewall = function() end
 
-            local ok = instance:stopServer(true)
+            local ok = instance:stopServer()
 
             assert.is_true(ok)
-            assert.equal(1, #terminate_calls, "Should call terminateSubProcess once")
-            assert.is_true(kill_count >= 1, "Should send SIGKILL when force=true and process doesn't exit")
+            assert.is_true(kill_9_called, "Should use SIGKILL (kill -9) for guaranteed termination")
         end)
 
-        it("removes PID file after successful stop", function()
+        it("removes PID file BEFORE killing process", function()
             pid_file_exists = true
             pid_file_content = "12345"
             proc_exists_map[12345] = true
 
-            -- Reset the mock to ensure terminateSubProcess works
-            package.loaded["ffi/util"].terminateSubProcess = function(pid)
-                table.insert(terminate_calls, pid)
-                proc_exists_map[pid] = false
+            local pid_removed_before_kill = false
+            local kill_called = false
+
+            _G.os.execute = function(cmd)
+                table.insert(kill_calls, cmd)
+                if cmd:match("kill %-9") then
+                    -- Check if PID file was already removed
+                    pid_removed_before_kill = not pid_file_exists
+                    kill_called = true
+                end
+                return 0
             end
 
             LocalSend = require("main")
@@ -402,16 +383,10 @@ describe("Process Management", function()
             }
             instance.closeFirewall = function() end
 
-            instance:stopServer(false)
+            instance:stopServer()
 
-            local found_pid_removal = false
-            for _, path in ipairs(removed_files) do
-                if path == "/tmp/localsend_koreader.pid" then
-                    found_pid_removal = true
-                    break
-                end
-            end
-            assert.is_true(found_pid_removal, "PID file should be removed")
+            assert.is_true(kill_called, "Should call kill")
+            assert.is_true(pid_removed_before_kill, "PID file should be removed BEFORE killing")
         end)
 
         it("calls closeFirewall after stopping", function()
@@ -419,10 +394,9 @@ describe("Process Management", function()
             pid_file_content = "12345"
             proc_exists_map[12345] = true
 
-            -- Reset the mock to ensure terminateSubProcess works
-            package.loaded["ffi/util"].terminateSubProcess = function(pid)
-                table.insert(terminate_calls, pid)
-                proc_exists_map[pid] = false
+            _G.os.execute = function(cmd)
+                table.insert(kill_calls, cmd)
+                return 0
             end
 
             LocalSend = require("main")
@@ -433,26 +407,21 @@ describe("Process Management", function()
             local firewall_closed = false
             instance.closeFirewall = function() firewall_closed = true end
 
-            instance:stopServer(false)
+            instance:stopServer()
 
             assert.is_true(firewall_closed, "Firewall should be closed")
         end)
 
-        it("returns error when process won't die", function()
+        it("always returns true (SIGKILL cannot fail)", function()
             pid_file_exists = true
             pid_file_content = "12345"
             proc_exists_map[12345] = true
 
-            -- Override terminateSubProcess to NOT kill the process
-            package.loaded["ffi/util"].terminateSubProcess = function(pid)
-                table.insert(terminate_calls, pid)
-                -- Process doesn't die from SIGTERM
-            end
-
-            -- SIGKILL also doesn't work
+            -- Even if process doesn't die (extremely rare with SIGKILL),
+            -- stopServer still returns true because PID file was removed
             _G.os.execute = function(cmd)
                 table.insert(kill_calls, cmd)
-                -- Don't set proc_exists_map[12345] = false - process never dies
+                -- Don't set proc_exists_map[12345] = false - process "survives"
                 return 0
             end
 
@@ -462,10 +431,10 @@ describe("Process Management", function()
             }
             instance.closeFirewall = function() end
 
-            local ok, err = instance:stopServer(true)
+            local ok = instance:stopServer()
 
-            assert.is_false(ok)
-            assert.truthy(err:match("did not exit"))
+            -- stopServer always returns true now - no failure mode
+            assert.is_true(ok, "stopServer always succeeds (no blocking wait)")
         end)
     end)
 
@@ -475,11 +444,12 @@ describe("Process Management", function()
             pid_file_content = "12345"
             proc_exists_map[12345] = true
 
-            -- Reset the mock to ensure terminateSubProcess works
-            package.loaded["ffi/util"].terminateSubProcess = function(pid)
-                table.insert(terminate_calls, pid)
-                proc_exists_map[pid] = false
-                pid_file_exists = false
+            _G.os.execute = function(cmd)
+                table.insert(kill_calls, cmd)
+                if cmd:match("kill %-9") then
+                    proc_exists_map[12345] = false
+                end
+                return 0
             end
 
             LocalSend = require("main")
@@ -491,9 +461,9 @@ describe("Process Management", function()
             local stop_called = false
             local start_called = false
             local original_stopServer = instance.stopServer
-            instance.stopServer = function(self, force)
+            instance.stopServer = function(self)
                 stop_called = true
-                return original_stopServer(self, force)
+                return original_stopServer(self)
             end
             instance.start = function()
                 start_called = true

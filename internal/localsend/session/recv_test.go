@@ -151,7 +151,7 @@ func TestCreateUniqueFile(t *testing.T) {
 	})
 }
 
-// TestCreateUniqueFileBounded verifies the fix for Issue #6 - unbounded loop
+// TestCreateUniqueFileBounded verifies the bounded loop for unique file creation
 func TestCreateUniqueFileBounded(t *testing.T) {
 	// Skip this test in short mode as it creates many files
 	if testing.Short() {
@@ -213,7 +213,7 @@ func itoa(i int) string {
 	return string(b)
 }
 
-// TestFileTokensReturnsCopy verifies the fix for Issue #3
+// TestFileTokensReturnsCopy verifies that FileTokens returns a copy, not the original map
 func TestFileTokensReturnsCopy(t *testing.T) {
 	sess, err := NewRecvSession("test-session", "192.168.1.1")
 	if err != nil {
@@ -257,7 +257,7 @@ func TestFileTokensReturnsCopy(t *testing.T) {
 	}
 }
 
-// TestAcceptFileRaceCondition verifies the fix for Issue #2
+// TestAcceptFileRaceCondition verifies thread-safe file acceptance
 func TestAcceptFileRaceCondition(t *testing.T) {
 	sess, err := NewRecvSession("test-session", "192.168.1.1")
 	if err != nil {
@@ -333,7 +333,7 @@ func TestAcceptFileRejectsAfterStart(t *testing.T) {
 	}
 }
 
-// TestAcceptFileTOCTOURace tests the fix for Issue #8 - TOCTOU race condition.
+// TestAcceptFileTOCTOURace tests the TOCTOU race condition fix.
 // The fix moved the started check inside the mutex lock to prevent a race
 // between AcceptFile checking started and Start() setting it.
 func TestAcceptFileTOCTOURace(t *testing.T) {

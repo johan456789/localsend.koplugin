@@ -80,10 +80,17 @@ if ! run_test "Go integration tests (race)" go test ./internal/localsend/... -ta
 fi
 
 # ----------------------------------------------
-# Lua Tests
+# Lua Tests (using hererocks environment)
 # ----------------------------------------------
+
+# Activate hererocks environment if it exists
+if [ -f ".lua_env/bin/activate" ]; then
+    source .lua_env/bin/activate
+fi
+
 cd lua
-if ! run_test "Lua tests" busted spec/; then
+# Ensure local lua files are found first (required for localsend_utils.lua)
+if ! run_test "Lua tests" busted --lua="lua -e 'package.path=\"./?.lua;\"..package.path'" spec/; then
     FAILED=1
 fi
 cd ..

@@ -570,7 +570,7 @@ func TestRTCErrorResponseSerialization(t *testing.T) {
 }
 
 // =============================================================================
-// Context Propagation Tests (Issue #18)
+// Context Propagation Tests
 // =============================================================================
 
 // TestListenForOffersWithContextExists verifies the context-aware offer listener exists.
@@ -594,7 +594,7 @@ func TestListenForOffersWithContextExists(t *testing.T) {
 	})
 }
 
-// TestRTCErrorResponseUsage verifies the error response type (added for Issue #9).
+// TestRTCErrorResponseUsage verifies the error response type.
 func TestRTCErrorResponseUsage(t *testing.T) {
 	// Verify RTCErrorResponse can be created and serialized
 	errResp := RTCErrorResponse{Error: "test error message"}

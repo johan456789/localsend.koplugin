@@ -580,10 +580,10 @@ func TestForwardSender_SendFile_AcceptsNormalSizedFiles(t *testing.T) {
 }
 
 // =============================================================================
-// ForwardSender Start() Error Propagation Tests (Issue #16)
+// ForwardSender Start() Error Propagation Tests
 // =============================================================================
 
-// TestForwardSender_Start_PropagatesFileErrors demonstrates Issue #16.
+// TestForwardSender_Start_PropagatesFileErrors tests error propagation.
 // BUG: Start() logs errors but returns nil, making caller think all files succeeded.
 func TestForwardSender_Start_PropagatesFileErrors(t *testing.T) {
 	// Create a test server that accepts pre-upload but rejects file uploads
@@ -654,7 +654,7 @@ func TestForwardSender_Start_PropagatesFileErrors(t *testing.T) {
 	// BUG: Currently Start() returns nil even though both file uploads failed.
 	// After fix: Should return an error indicating files failed to send.
 	if err == nil {
-		t.Error("Start() should return error when files fail to send (Issue #16)")
+		t.Error("Start() should return error when files fail to send")
 	}
 }
 

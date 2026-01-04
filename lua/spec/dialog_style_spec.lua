@@ -1,6 +1,6 @@
 require 'busted.runner'()
 
--- Tests for Issue #5: Dialog references should use local variables, not self fields
+-- Tests for dialog references using local variables instead of self fields
 -- This ensures dialogs don't unnecessarily persist on the widget instance
 
 describe("LocalSend Dialog References", function()
@@ -45,14 +45,23 @@ describe("LocalSend Dialog References", function()
             end,
         }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
 
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function() end,
             unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
+            unschedule = function() end,
         }
+        package.loaded["pluginshare"] = {}
 
         -- Mock WidgetContainer
         local WidgetContainer = {}

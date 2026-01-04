@@ -107,12 +107,21 @@ describe("Server Restart and Certificate Functions", function()
             end,
         }
 
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function() end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
         }
+        package.loaded["pluginshare"] = {}
 
         _G.os.execute = function(cmd)
             table.insert(os_execute_calls, cmd)
@@ -176,23 +185,23 @@ describe("Server Restart and Certificate Functions", function()
             assert.is_true(start_called, "Should call start")
         end)
 
-        it("passes silent=true to stopServer", function()
+        it("calls stopServer when running", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            local silent_arg = nil
+            local stop_called = false
 
             instance.isRunning = function() return true end
-            instance.stopServer = function(self, silent)
-                silent_arg = silent
+            instance.stopServer = function(self)
+                stop_called = true
             end
             instance.start = function() end
 
             instance:restart()
 
-            assert.is_true(silent_arg, "Should pass silent=true to stopServer")
+            assert.is_true(stop_called, "Should call stopServer when running")
         end)
     end)
 
@@ -321,21 +330,21 @@ describe("Server Restart and Certificate Functions", function()
             assert.is_false(stop_called, "Should not call stopServer when not running")
         end)
 
-        it("passes silent=true to stopServer on exit", function()
+        it("calls stopServer on exit", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            local silent_arg = nil
+            local stop_called = false
             instance.isRunning = function() return true end
-            instance.stopServer = function(self, silent)
-                silent_arg = silent
+            instance.stopServer = function(self)
+                stop_called = true
             end
 
             instance:onExit()
 
-            assert.is_true(silent_arg, "Should pass silent=true on exit")
+            assert.is_true(stop_called, "Should call stopServer on exit")
         end)
     end)
 end)

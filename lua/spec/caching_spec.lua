@@ -1,6 +1,6 @@
 require 'busted.runner'()
 
--- Tests for Issue #4: Caching isRunning() and getTransferCount()
+-- Tests for caching isRunning() and getTransferCount()
 -- These tests verify cached values are used to avoid disk I/O on every menu render
 
 describe("LocalSend State Caching", function()
@@ -42,14 +42,23 @@ describe("LocalSend State Caching", function()
         }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
 
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function() end,
             unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
+            unschedule = function() end,
         }
+        package.loaded["pluginshare"] = {}
 
         -- Mock WidgetContainer
         local WidgetContainer = {}
@@ -513,6 +522,78 @@ describe("LocalSend State Caching", function()
                 "Cache should sync to running state during init")
             assert.equal(2, instance._cached_transfer_count,
                 "Cache should sync transfer count during init")
+        end)
+    end)
+
+    -- =========================================================================
+    -- Transfer count caching in ServerState (optimization for e-readers)
+    -- =========================================================================
+    describe("ServerState transfer_count optimization", function()
+        it("ServerState should have transfer_count field", function()
+            LocalSend = require("main")
+            assert.is_not_nil(LocalSend._ServerState.transfer_count,
+                "ServerState should have transfer_count field for caching")
+        end)
+
+        it("clearTransferLog should reset ServerState.transfer_count to 0", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.transfer_count = 5
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            instance:clearTransferLog()
+
+            assert.equal(0, LocalSend._ServerState.transfer_count,
+                "clearTransferLog should reset transfer_count to 0")
+        end)
+
+        it("getTransferCount should return ServerState.transfer_count", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.transfer_count = 42
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            local count = instance:getTransferCount()
+
+            assert.equal(42, count,
+                "getTransferCount should return cached ServerState.transfer_count")
+        end)
+
+        it("getTransferCount should NOT read file when using ServerState cache", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.transfer_count = 10
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            -- Mock io.open to track if it's called for transfer log
+            local io_open_called_for_log = false
+            local original_io_open = io.open
+            io.open = function(path, mode)
+                if path and path:match("localsend_transfers%.log") then
+                    io_open_called_for_log = true
+                end
+                return original_io_open(path, mode)
+            end
+
+            local count = instance:getTransferCount()
+
+            io.open = original_io_open
+
+            assert.is_false(io_open_called_for_log,
+                "getTransferCount should NOT read file when using ServerState cache")
+        end)
+
+        it("ServerState should NOT have deprecated polling_generation field", function()
+            LocalSend = require("main")
+
+            assert.is_nil(LocalSend._ServerState.polling_generation,
+                "polling_generation is deprecated and should be removed")
         end)
     end)
 end)

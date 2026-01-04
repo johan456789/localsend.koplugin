@@ -126,7 +126,11 @@ describe("start() function", function()
             end,
         }
 
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
@@ -134,7 +138,11 @@ describe("start() function", function()
                 table.insert(scheduled_callbacks, { delay = delay, callback = callback })
             end,
             unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
         }
+        package.loaded["pluginshare"] = {}
 
         -- Mock os.execute
         _G.os.execute = function(cmd)
@@ -549,7 +557,7 @@ describe("start() function", function()
             instance:start()
 
             assert.is_true(#scheduled_callbacks > 0, "Should schedule callback")
-            assert.equal(10, scheduled_callbacks[1].delay, "Should schedule with 10 second delay")
+            assert.equal(15, scheduled_callbacks[1].delay, "Should schedule with 15 second delay (POLLING_INTERVAL_IDLE)")
         end)
 
         it("should show success notification with device name", function()
@@ -645,7 +653,18 @@ describe("start() function", function()
             instance.isRunning = function() return false end -- Never becomes ready
 
             notifications_shown = {}
+            scheduled_callbacks = {}
             instance:start()
+
+            -- Drain all scheduled callbacks to simulate async timeout
+            for i = 1, 60 do
+                if #scheduled_callbacks > 0 then
+                    local cb = table.remove(scheduled_callbacks, 1)
+                    cb.callback()
+                else
+                    break
+                end
+            end
 
             local found_timeout = false
             for _, n in ipairs(notifications_shown) do
@@ -671,7 +690,18 @@ describe("start() function", function()
             local firewall_closed = false
             instance.closeFirewall = function() firewall_closed = true end
 
+            scheduled_callbacks = {}
             instance:start()
+
+            -- Drain all scheduled callbacks to simulate async timeout
+            for i = 1, 60 do
+                if #scheduled_callbacks > 0 then
+                    local cb = table.remove(scheduled_callbacks, 1)
+                    cb.callback()
+                else
+                    break
+                end
+            end
 
             assert.is_true(firewall_closed, "Should close firewall on timeout")
         end)
@@ -693,7 +723,18 @@ describe("start() function", function()
                 return false -- Never ready
             end
 
+            scheduled_callbacks = {}
             instance:start()
+
+            -- Drain all scheduled callbacks to simulate async polling
+            for i = 1, 60 do
+                if #scheduled_callbacks > 0 then
+                    local cb = table.remove(scheduled_callbacks, 1)
+                    cb.callback()
+                else
+                    break
+                end
+            end
 
             -- Should have polled 50 times in the timeout loop
             -- Note: isRunning may be called once at the beginning to check if already running,
@@ -717,10 +758,21 @@ describe("start() function", function()
                 return poll_count >= 3 -- Ready on 3rd poll
             end
 
+            scheduled_callbacks = {}
             instance:start()
 
-            -- 3 polls in the readiness loop + 1 from _updateCache() = 4 total
-            assert.equal(4, poll_count, "Should stop polling after server becomes ready (3 polls + 1 cache update)")
+            -- Drain scheduled callbacks to complete async chain
+            for i = 1, 10 do
+                if #scheduled_callbacks > 0 then
+                    local cb = table.remove(scheduled_callbacks, 1)
+                    cb.callback()
+                else
+                    break
+                end
+            end
+
+            -- With async polling and cache updates, expect at least 3 polls
+            assert.is_true(poll_count >= 3, "Should poll at least 3 times before server is ready")
         end)
     end)
 

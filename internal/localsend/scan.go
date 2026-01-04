@@ -23,7 +23,7 @@ const (
 	// maxConcurrentScans limits the number of concurrent subnet scan goroutines
 	// to prevent resource exhaustion on constrained devices (e.g., Raspberry Pi, e-readers)
 	maxConcurrentScans = 50
-	// ipCacheTTL is the time-to-live for cached IP addresses (Issue #22)
+	// ipCacheTTL is the time-to-live for cached IP addresses
 	ipCacheTTL = 30 * time.Second
 )
 
@@ -40,7 +40,7 @@ type Discoverier struct {
 	stop        chan struct{}
 	cachedIPs   []net.IP
 	ipCacheTime time.Time
-	ipCacheMu   sync.RWMutex // protects cachedIPs and ipCacheTime (Issue #14 fix)
+	ipCacheMu   sync.RWMutex // protects cachedIPs and ipCacheTime
 }
 
 func NewDiscoverier(devInfo models.DeviceInfo, supportHttps bool) (*Discoverier, error) {
@@ -117,7 +117,7 @@ func (ma *Discoverier) Shutdown() error {
 }
 
 func (mcs *Discoverier) getCachedIPs() ([]net.IP, error) {
-	// Issue #14 fix: Use double-checked locking for thread-safe cache access
+	// Use double-checked locking for thread-safe cache access
 	mcs.ipCacheMu.RLock()
 	if time.Since(mcs.ipCacheTime) <= ipCacheTTL && mcs.cachedIPs != nil {
 		ips := mcs.cachedIPs

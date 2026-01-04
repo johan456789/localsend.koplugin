@@ -1,10 +1,10 @@
 require 'busted.runner'()
 
--- Tests for Issue #4: Unprotected dofile crashes plugin when _meta.lua is missing or corrupted
+-- Tests for protected _meta.lua loading
 -- EXPECTED TO FAIL: Without the fix, loading main.lua when _meta.lua is missing will throw an error.
 -- After fix: Should gracefully handle missing/corrupted _meta.lua using pcall.
 
-describe("_meta.lua loading (Issue #4)", function()
+describe("_meta.lua loading", function()
     local original_dofile
 
     setup(function()
@@ -30,12 +30,21 @@ describe("_meta.lua loading (Issue #4)", function()
         package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function() end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
         }
+        package.loaded["pluginshare"] = {}
 
         local WidgetContainer = {}
         WidgetContainer.__index = WidgetContainer

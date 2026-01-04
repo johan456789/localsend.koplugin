@@ -144,12 +144,21 @@ describe("Dialog Functions", function()
             end,
         }
 
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function() end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
         }
+        package.loaded["pluginshare"] = {}
 
         _G.os.execute = function() return 0 end
         _G.os.remove = function() return true end
@@ -388,7 +397,11 @@ describe("Dialog Functions", function()
             -- Track close calls through the mock
             local close_called = false
             local close_arg = nil
-            package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+            package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
                 show = function() end,
                 close = function(self, dialog)
@@ -396,7 +409,12 @@ describe("Dialog Functions", function()
                     close_arg = dialog
                 end,
                 scheduleIn = function() end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
             }
+        package.loaded["pluginshare"] = {}
 
             -- Must reload main module to pick up new UIManager mock
             package.loaded["main"] = nil
@@ -466,14 +484,23 @@ describe("Dialog Functions", function()
         it("cancel button should close dialog without changes", function()
             -- Track close calls through the mock
             local close_called = false
-            package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+            package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
                 show = function() end,
                 close = function(self, dialog)
                     close_called = true
                 end,
                 scheduleIn = function() end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
             }
+        package.loaded["pluginshare"] = {}
 
             -- Must reload main module to pick up new UIManager mock
             package.loaded["main"] = nil
@@ -555,14 +582,23 @@ describe("Dialog Functions", function()
         it("cancel button should close dialog without changes", function()
             -- Track close calls through the mock
             local close_called = false
-            package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+            package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
                 show = function() end,
                 close = function(self, dialog)
                     close_called = true
                 end,
                 scheduleIn = function() end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
             }
+        package.loaded["pluginshare"] = {}
 
             -- Must reload main module to pick up new UIManager mock
             package.loaded["main"] = nil
@@ -726,14 +762,23 @@ describe("Dialog Functions", function()
             local picker_called = false
             -- Track close calls through the mock
             local close_called = false
-            package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+            package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
                 show = function() end,
                 close = function(self, dialog)
                     close_called = true
                 end,
                 scheduleIn = function() end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
             }
+        package.loaded["pluginshare"] = {}
 
             -- Must reload main module to pick up new UIManager mock
             package.loaded["main"] = nil

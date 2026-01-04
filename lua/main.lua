@@ -13,6 +13,12 @@ local util = require("util")
 local _ = require("gettext")
 local T = ffiutil.template
 local json = require("json")
+local PluginShare = require("pluginshare")
+
+-- Polling interval constants for adaptive transfer detection
+local POLLING_INTERVAL_IDLE = 15     -- 15 seconds when idle
+local POLLING_INTERVAL_ACTIVE = 5    -- 5 seconds after recent transfer
+local POLLING_ACTIVE_DURATION = 60   -- Stay in active mode for 60 seconds after transfer
 
 local GITHUB_RELEASE_URL = "https://api.github.com/repos/kaikozlov/localsend.koplugin/releases/latest"
 
@@ -127,11 +133,13 @@ local plugin_path = data_dir .. "/plugins/localsend.koplugin"
 local ServerState = {
     user_stopped = false,  -- True when user explicitly stopped the server
     was_running_before_suspend = false,  -- True if server was running before suspend/standby
+    was_running_before_disconnect = false,  -- True if server was running before network disconnect
     last_log_position = 0,  -- Track transfer log read position across instances
-    polling_generation = 0,  -- Generation counter to invalidate stale polling callbacks
+    transfer_count = 0,  -- Cached transfer count (avoids full file read on e-readers)
+    last_transfer_time = nil,  -- TimeVal of last transfer for adaptive polling
 }
 
--- Load plugin metadata safely (Issue #4 fix: wrap dofile in pcall)
+-- Load plugin metadata safely (wrap dofile in pcall)
 local plugin_meta
 local meta_path = plugin_path .. "/_meta.lua"
 local ok, result = pcall(dofile, meta_path)
@@ -200,19 +208,51 @@ function LocalSend:init()
         self:start(true)  -- silent=true to suppress notification
     end
 
+    -- Clean up orphaned resources from previous crashes
+    self:_cleanupOrphanedResources()
+
     -- Only autostart if:
     -- 1. autostart setting is enabled
     -- 2. user hasn't explicitly stopped the server this session
     -- (ServerState resets on KOReader restart, so autostart works on fresh launch)
     if self.autostart and not ServerState.user_stopped then
-        self:start()
+        -- Use NetworkMgr:runWhenConnected for reliable startup after WiFi is ready
+        NetworkMgr:runWhenConnected(function()
+            -- Re-check user_stopped in case they toggled it while waiting for network
+            if not ServerState.user_stopped then
+                self:start()
+            end
+        end)
     end
 
     -- Sync cache with actual state (server may be running from previous widget instance)
     self:_updateCache()
 
+    -- Register event handlers based on current state
+    self:registerEvents()
+
     self.ui.menu:registerToMainMenu(self)
     self:onDispatcherRegisterActions()
+end
+
+-- Clean up orphaned resources from previous crashes (stale PID file, firewall rules)
+function LocalSend:_cleanupOrphanedResources()
+    if util.pathExists(pid_file) then
+        local content = util.readFromFile(pid_file)
+        if content then
+            local pid = tonumber(content:match("^(%d+)"))
+            if pid and not util.pathExists("/proc/" .. pid) then
+                -- Process is dead but PID file exists - clean up
+                logger.warn("[LocalSend] Found stale PID file, cleaning up")
+                os.remove(pid_file)
+                -- Also clean up firewall rules (they may be orphaned)
+                self:closeFirewall()
+            end
+        else
+            -- Empty or unreadable PID file - remove it
+            os.remove(pid_file)
+        end
+    end
 end
 
 -- Cleanup when KOReader exits (not when switching documents)
@@ -220,17 +260,47 @@ end
 -- Instead, we stop on Exit event which is only triggered when KOReader actually closes.
 function LocalSend:onExit()
     if self:isRunning() then
-        self:stopServer(true)
+        self:stopServer()
         logger.dbg("[LocalSend] Server stopped on KOReader exit")
     end
 end
 
+-- Dynamic event registration (KOSync pattern)
+-- Only register power/network handlers when server is running or expected to run
+-- This reduces event processing overhead when the plugin is idle
+function LocalSend:registerEvents()
+    if self:isRunning() or (self.autostart and not ServerState.user_stopped) then
+        -- Server running or expected to run: register handlers
+        self.onSuspend = self._onSuspend
+        self.onResume = self._onResume
+        self.onEnterStandby = self._onEnterStandby
+        self.onLeaveStandby = self._onLeaveStandby
+        self.onNetworkDisconnected = self._onNetworkDisconnected
+        self.onNetworkConnected = self._onNetworkConnected
+        logger.dbg("[LocalSend] Event handlers registered")
+    else
+        -- Server not running: unregister handlers to reduce overhead
+        self.onSuspend = nil
+        self.onResume = nil
+        self.onEnterStandby = nil
+        self.onLeaveStandby = nil
+        self.onNetworkDisconnected = nil
+        self.onNetworkConnected = nil
+        logger.dbg("[LocalSend] Event handlers unregistered")
+    end
+end
+
+-- Event handler implementations (underscore-prefixed for dynamic registration)
 -- Stop server before device suspends (WiFi will be disabled)
-function LocalSend:onSuspend()
+function LocalSend:_onSuspend()
     logger.dbg("[LocalSend] onSuspend")
+    -- Unschedule polling before stopping
+    self:_unschedulePolling()
+    self:_unscheduleResume()
+
     if self:isRunning() then
         ServerState.was_running_before_suspend = true
-        self:stopServer(true)
+        self:stopServer()
         logger.dbg("[LocalSend] Server stopped for suspend")
     else
         ServerState.was_running_before_suspend = false
@@ -238,31 +308,66 @@ function LocalSend:onSuspend()
 end
 
 -- Restart server after device resumes (if it was running before)
-function LocalSend:onResume()
+function LocalSend:_onResume()
     logger.dbg("[LocalSend] onResume")
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
-        -- Delay slightly to let WiFi reconnect
-        UIManager:scheduleIn(2, self.resume_start_task)
+        -- Use NetworkMgr:runWhenConnected for reliable restart after WiFi reconnects
+        NetworkMgr:runWhenConnected(function()
+            if not ServerState.user_stopped then
+                self:start(true)  -- silent=true to suppress notification
+            end
+        end)
     end
 end
 
 -- Same handling for standby (light sleep)
-function LocalSend:onEnterStandby()
+function LocalSend:_onEnterStandby()
     logger.dbg("[LocalSend] onEnterStandby")
+    -- Unschedule polling before stopping
+    self:_unschedulePolling()
+
     if self:isRunning() then
         ServerState.was_running_before_suspend = true
-        self:stopServer(true)
+        self:stopServer()
         logger.dbg("[LocalSend] Server stopped for standby")
     else
         ServerState.was_running_before_suspend = false
     end
 end
 
-function LocalSend:onLeaveStandby()
+function LocalSend:_onLeaveStandby()
     logger.dbg("[LocalSend] onLeaveStandby")
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
         self:start(true)  -- silent=true to suppress notification
     end
+end
+
+-- Handle network disconnect (e.g., user manually turns off WiFi)
+function LocalSend:_onNetworkDisconnected()
+    logger.dbg("[LocalSend] onNetworkDisconnected")
+    if self:isRunning() then
+        ServerState.was_running_before_disconnect = true
+        self:stopServer()
+        logger.dbg("[LocalSend] Server stopped due to network disconnect")
+    else
+        ServerState.was_running_before_disconnect = false
+    end
+end
+
+-- Handle network reconnect
+function LocalSend:_onNetworkConnected()
+    logger.dbg("[LocalSend] onNetworkConnected")
+    if ServerState.was_running_before_disconnect and not ServerState.user_stopped then
+        self:start(true)  -- silent=true to suppress notification
+        logger.dbg("[LocalSend] Server restarted after network reconnect")
+    end
+end
+
+-- Lifecycle: flush settings before shutdown
+function LocalSend:onFlushSettings()
+    -- Settings are saved immediately on change via G_reader_settings,
+    -- so nothing to do here. This method exists for KOReader lifecycle compliance.
+    logger.dbg("[LocalSend] onFlushSettings")
 end
 
 -- Unschedule helpers for proper task cleanup
@@ -283,6 +388,117 @@ end
 function LocalSend:_updateCache()
     self._cached_running = self:isRunning()
     self._cached_transfer_count = self:getTransferCount()
+end
+
+-- Non-blocking server startup wait using UIManager scheduling
+-- Replaces busy-wait loop to avoid blocking the UI thread
+function LocalSend:_waitForServerReady(attempts_remaining, silent, on_ready, on_failure)
+    if attempts_remaining <= 0 then
+        on_failure()
+        return
+    end
+    if self:isRunning() then
+        on_ready()
+        return
+    end
+    -- Non-blocking: schedule next check in 100ms
+    UIManager:scheduleIn(0.1, function()
+        self:_waitForServerReady(attempts_remaining - 1, silent, on_ready, on_failure)
+    end)
+end
+
+-- Non-blocking process exit wait using UIManager scheduling
+-- Replaces busy-wait loop to avoid blocking the UI thread
+function LocalSend:_waitForProcessExit(pid, attempts_remaining, force, callback)
+    local function isProcAlive(p)
+        return p and util.pathExists("/proc/" .. p)
+    end
+
+    if not isProcAlive(pid) then
+        callback(true)  -- Process exited successfully
+        return
+    end
+
+    if attempts_remaining <= 0 then
+        if force then
+            -- Force kill with SIGKILL
+            os.execute(util.shell_escape({"kill", "-KILL", tostring(pid)}))
+            -- Give one more brief check after SIGKILL
+            UIManager:scheduleIn(0.2, function()
+                callback(not isProcAlive(pid))
+            end)
+        else
+            callback(false)  -- Process did not exit
+        end
+        return
+    end
+
+    -- Schedule next check in 100ms
+    UIManager:scheduleIn(0.1, function()
+        self:_waitForProcessExit(pid, attempts_remaining - 1, force, callback)
+    end)
+end
+
+-- Called when server has been confirmed running after startup
+function LocalSend:_onServerStarted(silent, effective_name)
+    -- Update cache now that server is running
+    self:_updateCache()
+
+    -- Expose running state to other plugins via PluginShare
+    PluginShare.localsend_running = true
+
+    -- Register event handlers now that server is running
+    self:registerEvents()
+
+    -- Start polling for new transfers using stored task reference
+    self:_unschedulePolling()  -- Ensure no duplicate polling
+    UIManager:scheduleIn(POLLING_INTERVAL_IDLE, self.check_transfer_task)
+
+    if not silent then
+        -- Build concise startup message
+        local network_info = Device.retrieveNetworkInfo and Device:retrieveNetworkInfo() or nil
+        local pin_status = self.pin ~= "" and _("PIN: enabled") or nil
+
+        local message_parts = {
+            T(_("Device: %1"), effective_name),
+        }
+
+        -- Try to extract IP and show with port for manual connection
+        local ip_addr = network_info and network_info:match("(%d+%.%d+%.%d+%.%d+)")
+        if ip_addr then
+            table.insert(message_parts, T(_("IP: %1"), ip_addr .. ":" .. self.port))
+        elseif network_info and network_info ~= "" then
+            -- Fallback: show raw network info if we can't extract IP
+            table.insert(message_parts, network_info)
+        end
+
+        if pin_status then
+            table.insert(message_parts, pin_status)
+        end
+
+        local info = InfoMessage:new{
+            timeout = 5,
+            text = _("LocalSend Ready") .. "\n" .. table.concat(message_parts, "\n"),
+        }
+        UIManager:show(info)
+    else
+        logger.dbg("[LocalSend] Server restarted after resume")
+    end
+end
+
+-- Called when server startup has failed
+function LocalSend:_onServerStartFailed(silent)
+    self:closeFirewall()
+    self:_updateCache()
+
+    if not silent then
+        UIManager:show(InfoMessage:new{
+            icon = "notice-warning",
+            text = _("LocalSend process failed to start within 5 seconds. Check if the binary works."),
+        })
+    else
+        logger.warn("[LocalSend] Failed to restart server after resume")
+    end
 end
 
 -- Cleanup scheduled tasks when widget is destroyed (document switch, view change)
@@ -413,7 +629,7 @@ function LocalSend:getTransferLog()
     return transfers
 end
 
--- Issue #13: Optimized log reading - only reads new entries since last check
+-- Optimized log reading - only reads new entries since last check
 -- This is more efficient for e-reader CPUs that poll every 5 seconds
 -- Uses ServerState.last_log_position to persist across widget instances
 function LocalSend:getNewTransfers()
@@ -445,33 +661,24 @@ function LocalSend:getNewTransfers()
         end
     end
 
-    -- Save new position
+    -- Save new position and update cached count
     ServerState.last_log_position = f:seek()
+    ServerState.transfer_count = ServerState.transfer_count + #transfers
     f:close()
 
     return transfers
 end
 
+-- Returns the cached transfer count (avoids file I/O on e-readers)
+-- Count is updated by getNewTransfers() and cleared by clearTransferLog()
 function LocalSend:getTransferCount()
-    local count = 0
-    if not util.pathExists(transfer_log_file) then
-        return 0
-    end
-
-    local f = io.open(transfer_log_file, "r")
-    if not f then return 0 end
-
-    for _ in f:lines() do
-        count = count + 1
-    end
-    f:close()
-
-    return count
+    return ServerState.transfer_count
 end
 
 function LocalSend:clearTransferLog()
     os.remove(transfer_log_file)
     ServerState.last_log_position = 0  -- Reset position tracking when log is cleared
+    ServerState.transfer_count = 0  -- Reset cached count
 end
 
 -- Internal polling method called by the stored task reference
@@ -484,6 +691,9 @@ function LocalSend:_checkForNewTransfers()
     -- Use optimized getNewTransfers() instead of reading the whole file
     local new_transfers = self:getNewTransfers()
     if #new_transfers > 0 then
+        -- Record transfer time for adaptive polling
+        ServerState.last_transfer_time = UIManager:getElapsedTimeSinceBoot()
+
         -- Update cache to reflect new transfer count
         self:_updateCache()
 
@@ -502,9 +712,27 @@ function LocalSend:_checkForNewTransfers()
     end
 
     -- Schedule next check only if still running
-    -- Using 10 second interval to reduce battery drain on e-readers
+    -- Use adaptive polling: shorter interval after recent transfers
     if self:isRunning() then
-        UIManager:scheduleIn(10, self.check_transfer_task)
+        local next_interval = POLLING_INTERVAL_IDLE
+        if ServerState.last_transfer_time then
+            local time_since_boot = UIManager:getElapsedTimeSinceBoot()
+            -- TimeVal subtraction returns elapsed seconds as a number in real KOReader
+            -- But test mocks may return plain tables with .sec/.usec fields
+            local elapsed_seconds
+            if type(time_since_boot) == "table" and time_since_boot.sec ~= nil then
+                -- Test mock: calculate elapsed time manually from sec/usec fields
+                local last = ServerState.last_transfer_time
+                elapsed_seconds = (time_since_boot.sec - last.sec) + (time_since_boot.usec - last.usec) / 1000000
+            else
+                -- Real KOReader: TimeVal subtraction returns seconds as a number directly
+                elapsed_seconds = time_since_boot - ServerState.last_transfer_time
+            end
+            if elapsed_seconds < POLLING_ACTIVE_DURATION then
+                next_interval = POLLING_INTERVAL_ACTIVE
+            end
+        end
+        UIManager:scheduleIn(next_interval, self.check_transfer_task)
     end
 end
 
@@ -524,9 +752,13 @@ function LocalSend:start(silent)
         logger.dbg("[LocalSend] Server already running, taking over polling")
         -- Sync cache with actual state
         self:_updateCache()
+        -- Expose running state to other plugins
+        PluginShare.localsend_running = true
         -- Unschedule any existing polling task before starting new one
         self:_unschedulePolling()
-        UIManager:scheduleIn(10, self.check_transfer_task)
+        UIManager:scheduleIn(POLLING_INTERVAL_IDLE, self.check_transfer_task)
+        -- Ensure event handlers are registered
+        self:registerEvents()
         return
     end
 
@@ -606,67 +838,20 @@ function LocalSend:start(silent)
     local result = os.execute(cmd)
 
     if result == 0 then
-        -- Poll for server readiness (max 5 seconds)
-        local ready = false
-        for _ = 1, 50 do  -- 50 * 100ms = 5 seconds
-            ffiutil.usleep(100000)  -- 100ms
-            if self:isRunning() then
-                ready = true
-                break
+        -- Non-blocking wait for server readiness (max 5 seconds = 50 * 100ms)
+        self:_waitForServerReady(50, silent,
+            -- on_ready callback
+            function()
+                self:_onServerStarted(silent, effective_name)
+            end,
+            -- on_failure callback
+            function()
+                self:_onServerStartFailed(silent)
             end
-        end
-
-        -- Verify it actually started
-        if ready then
-            -- Update cache now that server is running
-            self:_updateCache()
-
-            -- Start polling for new transfers using stored task reference
-            UIManager:scheduleIn(10, self.check_transfer_task)
-
-            if not silent then
-                -- Build concise startup message
-                local network_info = Device.retrieveNetworkInfo and Device:retrieveNetworkInfo() or nil
-                local pin_status = self.pin ~= "" and _("PIN: enabled") or nil
-
-                local message_parts = {
-                    T(_("Device: %1"), effective_name),
-                }
-
-                -- Try to extract IP and show with port for manual connection
-                local ip_addr = network_info and network_info:match("(%d+%.%d+%.%d+%.%d+)")
-                if ip_addr then
-                    table.insert(message_parts, T(_("IP: %1"), ip_addr .. ":" .. self.port))
-                elseif network_info and network_info ~= "" then
-                    -- Fallback: show raw network info if we can't extract IP
-                    table.insert(message_parts, network_info)
-                end
-
-                if pin_status then
-                    table.insert(message_parts, pin_status)
-                end
-
-                local info = InfoMessage:new{
-                    timeout = 5,
-                    text = _("LocalSend Ready") .. "\n" .. table.concat(message_parts, "\n"),
-                }
-                UIManager:show(info)
-            else
-                logger.dbg("[LocalSend] Server restarted after resume")
-            end
-        else
-            self:closeFirewall()
-            if not silent then
-                UIManager:show(InfoMessage:new{
-                    icon = "notice-warning",
-                    text = _("LocalSend process failed to start within 5 seconds. Check if the binary works."),
-                })
-            else
-                logger.warn("[LocalSend] Failed to restart server after resume")
-            end
-        end
+        )
     else
         self:closeFirewall()
+        self:_updateCache()
         if not silent then
             local info = InfoMessage:new{
                 icon = "notice-warning",
@@ -684,102 +869,65 @@ function LocalSend:isRunning()
         return false
     end
 
-    -- Helper to check PID validity
-    local function checkPID()
-        local content = util.readFromFile(pid_file)
-        if not content then return false end
-        local pid = tonumber(content:match("^(%d+)"))
-
-        if pid then
-            return util.pathExists("/proc/" .. pid)
-        end
-        return false
-    end
-
-    -- Check twice with small delay to handle race conditions
-    -- (PID file might be written but process not yet fully started,
-    -- or process might exit between reading PID and checking /proc)
-    if checkPID() then
-        return true
-    end
-    ffiutil.usleep(10000)  -- 10ms
-    return checkPID()
+    local content = util.readFromFile(pid_file)
+    if not content then return false end
+    local pid = tonumber(content:match("^(%d+)"))
+    if not pid then return false end
+    return util.pathExists("/proc/" .. pid)
 end
 
-function LocalSend:stopServer(force)
-    if not util.pathExists(pid_file) then
+function LocalSend:stopServer()
+    -- Unschedule Lua tasks first
+    self:_unschedulePolling()
+
+    -- Read PID before removing file
+    local pid = nil
+    if util.pathExists(pid_file) then
+        local content = util.readFromFile(pid_file)
+        if content then
+            pid = tonumber(content:match("^(%d+)"))
+        end
+        -- Remove PID file FIRST to prevent state confusion
+        -- This ensures isRunning() returns false immediately
+        os.remove(pid_file)
+    else
+        -- No PID file means server wasn't running
+        self:_cleanupServerState()
         return true
     end
 
-    local function readPID()
-        local content = util.readFromFile(pid_file)
-        if not content then return nil end
-        return tonumber(content:match("^(%d+)"))
+    -- Kill the process if PID is valid and process exists
+    if pid and util.pathExists("/proc/" .. pid) then
+        -- Use SIGKILL (signal 9) for guaranteed, immediate termination
+        -- SIGKILL cannot be caught, blocked, or ignored - kernel handles it directly
+        -- Using os.execute instead of ffiutil.terminateSubProcess for reliability
+        os.execute("kill -9 " .. tostring(pid) .. " 2>/dev/null")
     end
 
-    local pid = readPID()
-
-    local function isProcAlive(p)
-        -- Check /proc directly - works for any process, not just direct children
-        return p and util.pathExists("/proc/" .. p)
-    end
-
-    if pid then
-        -- Use ffiutil.terminateSubProcess for graceful termination (sends SIGTERM)
-        ffiutil.terminateSubProcess(pid)
-        for _ = 1, 20 do
-            if not isProcAlive(pid) then break end
-            ffiutil.sleep(0.1)
-        end
-
-        if isProcAlive(pid) and force then
-            -- Force kill with SIGKILL if still alive
-            os.execute(util.shell_escape({"kill", "-KILL", tostring(pid)}))
-            for _ = 1, 10 do
-                if not isProcAlive(pid) then break end
-                ffiutil.sleep(0.1)
-            end
-        end
-
-        -- Final check with grace period for process cleanup
-        if isProcAlive(pid) then
-            -- Process might be in final cleanup, wait a bit more
-            ffiutil.sleep(0.2)
-        end
-
-        if not isProcAlive(pid) then
-            os.remove(pid_file)
-            self:closeFirewall()
-            self:_updateCache()
-            return true
-        end
-        return false, "LocalSend process did not exit"
-    end
-
-    os.remove(pid_file)
+    -- Clean up firewall and state
     self:closeFirewall()
-    self:_updateCache()
+    self:_cleanupServerState()
+
     return true
+end
+
+-- Clean up server state after stopping (PluginShare, cache, events)
+function LocalSend:_cleanupServerState()
+    -- Clear PluginShare state
+    PluginShare.localsend_running = nil
+
+    -- Update cache
+    self:_updateCache()
+
+    -- Update event registration (may unregister handlers if server stopped)
+    self:registerEvents()
 end
 
 function LocalSend:stop()
     -- Mark that user explicitly stopped the server this session
     -- This prevents autostart from restarting it when opening a new document
     ServerState.user_stopped = true
-
-    local ok, err = self:stopServer(false)
-    if not ok then
-        logger.warn("[LocalSend] Graceful stop failed:", err)
-        ok, err = self:stopServer(true)
-        if not ok then
-            logger.err("[LocalSend] Force stop failed:", err)
-            UIManager:show(InfoMessage:new{
-                icon = "notice-warning",
-                text = _("Failed to stop LocalSend server."),
-            })
-            return
-        end
-    end
+    self:stopServer()
     UIManager:show(InfoMessage:new{
         text = _("LocalSend server stopped."),
         timeout = 2,
@@ -788,7 +936,7 @@ end
 
 function LocalSend:restart()
     if self:isRunning() then
-        self:stopServer(true)
+        self:stopServer()
     end
     self:start()
 end
@@ -1326,7 +1474,7 @@ end
 function LocalSend:performUpdate(download_url, asset_name, new_version)
     -- Stop server if running
     if self:isRunning() then
-        self:stopServer(true)
+        self:stopServer()
     end
 
     UIManager:show(InfoMessage:new{
@@ -1426,7 +1574,7 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
     -- Also copy any additional .lua files (for future-proofing)
     -- This ensures new Lua modules are picked up without hardcoding names
     -- Note: glob pattern must remain unquoted for shell expansion
-    -- Issue #19: Wrap in pcall to ensure handle is always closed on error
+    -- Wrap in pcall to ensure handle is always closed on error
     local ls_handle = io.popen(util.shell_escape({"ls"}) .. " " .. util.shell_escape({extracted_plugin}) .. "/*.lua 2>/dev/null")
     if ls_handle then
         local process_ok, process_err = pcall(function()
@@ -1472,15 +1620,14 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
 end
 
 function LocalSend:checkForUpdates()
-    -- Check network connectivity first
-    if not NetworkMgr:isOnline() then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = _("No network connection. Please connect to WiFi first."),
-        })
-        return
-    end
+    -- Use NetworkMgr:runWhenOnline to handle network prompting automatically
+    -- This provides better UX by prompting user to connect if offline
+    NetworkMgr:runWhenOnline(function()
+        self:doCheckForUpdates()
+    end)
+end
 
+function LocalSend:doCheckForUpdates()
     UIManager:show(InfoMessage:new{
         text = _("Checking for updates..."),
         timeout = 2,
@@ -1589,6 +1736,17 @@ function LocalSend:addToMainMenu(menu_items)
             return _("LocalSend")
         end,
         sorting_hint = "network",
+        -- Add check indicator for running state
+        checked_func = function() return self._cached_running end,
+        -- Quick toggle via long-press (SSH plugin pattern)
+        hold_callback = function(touchmenu_instance)
+            self:onToggleLocalSend()
+            UIManager:scheduleIn(1, function()
+                if touchmenu_instance then
+                    touchmenu_instance:updateItems()
+                end
+            end)
+        end,
         sub_item_table = {
             {
                 text_func = function()
@@ -1599,6 +1757,8 @@ function LocalSend:addToMainMenu(menu_items)
                     end
                 end,
                 keep_menu_open = true,
+                checked_func = function() return self._cached_running end,
+                check_callback_updates_menu = true,  -- Hint for menu system to update on check change
                 callback = function(touchmenu_instance)
                     self:onToggleLocalSend()
                     UIManager:scheduleIn(1, function()
@@ -1632,7 +1792,7 @@ function LocalSend:addToMainMenu(menu_items)
             },
             {
                 text = _("Settings"),
-                enabled_func = function() return not self:isRunning() end,
+                enabled_func = function() return not self._cached_running end,
                 sub_item_table = {
                     {
                         text_func = function()

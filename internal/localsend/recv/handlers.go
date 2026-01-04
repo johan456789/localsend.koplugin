@@ -109,7 +109,7 @@ func (fr *FileReceiver) uploadHandler(c *fiber.Ctx) error {
 		return c.SendStatus(403) // Invalid session = rejected per protocol spec
 	}
 
-	// Get file metadata for logging and routing (Issue #15 fix: check ok)
+	// Get file metadata for logging and routing
 	fileMeta, ok := session.GetFileMeta(fileId)
 	if !ok {
 		slog.Warn("Upload for unknown fileId", "fileId", fileId, "session", sessionId)

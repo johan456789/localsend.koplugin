@@ -716,11 +716,11 @@ func TestMixedKeyTypeCrossVerification(t *testing.T) {
 }
 
 // =============================================================================
-// GenerateSecureToken Tests (Issue #6 fix)
+// GenerateSecureToken Tests
 // Verifies that file tokens are cryptographically random, not time-based.
 // =============================================================================
 
-// TestGenerateSecureToken tests that tokens are random and unique (Issue #6 fix)
+// TestGenerateSecureToken tests that tokens are random and unique
 func TestGenerateSecureToken(t *testing.T) {
 	t.Run("generates non-empty token", func(t *testing.T) {
 		token := GenerateSecureToken()

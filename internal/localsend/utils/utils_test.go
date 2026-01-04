@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestGenAndSaveTLScertPermissions verifies the fix for Issue #5
+// TestGenAndSaveTLScertPermissions verifies private key permissions
 // Private keys should be saved with 0600 permissions (owner only)
 func TestGenAndSaveTLScertPermissions(t *testing.T) {
 	dir := t.TempDir()
@@ -210,7 +210,7 @@ func TestListenWithTLS(t *testing.T) {
 	})
 }
 
-// TestGetCertDir tests the certificate directory location (Issue #2 fix)
+// TestGetCertDir tests the certificate directory location
 // Verifies that certificates are stored next to the binary, not in /tmp
 func TestGetCertDir(t *testing.T) {
 	t.Run("returns path ending with certs", func(t *testing.T) {
@@ -297,7 +297,7 @@ func TestGetCertDir(t *testing.T) {
 	})
 }
 
-// TestGetCertPaths tests the certificate file paths (Issue #2 fix)
+// TestGetCertPaths tests the certificate file paths
 func TestGetCertPaths(t *testing.T) {
 	t.Run("returns correct filenames", func(t *testing.T) {
 		privKey, cert, err := GetCertPaths()

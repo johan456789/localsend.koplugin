@@ -1,6 +1,7 @@
 require 'busted.runner'()
 
 -- Tests for the stop() wrapper function
+-- Note: stopServer now uses SIGKILL and always succeeds (no graceful/force distinction)
 
 describe("stop() wrapper function", function()
     local LocalSend
@@ -13,8 +14,6 @@ describe("stop() wrapper function", function()
             isSubProcessDone = function() return true end,
             terminateSubProcess = function() end,
             sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
         }
         package.loaded["datastorage"] = {
             getFullDataDir = function() return "/tmp/koreader" end,
@@ -67,7 +66,6 @@ describe("stop() wrapper function", function()
 
     before_each(function()
         notifications_shown = {}
-        -- Note: ServerState resets automatically when module is reloaded (package.loaded["main"] = nil)
 
         _G.G_reader_settings = {
             readSetting = function() return nil end,
@@ -104,19 +102,24 @@ describe("stop() wrapper function", function()
             end,
         }
 
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function() end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
         }
+        package.loaded["pluginshare"] = {}
 
         package.loaded["localsend_utils"] = require("localsend_utils")
         package.loaded["main"] = nil
-    end)
-
-    after_each(function()
-        -- ServerState cleanup happens automatically via module reload in before_each
     end)
 
     describe("user_stopped flag", function()
@@ -152,26 +155,25 @@ describe("stop() wrapper function", function()
         end)
     end)
 
-    describe("graceful stop", function()
-        it("should first attempt graceful stop (force=false)", function()
+    describe("simple stop behavior", function()
+        it("should call stopServer once", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            local stop_calls = {}
-            instance.stopServer = function(self, force)
-                table.insert(stop_calls, { force = force })
+            local stop_call_count = 0
+            instance.stopServer = function(self)
+                stop_call_count = stop_call_count + 1
                 return true
             end
 
             instance:stop()
 
-            assert.equal(1, #stop_calls)
-            assert.is_false(stop_calls[1].force, "First stop should be graceful")
+            assert.equal(1, stop_call_count, "Should call stopServer exactly once")
         end)
 
-        it("should show success notification on graceful stop", function()
+        it("should always show success notification", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
@@ -190,109 +192,7 @@ describe("stop() wrapper function", function()
             end
             assert.is_true(found_success, "Should show success notification")
         end)
-    end)
 
-    describe("force stop fallback", function()
-        it("should attempt force stop when graceful fails", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
-            local stop_calls = {}
-            instance.stopServer = function(self, force)
-                table.insert(stop_calls, { force = force })
-                if not force then
-                    return false, "Process did not exit"
-                end
-                return true
-            end
-
-            instance:stop()
-
-            assert.equal(2, #stop_calls)
-            assert.is_false(stop_calls[1].force, "First should be graceful")
-            assert.is_true(stop_calls[2].force, "Second should be forced")
-        end)
-
-        it("should show success after force stop succeeds", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
-            local call_count = 0
-            instance.stopServer = function(self, force)
-                call_count = call_count + 1
-                if call_count == 1 then
-                    return false, "Process did not exit"
-                end
-                return true
-            end
-
-            notifications_shown = {}
-            instance:stop()
-
-            local found_success = false
-            for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("server stopped") then
-                    found_success = true
-                    break
-                end
-            end
-            assert.is_true(found_success, "Should show success after force stop")
-        end)
-    end)
-
-    describe("complete failure", function()
-        it("should show error when both graceful and force fail", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
-            instance.stopServer = function(self, force)
-                return false, "Process did not exit"
-            end
-
-            notifications_shown = {}
-            instance:stop()
-
-            local found_error = false
-            for _, n in ipairs(notifications_shown) do
-                if n.icon == "notice-warning" and n.text:match("Failed to stop") then
-                    found_error = true
-                    break
-                end
-            end
-            assert.is_true(found_error, "Should show error notification")
-        end)
-
-        it("should not show success notification on complete failure", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
-            instance.stopServer = function(self, force)
-                return false, "Process did not exit"
-            end
-
-            notifications_shown = {}
-            instance:stop()
-
-            local found_success = false
-            for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("server stopped") and not n.icon then
-                    found_success = true
-                    break
-                end
-            end
-            assert.is_false(found_success, "Should not show success on failure")
-        end)
-    end)
-
-    describe("notification details", function()
         it("success notification should have timeout", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
@@ -313,26 +213,115 @@ describe("stop() wrapper function", function()
             assert.is_not_nil(found_notification)
             assert.equal(2, found_notification.timeout, "Success notification should have 2 second timeout")
         end)
+    end)
 
-        it("error notification should have warning icon", function()
+    describe("stopServer behavior", function()
+        it("should return true when no PID file exists", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
-            instance.stopServer = function() return false, "error" end
 
-            notifications_shown = {}
-            instance:stop()
+            -- PID file doesn't exist (default mock behavior)
+            local result = instance:stopServer()
 
-            local found_error = nil
-            for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("Failed") then
-                    found_error = n
-                    break
-                end
+            assert.is_true(result, "Should return true when no PID file")
+        end)
+
+        it("should remove PID file before killing process", function()
+            LocalSend = require("main")
+
+            local pid_file_removed = false
+            local kill_called = false
+            local removal_happened_first = false
+
+            -- Mock pathExists to report PID file exists initially
+            local pid_file_exists = true
+            package.loaded["util"].pathExists = function(path)
+                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
+                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
+                if path == "/tmp/localsend_koreader.pid" then return pid_file_exists end
+                if path == "/proc/12345" then return true end
+                return false
             end
-            assert.is_not_nil(found_error)
-            assert.equal("notice-warning", found_error.icon)
+            package.loaded["util"].readFromFile = function(path)
+                if path == "/tmp/localsend_koreader.pid" then
+                    return "12345"
+                end
+                return nil
+            end
+
+            local original_remove = os.remove
+            os.remove = function(path)
+                if path == "/tmp/localsend_koreader.pid" then
+                    pid_file_removed = true
+                    pid_file_exists = false
+                    if not kill_called then
+                        removal_happened_first = true
+                    end
+                end
+                return true
+            end
+
+            local original_execute = os.execute
+            os.execute = function(cmd)
+                if cmd:match("kill") then
+                    kill_called = true
+                end
+                return 0
+            end
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            instance:stopServer()
+
+            os.remove = original_remove
+            os.execute = original_execute
+
+            assert.is_true(pid_file_removed, "Should remove PID file")
+            assert.is_true(removal_happened_first, "Should remove PID file BEFORE killing")
+        end)
+
+        it("should use SIGKILL (signal 9) for guaranteed termination", function()
+            LocalSend = require("main")
+
+            local kill_signal_used = nil
+
+            package.loaded["util"].pathExists = function(path)
+                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
+                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
+                if path == "/tmp/localsend_koreader.pid" then return true end
+                if path == "/proc/12345" then return true end
+                return false
+            end
+            package.loaded["util"].readFromFile = function(path)
+                if path == "/tmp/localsend_koreader.pid" then
+                    return "12345"
+                end
+                return nil
+            end
+
+            local original_execute = os.execute
+            os.execute = function(cmd)
+                if cmd:match("kill") then
+                    if cmd:match("kill %-9") then
+                        kill_signal_used = 9
+                    end
+                end
+                return 0
+            end
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            instance:stopServer()
+
+            os.execute = original_execute
+
+            assert.equal(9, kill_signal_used, "Should use SIGKILL (signal 9)")
         end)
     end)
 end)

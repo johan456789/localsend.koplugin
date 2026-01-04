@@ -127,14 +127,23 @@ describe("checkForNewTransfers", function()
             end,
         }
 
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function(self, delay, callback)
                 table.insert(scheduled_callbacks, { delay = delay, callback = callback })
             end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
         }
+        package.loaded["pluginshare"] = {}
 
         -- Mock io.open for transfer log
         local original_io_open = io.open
@@ -292,7 +301,7 @@ describe("checkForNewTransfers", function()
             assert.equal(0, #notifications_shown)
         end)
 
-        it("updates last_log_position after checking (Issue #13 optimization)", function()
+        it("updates last_log_position after checking (optimized log reading)", function()
             is_running = true
             transfer_log_exists = true
             transfer_log_content = {
@@ -317,7 +326,7 @@ describe("checkForNewTransfers", function()
             assert.is_true(LocalSend._ServerState.last_log_position > 0)
         end)
 
-        it("schedules next check in 10 seconds", function()
+        it("schedules next check in 15 seconds (POLLING_INTERVAL_IDLE)", function()
             is_running = true
             transfer_log_exists = false
 
@@ -336,7 +345,7 @@ describe("checkForNewTransfers", function()
             instance:checkForNewTransfers(gen)
 
             assert.equal(1, #scheduled_callbacks)
-            assert.equal(10, scheduled_callbacks[1].delay)
+            assert.equal(15, scheduled_callbacks[1].delay)
         end)
 
         it("does not schedule next check when server stopped during check", function()

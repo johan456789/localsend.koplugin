@@ -13,12 +13,12 @@ import (
 )
 
 // =============================================================================
-// Race Condition Tests (Issue #7)
-// These tests verify the fix for race conditions in FileReceiver setters.
+// Race Condition Tests
+// These tests verify thread-safety of FileReceiver setters.
 // Run with -race flag to detect data races.
 // =============================================================================
 
-// TestSetPINRaceCondition demonstrates Issue #7.
+// TestSetPINRaceCondition tests concurrent PIN access.
 // EXPECTED TO FAIL with race detector: Race between SetPIN and reading expectedPin.
 func TestSetPINRaceCondition(t *testing.T) {
 	fr := NewFileReceiver("test", "/tmp", false)
@@ -48,7 +48,7 @@ func TestSetPINRaceCondition(t *testing.T) {
 	t.Log("Race condition test completed - run with -race flag to detect data races")
 }
 
-// TestSetAllowedExtensionsRaceCondition demonstrates Issue #7.
+// TestSetAllowedExtensionsRaceCondition tests concurrent extension list access.
 // EXPECTED TO FAIL with race detector: Race between SetAllowedExtensions and reading.
 func TestSetAllowedExtensionsRaceCondition(t *testing.T) {
 	fr := NewFileReceiver("test", "/tmp", false)
@@ -78,7 +78,7 @@ func TestSetAllowedExtensionsRaceCondition(t *testing.T) {
 	t.Log("Race condition test completed - run with -race flag to detect data races")
 }
 
-// TestSetTransferLogRaceCondition demonstrates Issue #7.
+// TestSetTransferLogRaceCondition tests concurrent transfer log access.
 // EXPECTED TO FAIL with race detector: Race between SetTransferLog and LogTransfer.
 func TestSetTransferLogRaceCondition(t *testing.T) {
 	fr := NewFileReceiver("test", "/tmp", false)
@@ -108,7 +108,7 @@ func TestSetTransferLogRaceCondition(t *testing.T) {
 	t.Log("Race condition test completed - run with -race flag to detect data races")
 }
 
-// TestSetExtensionRouterRaceCondition demonstrates Issue #7.
+// TestSetExtensionRouterRaceCondition tests concurrent router access.
 // EXPECTED TO FAIL with race detector: Race between SetExtensionRouter and GetSaveDir.
 func TestSetExtensionRouterRaceCondition(t *testing.T) {
 	fr := NewFileReceiver("test", "/tmp", false)
@@ -139,7 +139,7 @@ func TestSetExtensionRouterRaceCondition(t *testing.T) {
 	t.Log("Race condition test completed - run with -race flag to detect data races")
 }
 
-// TestSetListenAddrRaceCondition demonstrates Issue #7.
+// TestSetListenAddrRaceCondition tests concurrent listen address access.
 // EXPECTED TO FAIL with race detector: Race between SetListenAddr and ListenAddr.
 func TestSetListenAddrRaceCondition(t *testing.T) {
 	fr := NewFileReceiver("test", "/tmp", false)

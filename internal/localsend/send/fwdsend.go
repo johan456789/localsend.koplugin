@@ -180,7 +180,7 @@ func (fsp *ForwardSender) Start() error {
 		return fmt.Errorf("pre-upload failed: %w", err)
 	}
 
-	// Issue #16 fix: Collect and return errors instead of just logging
+	// Collect and return errors instead of just logging
 	var errs []error
 	for fid, ftoken := range fsp.tokens {
 		err := fsp.sendFile(fid, ftoken)

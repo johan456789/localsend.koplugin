@@ -117,10 +117,10 @@ func TestReadAndRegister_IPv6_ShouldBeSkipped(t *testing.T) {
 }
 
 // =============================================================================
-// Issue #14: Unsynchronized IP Cache Access
+// Unsynchronized IP Cache Access Tests
 // =============================================================================
 
-// TestGetCachedIPs_ConcurrentAccess_RaceCondition demonstrates Issue #14.
+// TestGetCachedIPs_ConcurrentAccess_RaceCondition tests thread-safe IP caching.
 // BUG: getCachedIPs() reads and writes cachedIPs/ipCacheTime without synchronization.
 // This test should FAIL with the race detector before the fix is applied.
 func TestGetCachedIPs_ConcurrentAccess_RaceCondition(t *testing.T) {

@@ -28,12 +28,21 @@ describe("Transfer Log", function()
         package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = { isOnline = function() return true end }
+        package.loaded["ui/network/manager"] = {
+            isOnline = function() return true end,
+            runWhenOnline = function(self, callback) callback() end,
+            runWhenConnected = function(self, callback) callback() end,
+        }
         package.loaded["ui/uimanager"] = {
             show = function() end,
             close = function() end,
             scheduleIn = function() end,
+            unschedule = function() end,
+            preventStandby = function() end,
+            allowStandby = function() end,
+            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
         }
+        package.loaded["pluginshare"] = {}
 
         local WidgetContainer = {}
         WidgetContainer.__index = WidgetContainer
@@ -270,27 +279,23 @@ describe("Transfer Log", function()
             assert.equal(0, count)
         end)
 
-        it("counts all lines regardless of validity", function()
-            file_exists = true
-            mock_file_content = {
-                '{"filename":"test.epub"}',
-                'bad json',
-                '{"filename":"book.pdf"}',
-            }
-
+        it("returns cached count from ServerState (optimization)", function()
+            -- getTransferCount now returns cached ServerState.transfer_count
+            -- instead of reading the file (optimization for e-readers)
             LocalSend = require("main")
+            LocalSend._ServerState.transfer_count = 5
+
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
             local count = instance:getTransferCount()
-            -- Counts lines, not valid entries
-            assert.equal(3, count)
+            assert.equal(5, count)
         end)
     end)
 
-    -- Issue #13: Test optimized log reading with position tracking
-    describe("getNewTransfers (Issue #13 optimization)", function()
+    -- Test optimized log reading with position tracking
+    describe("getNewTransfers (optimized log reading)", function()
         it("returns empty table when log file doesn't exist", function()
             file_exists = false
             LocalSend = require("main")

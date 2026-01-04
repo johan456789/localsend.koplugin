@@ -2,6 +2,7 @@ local DataStorage = require("datastorage")
 local Device = require("device")
 local Dispatcher = require("dispatcher")
 local InfoMessage = require("ui/widget/infomessage")
+local Notification = require("ui/widget/notification")
 local InputDialog = require("ui/widget/inputdialog")
 local NetworkMgr = require("ui/network/manager")
 local PathChooser = require("ui/widget/pathchooser")
@@ -15,10 +16,8 @@ local T = ffiutil.template
 local json = require("json")
 local PluginShare = require("pluginshare")
 
--- Polling interval constants for adaptive transfer detection
-local POLLING_INTERVAL_IDLE = 15     -- 15 seconds when idle
-local POLLING_INTERVAL_ACTIVE = 5    -- 5 seconds after recent transfer
-local POLLING_ACTIVE_DURATION = 60   -- Stay in active mode for 60 seconds after transfer
+-- Polling interval for sentinel file (cheap stat() only)
+local SENTINEL_POLL_INTERVAL = 2
 
 local GITHUB_RELEASE_URL = "https://api.github.com/repos/kaikozlov/localsend.koplugin/releases/latest"
 
@@ -136,7 +135,7 @@ local ServerState = {
     was_running_before_disconnect = false,  -- True if server was running before network disconnect
     last_log_position = 0,  -- Track transfer log read position across instances
     transfer_count = 0,  -- Cached transfer count (avoids full file read on e-readers)
-    last_transfer_time = nil,  -- TimeVal of last transfer for adaptive polling
+    last_sentinel_value = nil,  -- Last known content of sentinel file for fast change detection
 }
 
 -- Load plugin metadata safely (wrap dofile in pcall)
@@ -154,6 +153,7 @@ local binary_path = plugin_path .. "/localsend"
 local certs_path = plugin_path .. "/certs"  -- Certs folder next to binary (managed by Go)
 local pid_file = "/tmp/localsend_koreader.pid"
 local transfer_log_file = "/tmp/localsend_transfers.log"
+local transfer_notify_file = "/tmp/localsend_notify"  -- Sentinel file for fast transfer detection
 
 -- Extension presets
 local EXTENSION_PRESETS = {
@@ -201,8 +201,8 @@ function LocalSend:init()
 
     -- Create instance-specific task references for proper unscheduling
     -- (See UIManager docs: anonymous functions cannot be unscheduled)
-    self.check_transfer_task = function()
-        self:_checkForNewTransfers()
+    self.check_sentinel_task = function()
+        self:_checkSentinelFile()
     end
     self.resume_start_task = function()
         self:start(true)  -- silent=true to suppress notification
@@ -319,15 +319,8 @@ end
 function LocalSend:_onResume()
     logger.dbg("[LocalSend] onResume")
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
-        -- Check if network is already connected (fast resume with WiFi still up)
-        if NetworkMgr:isConnected() then
-            ServerState.was_running_before_suspend = false
-            self:start(true)  -- silent=true to suppress notification
-        else
-            -- Network not ready yet - onNetworkConnected will handle restart
-            -- Keep was_running_before_suspend=true so onNetworkConnected knows to restart
-            logger.dbg("[LocalSend] Waiting for network to reconnect before restarting")
-        end
+        ServerState.was_running_before_suspend = false
+        self:start(true)  -- silent=true to suppress notification
     end
 end
 
@@ -349,7 +342,6 @@ end
 function LocalSend:_onLeaveStandby()
     logger.dbg("[LocalSend] onLeaveStandby")
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
-        -- Clear the flag now that we're handling the resume
         ServerState.was_running_before_suspend = false
         self:start(true)  -- silent=true to suppress notification
     end
@@ -392,8 +384,8 @@ end
 -- Unschedule helpers for proper task cleanup
 -- These use stored task references so UIManager can actually unschedule them
 function LocalSend:_unschedulePolling()
-    if self.check_transfer_task then
-        UIManager:unschedule(self.check_transfer_task)
+    if self.check_sentinel_task then
+        UIManager:unschedule(self.check_sentinel_task)
     end
 end
 
@@ -469,37 +461,32 @@ function LocalSend:_onServerStarted(silent, effective_name)
     -- Register event handlers now that server is running
     self:registerEvents()
 
-    -- Start polling for new transfers using stored task reference
+    -- Start fast sentinel polling for responsive notifications
     self:_unschedulePolling()  -- Ensure no duplicate polling
-    UIManager:scheduleIn(POLLING_INTERVAL_IDLE, self.check_transfer_task)
+    ServerState.last_sentinel_value = nil  -- Reset to pick up current state
+    UIManager:scheduleIn(SENTINEL_POLL_INTERVAL, self.check_sentinel_task)
 
     if not silent then
-        -- Build concise startup message
+        -- Build concise startup message for top notification
         local network_info = Device.retrieveNetworkInfo and Device:retrieveNetworkInfo() or nil
-        local pin_status = self.pin ~= "" and _("PIN: enabled") or nil
+        local pin_status = self.pin ~= "" and _("PIN") or nil
 
-        local message_parts = {
-            T(_("Device: %1"), effective_name),
-        }
+        local message_parts = { effective_name }
 
         -- Try to extract IP and show with port for manual connection
         local ip_addr = network_info and network_info:match("(%d+%.%d+%.%d+%.%d+)")
         if ip_addr then
-            table.insert(message_parts, T(_("IP: %1"), ip_addr .. ":" .. self.port))
-        elseif network_info and network_info ~= "" then
-            -- Fallback: show raw network info if we can't extract IP
-            table.insert(message_parts, network_info)
+            table.insert(message_parts, ip_addr .. ":" .. self.port)
         end
 
         if pin_status then
             table.insert(message_parts, pin_status)
         end
 
-        local info = InfoMessage:new{
+        UIManager:show(Notification:new{
+            text = _("LocalSend Ready") .. " - " .. table.concat(message_parts, " | "),
             timeout = 5,
-            text = _("LocalSend Ready") .. "\n" .. table.concat(message_parts, "\n"),
-        }
-        UIManager:show(info)
+        })
     else
         logger.dbg("[LocalSend] Server restarted after resume")
     end
@@ -527,7 +514,7 @@ function LocalSend:onCloseWidget()
 
     -- Unschedule polling task
     self:_unschedulePolling()
-    self.check_transfer_task = nil
+    self.check_sentinel_task = nil
 
     -- Unschedule any pending resume task
     self:_unscheduleResume()
@@ -696,8 +683,10 @@ end
 
 function LocalSend:clearTransferLog()
     os.remove(transfer_log_file)
+    os.remove(transfer_notify_file)  -- Also remove sentinel file
     ServerState.last_log_position = 0  -- Reset position tracking when log is cleared
     ServerState.transfer_count = 0  -- Reset cached count
+    ServerState.last_sentinel_value = nil  -- Reset sentinel tracking
 end
 
 -- Internal polling method called by the stored task reference
@@ -710,9 +699,6 @@ function LocalSend:_checkForNewTransfers()
     -- Use optimized getNewTransfers() instead of reading the whole file
     local new_transfers = self:getNewTransfers()
     if #new_transfers > 0 then
-        -- Record transfer time for adaptive polling
-        ServerState.last_transfer_time = UIManager:getElapsedTimeSinceBoot()
-
         -- Update cache to reflect new transfer count
         self:_updateCache()
 
@@ -729,29 +715,30 @@ function LocalSend:_checkForNewTransfers()
             timeout = 5,
         })
     end
+end
 
-    -- Schedule next check only if still running
-    -- Use adaptive polling: shorter interval after recent transfers
-    if self:isRunning() then
-        local next_interval = POLLING_INTERVAL_IDLE
-        if ServerState.last_transfer_time then
-            local time_since_boot = UIManager:getElapsedTimeSinceBoot()
-            -- TimeVal subtraction returns elapsed seconds as a number in real KOReader
-            -- But test mocks may return plain tables with .sec/.usec fields
-            local elapsed_seconds
-            if type(time_since_boot) == "table" and time_since_boot.sec ~= nil then
-                -- Test mock: calculate elapsed time manually from sec/usec fields
-                local last = ServerState.last_transfer_time
-                elapsed_seconds = (time_since_boot.sec - last.sec) + (time_since_boot.usec - last.usec) / 1000000
-            else
-                -- Real KOReader: TimeVal subtraction returns seconds as a number directly
-                elapsed_seconds = time_since_boot - ServerState.last_transfer_time
-            end
-            if elapsed_seconds < POLLING_ACTIVE_DURATION then
-                next_interval = POLLING_INTERVAL_ACTIVE
-            end
+-- Fast sentinel file check - reads tiny sentinel file content
+-- When content changes, triggers an immediate full log check
+function LocalSend:_checkSentinelFile()
+    if not self:isRunning() then
+        return
+    end
+
+    -- Read sentinel file content (tiny file with just a timestamp)
+    local content = util.readFromFile(transfer_notify_file)
+    if content then
+        content = content:gsub("%s+", "")  -- Trim whitespace
+        if ServerState.last_sentinel_value and content ~= ServerState.last_sentinel_value then
+            -- Sentinel changed! Trigger immediate transfer check
+            logger.dbg("[LocalSend] Sentinel file changed, checking for new transfers")
+            self:_checkForNewTransfers()
         end
-        UIManager:scheduleIn(next_interval, self.check_transfer_task)
+        ServerState.last_sentinel_value = content
+    end
+
+    -- Schedule next sentinel check
+    if self:isRunning() then
+        UIManager:scheduleIn(SENTINEL_POLL_INTERVAL, self.check_sentinel_task)
     end
 end
 
@@ -773,9 +760,10 @@ function LocalSend:start(silent)
         self:_updateCache()
         -- Expose running state to other plugins
         PluginShare.localsend_running = true
-        -- Unschedule any existing polling task before starting new one
+        -- Start sentinel polling for fast notifications
         self:_unschedulePolling()
-        UIManager:scheduleIn(POLLING_INTERVAL_IDLE, self.check_transfer_task)
+        ServerState.last_sentinel_value = nil
+        UIManager:scheduleIn(SENTINEL_POLL_INTERVAL, self.check_sentinel_task)
         -- Ensure event handlers are registered
         self:registerEvents()
         return
@@ -845,6 +833,11 @@ function LocalSend:start(silent)
         table.insert(args, "--ext-routing")
         table.insert(args, routing_path)
     end
+
+    -- Add on-transfer callback to write unique value to sentinel file for fast notification
+    -- Using date +%s%N gives nanosecond precision to avoid mtime resolution issues
+    table.insert(args, "--on-transfer")
+    table.insert(args, "date +%s%N > " .. transfer_notify_file)
 
     -- Open firewall before starting
     self:openFirewall()
@@ -947,8 +940,8 @@ function LocalSend:stop()
     -- This prevents autostart from restarting it when opening a new document
     ServerState.user_stopped = true
     self:stopServer()
-    UIManager:show(InfoMessage:new{
-        text = _("LocalSend server stopped."),
+    UIManager:show(Notification:new{
+        text = _("LocalSend stopped"),
         timeout = 2,
     })
 end

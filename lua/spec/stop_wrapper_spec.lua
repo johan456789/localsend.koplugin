@@ -102,6 +102,12 @@ describe("stop() wrapper function", function()
             end,
         }
 
+        package.loaded["ui/widget/notification"] = {
+            new = function(self, o)
+                table.insert(notifications_shown, o)
+                return o
+            end,
+        }
         package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
@@ -186,7 +192,7 @@ describe("stop() wrapper function", function()
 
             local found_success = false
             for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("server stopped") then
+                if n.text and n.text:match("LocalSend stopped") then
                     found_success = true
                     break
                 end
@@ -206,7 +212,7 @@ describe("stop() wrapper function", function()
 
             local found_notification = nil
             for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("server stopped") then
+                if n.text and n.text:match("LocalSend stopped") then
                     found_notification = n
                     break
                 end

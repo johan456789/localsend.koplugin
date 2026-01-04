@@ -126,6 +126,12 @@ describe("start() function", function()
             end,
         }
 
+        package.loaded["ui/widget/notification"] = {
+            new = function(self, o)
+                table.insert(notifications_shown, o)
+                return o
+            end,
+        }
         package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
@@ -538,7 +544,7 @@ describe("start() function", function()
     describe("on successful start", function()
         -- Note: saveCertificates test removed - Go now manages certificates directly
 
-        it("should schedule transfer notification check", function()
+        it("should schedule sentinel polling for fast notifications", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
@@ -558,7 +564,7 @@ describe("start() function", function()
             instance:start()
 
             assert.is_true(#scheduled_callbacks > 0, "Should schedule callback")
-            assert.equal(15, scheduled_callbacks[1].delay, "Should schedule with 15 second delay (POLLING_INTERVAL_IDLE)")
+            assert.equal(2, scheduled_callbacks[1].delay, "Should schedule with 2 second delay (SENTINEL_POLL_INTERVAL)")
         end)
 
         it("should show success notification with device name", function()

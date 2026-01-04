@@ -17,14 +17,15 @@ import (
 )
 
 var (
-	devname      string
-	savetodir    string
-	supportHttps bool
-	pin          string
-	acceptExt    string
-	logFile      string
-	webrtcMode   bool
-	extRouting   string
+	devname       string
+	savetodir     string
+	supportHttps  bool
+	pin           string
+	acceptExt     string
+	logFile       string
+	webrtcMode    bool
+	extRouting    string
+	onTransferCmd string
 )
 
 var Cmd = &cobra.Command{
@@ -60,6 +61,7 @@ var Cmd = &cobra.Command{
 		recver := lsrecv.NewFileReceiver(devname, savetodir, supportHttps)
 		recver.SetPIN(pin)
 		recver.SetTransferLog(logFile)
+		recver.SetOnTransferCmd(onTransferCmd)
 
 		// Set extension router if configured
 		if router != nil {
@@ -182,4 +184,5 @@ func init() {
 	Cmd.PersistentFlags().StringVarP(&logFile, "log", "l", "", "Path to transfer log file (JSON lines format)")
 	Cmd.PersistentFlags().BoolVarP(&webrtcMode, "webrtc", "w", true, "Listen for WebRTC offers via signaling server (v3 protocol)")
 	Cmd.PersistentFlags().StringVar(&extRouting, "ext-routing", "", "Path to extension routing config (JSON). Routes files to different directories by extension.")
+	Cmd.PersistentFlags().StringVar(&onTransferCmd, "on-transfer", "", "Shell command to run after each file transfer completes (e.g., 'touch /tmp/notify')")
 }

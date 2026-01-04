@@ -144,6 +144,7 @@ describe("Dialog Functions", function()
             end,
         }
 
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
         package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
@@ -398,6 +399,7 @@ describe("Dialog Functions", function()
             -- Track close calls through the mock
             local close_called = false
             local close_arg = nil
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
             package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
@@ -486,6 +488,7 @@ describe("Dialog Functions", function()
         it("cancel button should close dialog without changes", function()
             -- Track close calls through the mock
             local close_called = false
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
             package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
@@ -585,6 +588,7 @@ describe("Dialog Functions", function()
         it("cancel button should close dialog without changes", function()
             -- Track close calls through the mock
             local close_called = false
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
             package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
@@ -766,6 +770,7 @@ describe("Dialog Functions", function()
             local picker_called = false
             -- Track close calls through the mock
             local close_called = false
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
             package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,

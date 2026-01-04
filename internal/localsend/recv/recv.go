@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -33,11 +34,12 @@ type FileReceiver struct {
 	allowedExtensions []string         // New field for extension filtering
 	transferLogPath   string           // Path to transfer log file
 	transferLogFile   *os.File         // Persistent file handle for transfer log
+	onTransferCmd     string           // Shell command to run after each transfer
 	router            *ExtensionRouter // Routes files to different dirs by extension
 	listenAddr        string           // Custom listen address (defaults to constants.DefaultListenAddr)
 
 	// configMu protects configuration fields that can be modified after creation
-	// (expectedPin, allowedExtensions, transferLogPath, transferLogFile, router, listenAddr)
+	// (expectedPin, allowedExtensions, transferLogPath, transferLogFile, onTransferCmd, router, listenAddr)
 	configMu sync.RWMutex
 
 	// V3 nonce caches for token verification
@@ -121,9 +123,27 @@ func (fr *FileReceiver) closeTransferLog() {
 	}
 }
 
+// SetOnTransferCmd sets a shell command to run after each file transfer.
+// The command runs asynchronously to avoid blocking the transfer.
+func (fr *FileReceiver) SetOnTransferCmd(cmd string) {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
+	fr.onTransferCmd = cmd
+}
+
 func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) {
 	fr.configMu.Lock()
 	defer fr.configMu.Unlock()
+
+	// Always run callback, even if logging is disabled
+	cmd := fr.onTransferCmd
+	if cmd != "" {
+		go func() {
+			if err := exec.Command("sh", "-c", cmd).Run(); err != nil {
+				slog.Debug("on-transfer command failed", "cmd", cmd, "error", err)
+			}
+		}()
+	}
 
 	if fr.transferLogFile == nil {
 		return

@@ -111,6 +111,12 @@ describe("Network Info Display", function()
             end,
         }
 
+        package.loaded["ui/widget/notification"] = {
+            new = function(self, o)
+                table.insert(notifications_shown, o)
+                return o
+            end,
+        }
         package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
@@ -233,7 +239,8 @@ describe("Network Info Display", function()
 
             local found_device = false
             for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("Device:") then
+                -- New format: "LocalSend Ready - KOReader | ..."
+                if n.text and n.text:match("KOReader") then
                     found_device = true
                     break
                 end
@@ -294,7 +301,8 @@ describe("Network Info Display", function()
 
             local found_device = false
             for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("Device:") then
+                -- New format: "LocalSend Ready - KOReader | ..."
+                if n.text and n.text:match("KOReader") then
                     found_device = true
                     break
                 end

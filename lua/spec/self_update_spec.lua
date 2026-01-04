@@ -154,6 +154,7 @@ describe("Self-Update", function()
             end,
         }
 
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
         package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback)
@@ -604,6 +605,7 @@ describe("Self-Update", function()
         it("checkForUpdates should use NetworkMgr:runWhenOnline", function()
             -- Track if runWhenOnline was used
             local run_when_online_called = false
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
             package.loaded["ui/network/manager"] = {
                 isOnline = function() return true end,
                 runWhenOnline = function(self, callback)
@@ -625,6 +627,7 @@ describe("Self-Update", function()
 
         it("checkForUpdates should NOT show manual 'No network' error when offline", function()
             -- When offline, runWhenOnline handles prompting - we should not show our own error
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
             package.loaded["ui/network/manager"] = {
                 isOnline = function() return false end,
                 runWhenOnline = function(self, callback)

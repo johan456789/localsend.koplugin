@@ -30,6 +30,7 @@ describe("LocalSend Task Scheduling", function()
         package.loaded["ui/widget/infomessage"] = {
             new = function(self, o) return o end,
         }
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
         package.loaded["ui/network/manager"] = {
@@ -140,14 +141,14 @@ describe("LocalSend Task Scheduling", function()
     end)
 
     describe("task reference initialization", function()
-        it("should create check_transfer_task function in init()", function()
+        it("should create check_sentinel_task function in init()", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
 
-            assert.is_function(instance.check_transfer_task,
-                "check_transfer_task should be created in init()")
+            assert.is_function(instance.check_sentinel_task,
+                "check_sentinel_task should be created in init()")
         end)
 
         it("should create resume_start_task function in init()", function()
@@ -171,8 +172,8 @@ describe("LocalSend Task Scheduling", function()
             }
 
             -- Each instance should have its own task function
-            assert.are_not.equal(instance1.check_transfer_task, instance2.check_transfer_task,
-                "check_transfer_task should be unique per instance")
+            assert.are_not.equal(instance1.check_sentinel_task, instance2.check_sentinel_task,
+                "check_sentinel_task should be unique per instance")
             assert.are_not.equal(instance1.resume_start_task, instance2.resume_start_task,
                 "resume_start_task should be unique per instance")
         end)
@@ -199,7 +200,7 @@ describe("LocalSend Task Scheduling", function()
                 "_unscheduleResume helper should exist")
         end)
 
-        it("_unschedulePolling should call UIManager:unschedule with task reference", function()
+        it("_unschedulePolling should call UIManager:unschedule with sentinel task", function()
             LocalSend = require("main")
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
@@ -208,9 +209,9 @@ describe("LocalSend Task Scheduling", function()
             instance:_unschedulePolling()
 
             assert.equal(1, #unscheduled_tasks,
-                "Should have called UIManager:unschedule once")
-            assert.equal(instance.check_transfer_task, unscheduled_tasks[1],
-                "Should unschedule check_transfer_task")
+                "Should have called UIManager:unschedule once (sentinel only)")
+            assert.equal(instance.check_sentinel_task, unscheduled_tasks[1],
+                "Should unschedule check_sentinel_task")
         end)
 
         it("_unscheduleResume should call UIManager:unschedule with task reference", function()
@@ -284,14 +285,14 @@ describe("LocalSend Task Scheduling", function()
             }
 
             -- Verify tasks exist before
-            assert.is_function(instance.check_transfer_task)
+            assert.is_function(instance.check_sentinel_task)
             assert.is_function(instance.resume_start_task)
 
             instance:onCloseWidget()
 
             -- Tasks should be nil after cleanup
-            assert.is_nil(instance.check_transfer_task,
-                "check_transfer_task should be nil after onCloseWidget")
+            assert.is_nil(instance.check_sentinel_task,
+                "check_sentinel_task should be nil after onCloseWidget")
             assert.is_nil(instance.resume_start_task,
                 "resume_start_task should be nil after onCloseWidget")
         end)
@@ -329,8 +330,8 @@ describe("LocalSend Task Scheduling", function()
         end)
     end)
 
-    describe("checkForNewTransfers uses stored task reference", function()
-        it("should schedule check_transfer_task for next poll", function()
+    describe("checkForNewTransfers behavior", function()
+        it("should not self-schedule (sentinel polling handles scheduling)", function()
             LocalSend = require("main")
 
             local instance = LocalSend:new{
@@ -346,13 +347,11 @@ describe("LocalSend Task Scheduling", function()
             -- Call the internal check method
             instance:_checkForNewTransfers()
 
-            assert.equal(1, #scheduled_tasks, "Should schedule one task")
-            assert.equal(15, scheduled_tasks[1].delay, "Should have 15 second delay (POLLING_INTERVAL_IDLE)")
-            assert.equal(instance.check_transfer_task, scheduled_tasks[1].callback,
-                "Should schedule the stored check_transfer_task, not an anonymous function")
+            -- Should NOT schedule any tasks - sentinel polling handles that
+            assert.equal(0, #scheduled_tasks, "Should NOT self-schedule (sentinel handles polling)")
         end)
 
-        it("should NOT schedule if server stopped", function()
+        it("should NOT run if server stopped", function()
             LocalSend = require("main")
 
             local instance = LocalSend:new{
@@ -360,19 +359,20 @@ describe("LocalSend Task Scheduling", function()
             }
 
             instance.isRunning = function() return false end
-            instance.getNewTransfers = function() return {} end
-
-            -- Clear tasks from init
-            scheduled_tasks = {}
+            local getNewTransfers_called = false
+            instance.getNewTransfers = function()
+                getNewTransfers_called = true
+                return {}
+            end
 
             instance:_checkForNewTransfers()
 
-            assert.equal(0, #scheduled_tasks, "Should NOT schedule when server not running")
+            assert.is_false(getNewTransfers_called, "Should NOT check transfers when server not running")
         end)
     end)
 
     describe("start() uses stored task reference", function()
-        it("when server already running, should schedule check_transfer_task", function()
+        it("when server already running, should schedule sentinel polling", function()
             LocalSend = require("main")
 
             local instance = LocalSend:new{
@@ -386,9 +386,83 @@ describe("LocalSend Task Scheduling", function()
 
             instance:start()
 
-            assert.equal(1, #scheduled_tasks, "Should schedule one task")
-            assert.equal(instance.check_transfer_task, scheduled_tasks[1].callback,
-                "Should schedule stored check_transfer_task when taking over polling")
+            assert.equal(1, #scheduled_tasks, "Should schedule sentinel task only")
+            assert.equal(instance.check_sentinel_task, scheduled_tasks[1].callback,
+                "Should schedule check_sentinel_task for fast notifications")
+        end)
+    end)
+
+    describe("_checkSentinelFile behavior", function()
+        it("should trigger transfer check when sentinel content changes", function()
+            LocalSend = require("main")
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            instance.isRunning = function() return true end
+
+            local transfer_check_count = 0
+            instance._checkForNewTransfers = function()
+                transfer_check_count = transfer_check_count + 1
+            end
+
+            -- First call: sets last_sentinel_value, no trigger
+            LocalSend._ServerState.last_sentinel_value = nil
+            package.loaded["util"].readFromFile = function() return "12345" end
+            instance:_checkSentinelFile()
+            assert.equal(0, transfer_check_count, "First call should not trigger (no previous value)")
+            assert.equal("12345", LocalSend._ServerState.last_sentinel_value)
+
+            -- Second call with same value: no trigger
+            instance:_checkSentinelFile()
+            assert.equal(0, transfer_check_count, "Same value should not trigger")
+
+            -- Third call with different value: should trigger
+            package.loaded["util"].readFromFile = function() return "67890" end
+            instance:_checkSentinelFile()
+            assert.equal(1, transfer_check_count, "Different value should trigger transfer check")
+            assert.equal("67890", LocalSend._ServerState.last_sentinel_value)
+        end)
+
+        it("should not check if server not running", function()
+            LocalSend = require("main")
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            instance.isRunning = function() return false end
+
+            local read_called = false
+            package.loaded["util"].readFromFile = function()
+                read_called = true
+                return "12345"
+            end
+
+            scheduled_tasks = {}
+            instance:_checkSentinelFile()
+
+            assert.is_false(read_called, "Should not read file when server not running")
+            assert.equal(0, #scheduled_tasks, "Should not schedule next check when not running")
+        end)
+
+        it("should reschedule itself when server running", function()
+            LocalSend = require("main")
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+
+            instance.isRunning = function() return true end
+            package.loaded["util"].readFromFile = function() return nil end
+
+            scheduled_tasks = {}
+            instance:_checkSentinelFile()
+
+            assert.equal(1, #scheduled_tasks, "Should schedule next sentinel check")
+            assert.equal(instance.check_sentinel_task, scheduled_tasks[1].callback)
+            assert.equal(2, scheduled_tasks[1].delay, "Should schedule with 2 second interval")
         end)
     end)
 end)

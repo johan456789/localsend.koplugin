@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	lsutils "localsend-cli/internal/localsend/utils"
 )
@@ -344,5 +345,127 @@ func TestCertificateLoggingPartialMissing(t *testing.T) {
 	logOutput := buf.String()
 	if !strings.Contains(logOutput, "Generating https certificate") {
 		t.Errorf("expected log to contain 'Generating https certificate' when key is missing, got: %s", logOutput)
+	}
+}
+
+// =============================================================================
+// OnTransfer Callback Tests
+// =============================================================================
+
+// TestSetOnTransferCmd verifies that the callback command is stored correctly.
+func TestSetOnTransferCmd(t *testing.T) {
+	fr := NewFileReceiver("test", "/tmp", false)
+
+	// Initially empty
+	fr.configMu.RLock()
+	if fr.onTransferCmd != "" {
+		t.Errorf("expected empty onTransferCmd initially, got: %s", fr.onTransferCmd)
+	}
+	fr.configMu.RUnlock()
+
+	// Set a command
+	fr.SetOnTransferCmd("touch /tmp/notify")
+	fr.configMu.RLock()
+	if fr.onTransferCmd != "touch /tmp/notify" {
+		t.Errorf("expected 'touch /tmp/notify', got: %s", fr.onTransferCmd)
+	}
+	fr.configMu.RUnlock()
+}
+
+// TestOnTransferCmdRaceCondition tests concurrent access to onTransferCmd.
+func TestOnTransferCmdRaceCondition(t *testing.T) {
+	fr := NewFileReceiver("test", "/tmp", false)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Goroutine 1: Repeatedly set callback
+	// Mostly use empty string to avoid spawning processes, but include some
+	// non-empty values to test the race on actual string values
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			fr.SetOnTransferCmd("")
+			fr.SetOnTransferCmd(":")
+			fr.SetOnTransferCmd("")
+		}
+	}()
+
+	// Goroutine 2: Repeatedly call LogTransfer (reads onTransferCmd)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			fr.LogTransfer("test.pdf", 100, "sender")
+		}
+	}()
+
+	wg.Wait()
+	t.Log("Race condition test completed - run with -race flag to detect data races")
+}
+
+// TestLogTransferRunsCallbackWithoutLogFile verifies callback runs even without a log file.
+func TestLogTransferRunsCallbackWithoutLogFile(t *testing.T) {
+	fr := NewFileReceiver("test", "/tmp", false)
+	// Don't set transfer log - fr.transferLogFile is nil
+
+	// Create a temp file to verify the callback runs
+	tmpFile := filepath.Join(t.TempDir(), "callback_test")
+
+	fr.SetOnTransferCmd("touch " + tmpFile)
+
+	// Call LogTransfer (no log file, but callback should still run)
+	fr.LogTransfer("test.pdf", 100, "sender")
+
+	// Give the goroutine time to execute
+	for i := 0; i < 50; i++ {
+		if _, err := os.Stat(tmpFile); err == nil {
+			return // Success - file was created
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
+		t.Error("callback should have run and created the temp file even without a log file configured")
+	}
+}
+
+// TestLogTransferRunsCallbackWithLogFile verifies callback runs with a log file.
+func TestLogTransferRunsCallbackWithLogFile(t *testing.T) {
+	fr := NewFileReceiver("test", "/tmp", false)
+
+	// Set up a log file
+	logFile := filepath.Join(t.TempDir(), "transfer.log")
+	fr.SetTransferLog(logFile)
+	defer fr.closeTransferLog()
+
+	// Create a temp file to verify the callback runs
+	callbackFile := filepath.Join(t.TempDir(), "callback_test")
+
+	fr.SetOnTransferCmd("touch " + callbackFile)
+
+	// Call LogTransfer
+	fr.LogTransfer("test.pdf", 100, "sender")
+
+	// Give the goroutine time to execute
+	for i := 0; i < 50; i++ {
+		if _, err := os.Stat(callbackFile); err == nil {
+			break // Success - file was created
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Verify log was written
+	content, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Errorf("failed to read log file: %v", err)
+	}
+	if !strings.Contains(string(content), "test.pdf") {
+		t.Errorf("log file should contain 'test.pdf', got: %s", content)
+	}
+
+	// Verify callback ran
+	if _, err := os.Stat(callbackFile); os.IsNotExist(err) {
+		t.Error("callback should have run and created the temp file")
 	}
 }

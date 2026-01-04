@@ -127,6 +127,7 @@ describe("checkForNewTransfers", function()
             end,
         }
 
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
         package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
@@ -327,26 +328,23 @@ describe("checkForNewTransfers", function()
             assert.is_true(LocalSend._ServerState.last_log_position > 0)
         end)
 
-        it("schedules next check in 15 seconds (POLLING_INTERVAL_IDLE)", function()
+        it("does not self-schedule (sentinel polling handles scheduling)", function()
             is_running = true
             transfer_log_exists = false
 
             LocalSend = require("main")
             -- Reset ServerState for test
             LocalSend._ServerState.last_log_position = 0
-            LocalSend._ServerState.polling_generation = 0
 
             local instance = LocalSend:new{
                 ui = { menu = { registerToMainMenu = function() end } }
             }
             instance.isRunning = function() return true end
 
-            -- Pass current generation
-            local gen = LocalSend._ServerState.polling_generation
-            instance:checkForNewTransfers(gen)
+            instance:checkForNewTransfers()
 
-            assert.equal(1, #scheduled_callbacks)
-            assert.equal(15, scheduled_callbacks[1].delay)
+            -- Should NOT schedule - sentinel polling handles this now
+            assert.equal(0, #scheduled_callbacks, "checkForNewTransfers should not self-schedule")
         end)
 
         it("does not schedule next check when server stopped during check", function()

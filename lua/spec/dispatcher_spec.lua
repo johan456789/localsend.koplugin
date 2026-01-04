@@ -31,6 +31,7 @@ describe("onDispatcherRegisterActions", function()
             end,
         }
         package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
         package.loaded["ui/network/manager"] = {

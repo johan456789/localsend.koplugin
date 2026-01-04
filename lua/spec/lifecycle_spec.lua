@@ -37,6 +37,7 @@ describe("LocalSend Lifecycle", function()
         }
         package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
         package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
+        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
         package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,

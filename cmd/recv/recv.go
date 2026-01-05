@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"localsend-cli/internal/crypto"
@@ -104,7 +105,19 @@ var Cmd = &cobra.Command{
 		<-utils.WaitForSignal()
 		cancel() // Signal both HTTP and WebRTC receivers to stop
 
-		wg.Wait()
+		// Wait for goroutines with timeout to prevent hanging on shutdown
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Clean shutdown
+		case <-time.After(5 * time.Second):
+			slog.Warn("Shutdown timeout: some goroutines did not exit cleanly")
+		}
 	},
 }
 

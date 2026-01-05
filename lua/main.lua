@@ -109,7 +109,17 @@ local function validateDeviceName(name)
 end
 
 -- Check if an iptables rule exists (returns true if rule exists)
+-- NOTE: The rule parameter should be pre-validated (e.g., port is validated by isValidPort)
+-- to prevent command injection. This function uses direct string concat for iptables
+-- because shell_escape would quote the entire rule as a single argument.
 local function iptablesRuleExists(rule)
+    -- Validate that rule contains only expected iptables characters
+    -- This is a defense-in-depth check since callers should already validate inputs
+    -- Include newlines (\n, \r) which could be used for command injection
+    if rule:match("[;|&`$\"'\\%z\n\r]") then
+        logger.warn("[LocalSend] Rejecting iptables rule with suspicious characters:", rule)
+        return true  -- Pretend rule exists to prevent adding potentially malicious rule
+    end
     -- iptables -C checks if rule exists, returns 0 if it does
     local result = os.execute("iptables -C " .. rule .. " 2>/dev/null")
     return result == 0
@@ -118,6 +128,7 @@ end
 -- Add iptables rule only if it doesn't already exist
 local function iptablesAddIfMissing(rule)
     if not iptablesRuleExists(rule) then
+        -- Same character validation is done in iptablesRuleExists
         os.execute("iptables -A " .. rule)
         return true
     end
@@ -1539,8 +1550,9 @@ function LocalSend:getDeviceArch()
     -- Detect device architecture for selecting the right binary
     local handle = io.popen("uname -m")
     if not handle then return nil end
-    local arch = handle:read("*l")
+    local ok, arch = pcall(handle.read, handle, "*l")
     handle:close()
+    if not ok then return nil end
 
     if not arch then return nil end
 
@@ -1590,6 +1602,13 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
         "--connect-timeout", "30", "--max-time", "120", download_url})
 
     local handle = io.popen(cmd)
+    if not handle then
+        UIManager:show(InfoMessage:new{
+            icon = "notice-warning",
+            text = _("Failed to execute download command."),
+        })
+        return
+    end
     local http_code = handle:read("*a")
     handle:close()
 
@@ -1762,8 +1781,19 @@ function LocalSend:_doAutoCheckForUpdates()
         tmp_file, GITHUB_RELEASE_URL)
 
     local handle = io.popen(cmd)
-    local http_code = handle:read("*a")
+    if not handle then
+        -- Silently fail for auto-check
+        logger.dbg("[LocalSend] Auto update check failed: io.popen returned nil")
+        self:_scheduleUpdateCheck()
+        return
+    end
+    local ok, http_code = pcall(handle.read, handle, "*a")
     handle:close()
+    if not ok then
+        logger.dbg("[LocalSend] Auto update check failed: read error")
+        self:_scheduleUpdateCheck()
+        return
+    end
 
     -- Update last check time regardless of result
     self.last_update_check = os.time()
@@ -1827,8 +1857,22 @@ function LocalSend:doCheckForUpdates()
         tmp_file, GITHUB_RELEASE_URL)
 
     local handle = io.popen(cmd)
-    local http_code = handle:read("*a")
+    if not handle then
+        UIManager:show(InfoMessage:new{
+            icon = "notice-warning",
+            text = _("Failed to execute update check command."),
+        })
+        return
+    end
+    local ok, http_code = pcall(handle.read, handle, "*a")
     handle:close()
+    if not ok then
+        UIManager:show(InfoMessage:new{
+            icon = "notice-warning",
+            text = _("Failed to read update check response."),
+        })
+        return
+    end
 
     if http_code ~= "200" then
         UIManager:show(InfoMessage:new{

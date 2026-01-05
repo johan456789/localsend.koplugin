@@ -547,3 +547,57 @@ func TestFingerprintStability(t *testing.T) {
 		t.Errorf("Fingerprint after re-parsing = %q; want %q", fingerprint2, fingerprints[0])
 	}
 }
+
+// TestVerifyingKeyFromCert tests extracting VerifyingKey from certificate.
+func TestVerifyingKeyFromCert(t *testing.T) {
+	// Generate key pair and certificate
+	key, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair failed: %v", err)
+	}
+
+	certPEM, _, err := GenerateSelfSignedCert(key)
+	if err != nil {
+		t.Fatalf("GenerateSelfSignedCert failed: %v", err)
+	}
+
+	// Parse certificate
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		t.Fatal("Failed to decode certificate PEM")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("Failed to parse certificate: %v", err)
+	}
+
+	// Extract VerifyingKey from certificate
+	verifyKey, err := VerifyingKeyFromCert(cert)
+	if err != nil {
+		t.Fatalf("VerifyingKeyFromCert failed: %v", err)
+	}
+
+	// Verify it's Ed25519
+	if verifyKey.SignatureMethod() != "ed25519" {
+		t.Errorf("SignatureMethod() = %q; want 'ed25519'", verifyKey.SignatureMethod())
+	}
+
+	// Test that we can verify a token with this key
+	token, err := key.GenerateTokenTimestamp()
+	if err != nil {
+		t.Fatalf("GenerateTokenTimestamp failed: %v", err)
+	}
+
+	if err := VerifyTokenTimestamp(verifyKey, token); err != nil {
+		t.Errorf("Token verification failed: %v", err)
+	}
+}
+
+// TestVerifyingKeyFromCertNil tests error handling with nil certificate.
+func TestVerifyingKeyFromCertNil(t *testing.T) {
+	_, err := VerifyingKeyFromCert(nil)
+	if err == nil {
+		t.Error("VerifyingKeyFromCert(nil) should return error")
+	}
+}

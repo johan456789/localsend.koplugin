@@ -258,13 +258,16 @@ func (sess *RecvSession) GetFileMeta(fileId string) (models.FileMeta, bool) {
 	return meta, ok
 }
 
-func (sess *RecvSession) End() {
-	if sess.started.Load() { // make sure it ends once
-		sess.started.Store(false)
+// End ends the session if it's still active.
+// Returns true if this call ended the session, false if already ended.
+// Uses CompareAndSwap for thread-safe atomic check-and-set.
+func (sess *RecvSession) End() bool {
+	if sess.started.CompareAndSwap(true, false) {
 		atomic.StoreInt64(&sess.filesCount, 0)
-
 		slog.Info("Session done", "session", sess.id)
+		return true
 	}
+	return false
 }
 
 func (sess *RecvSession) Stopped() bool {

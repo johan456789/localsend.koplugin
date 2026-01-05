@@ -438,4 +438,64 @@ describe("Firewall Management", function()
             assert.equal(0, iptables_calls, "Should not call iptables on non-Kindle")
         end)
     end)
+
+    describe("iptables command injection protection", function()
+        before_each(function()
+            package.loaded["device"] = {
+                isKindle = function() return true end,
+                retrieveNetworkInfo = function() return "WiFi" end,
+            }
+            os_execute_calls = {}
+        end)
+
+        it("rejects rules with semicolons (command chaining)", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            -- Simulate a malicious port that somehow bypassed validation
+            -- (In practice, isValidPort prevents this, but defense in depth matters)
+            local malicious_port = "53317; rm -rf /"
+            instance.port = malicious_port
+
+            os_execute_calls = {}
+            instance:openFirewall()
+
+            -- With character validation, the suspicious rule should be rejected
+            -- Check that no iptables -A command was issued with the malicious port
+            for _, cmd in ipairs(os_execute_calls) do
+                assert.is_not.match(cmd, "rm %-rf")
+            end
+        end)
+
+        it("rejects rules with backticks (command substitution)", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            instance.port = "53317`whoami`"
+
+            os_execute_calls = {}
+            instance:openFirewall()
+
+            for _, cmd in ipairs(os_execute_calls) do
+                assert.is_not.match(cmd, "whoami")
+            end
+        end)
+
+        it("rejects rules with $() (command substitution)", function()
+            LocalSend = require("main")
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            instance.port = "$(cat /etc/passwd)"
+
+            os_execute_calls = {}
+            instance:openFirewall()
+
+            for _, cmd in ipairs(os_execute_calls) do
+                assert.is_not.match(cmd, "/etc/passwd")
+            end
+        end)
+    end)
 end)

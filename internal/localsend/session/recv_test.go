@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"localsend-cli/internal/models"
@@ -920,6 +921,68 @@ func TestSaveFileDirectoryTraversalPrevention(t *testing.T) {
 			// Clean up for next test case
 			_ = os.Remove(savedPath)
 		})
+	}
+}
+
+// TestRecvSession_End_ConcurrentCalls verifies that End() is safe to call concurrently.
+// Only one goroutine should successfully end the session, and the return value should
+// indicate whether this call was the one that ended it.
+func TestRecvSession_End_ConcurrentCalls(t *testing.T) {
+	sess, _ := NewRecvSession("test-session", "127.0.0.1")
+	// Accept a file so session can be properly started
+	fileMeta := models.FileMeta{
+		Id:       "file1",
+		Filename: "test.txt",
+		Size:     100,
+	}
+	_ = sess.AcceptFile("file1", fileMeta)
+	sess.Start()
+
+	var endCount atomic.Int32
+	var wg sync.WaitGroup
+
+	// Spawn 100 goroutines all calling End() simultaneously
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if sess.End() {
+				endCount.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Only ONE goroutine should have successfully ended the session
+	if endCount.Load() != 1 {
+		t.Errorf("expected exactly 1 successful End(), got %d", endCount.Load())
+	}
+}
+
+// TestRecvSession_End_ReturnsFalseWhenAlreadyEnded verifies End() return semantics.
+func TestRecvSession_End_ReturnsFalseWhenAlreadyEnded(t *testing.T) {
+	sess, _ := NewRecvSession("test-session", "127.0.0.1")
+	fileMeta := models.FileMeta{
+		Id:       "file1",
+		Filename: "test.txt",
+		Size:     100,
+	}
+	_ = sess.AcceptFile("file1", fileMeta)
+	sess.Start()
+
+	// First call should return true (session was ended)
+	if !sess.End() {
+		t.Error("first End() call should return true")
+	}
+
+	// Second call should return false (already ended)
+	if sess.End() {
+		t.Error("second End() call should return false")
+	}
+
+	// Third call should also return false
+	if sess.End() {
+		t.Error("third End() call should return false")
 	}
 }
 

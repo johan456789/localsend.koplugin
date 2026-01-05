@@ -65,7 +65,10 @@ var Cmd = &cobra.Command{
 
 		sender := localsend.NewFileSender(useDownloadAPI)
 		sender.SetPIN(pin)
-		_ = sender.Init(&devinfo, supportHttps)
+		if err := sender.Init(&devinfo, supportHttps); err != nil {
+			slog.Error("Failed to initialize sender", "error", err)
+			return fmt.Errorf("sender initialization failed: %w", err)
+		}
 
 		// try to add every file
 		for _, file := range files {

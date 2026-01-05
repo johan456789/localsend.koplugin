@@ -133,19 +133,42 @@ func (s *TrustedDeviceStore) load() error {
 	return json.NewDecoder(file).Decode(&s.devices)
 }
 
+// save writes devices to disk atomically using temp file + rename.
+// This ensures the original file is preserved if encoding fails mid-write.
 func (s *TrustedDeviceStore) save() error {
 	if err := os.MkdirAll(s.configDir, 0755); err != nil {
 		return err
 	}
 
 	filePath := filepath.Join(s.configDir, "trusted_devices.json")
-	file, err := os.Create(filePath)
+	tempPath := filePath + ".tmp"
+
+	// Write to temp file first
+	file, err := os.Create(tempPath)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = file.Close() }()
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(s.devices)
+	if err := encoder.Encode(s.devices); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tempPath)
+		return err
+	}
+
+	// Sync to ensure data is flushed to disk before rename
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tempPath)
+		return err
+	}
+
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
+
+	// Atomic rename (on POSIX systems)
+	return os.Rename(tempPath, filePath)
 }

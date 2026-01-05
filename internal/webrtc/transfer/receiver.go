@@ -181,12 +181,17 @@ func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]st
 }
 
 // sendError sends an error response to the peer.
+// Thread-safe: uses mutex to access peer.
 func (r *RTCReceiver) sendError(message string) {
-	if r.peer == nil {
+	r.mu.Lock()
+	peer := r.peer
+	r.mu.Unlock()
+
+	if peer == nil {
 		return
 	}
 	errResp := RTCErrorResponse{Error: message}
-	_ = r.peer.SendJSON(errResp)
+	_ = peer.SendJSON(errResp)
 }
 
 // getSaveDir returns the appropriate save directory for a filename.
@@ -531,9 +536,15 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 	}
 
 	// Select files to accept
+	// IMPORTANT: Release mutex before calling callback to prevent deadlock.
+	// The callback may call receiver methods that need the mutex.
 	var acceptedIDs []string
 	if r.onSelectFiles != nil {
-		acceptedIDs = r.onSelectFiles(r.files)
+		files := r.files            // Copy reference before unlocking
+		callback := r.onSelectFiles // Copy callback reference
+		r.mu.Unlock()
+		acceptedIDs = callback(files)
+		r.mu.Lock()
 	} else {
 		// Accept all by default
 		for _, f := range r.files {
@@ -770,11 +781,18 @@ func (r *RTCReceiver) finishCurrentFile() {
 
 // Close closes the receiver.
 func (r *RTCReceiver) Close() error {
-	for _, f := range r.fileWriters {
+	r.mu.Lock()
+	fileWriters := r.fileWriters
+	peer := r.peer
+	r.fileWriters = nil
+	r.peer = nil
+	r.mu.Unlock()
+
+	for _, f := range fileWriters {
 		_ = f.Close()
 	}
-	if r.peer != nil {
-		return r.peer.Close()
+	if peer != nil {
+		return peer.Close()
 	}
 	return nil
 }

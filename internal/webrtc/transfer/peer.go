@@ -95,8 +95,11 @@ func NewPeerConnection(config PeerConfig) (*PeerConnection, error) {
 		if state == webrtc.PeerConnectionStateClosed ||
 			state == webrtc.PeerConnectionStateFailed ||
 			state == webrtc.PeerConnectionStateDisconnected {
-			if p.onClose != nil {
-				p.onClose()
+			p.mu.Lock()
+			handler := p.onClose
+			p.mu.Unlock()
+			if handler != nil {
+				handler()
 			}
 		}
 		if state == webrtc.PeerConnectionStateConnected {
@@ -162,15 +165,21 @@ func (p *PeerConnection) setupDataChannel(dc *webrtc.DataChannel) {
 
 	dc.OnOpen(func() {
 		slog.Info("Data channel opened", "label", dc.Label(), "id", dc.ID())
-		if p.onOpen != nil {
-			p.onOpen()
+		p.mu.Lock()
+		handler := p.onOpen
+		p.mu.Unlock()
+		if handler != nil {
+			handler()
 		}
 	})
 
 	dc.OnMessage(func(msg webrtc.DataChannelMessage) {
 		slog.Debug("Data channel message received", "isString", msg.IsString, "len", len(msg.Data))
-		if p.onMessage != nil {
-			p.onMessage(msg.Data)
+		p.mu.Lock()
+		handler := p.onMessage
+		p.mu.Unlock()
+		if handler != nil {
+			handler(msg.Data)
 		}
 	})
 
@@ -251,17 +260,26 @@ func (p *PeerConnection) SetAnswer(sdp string) error {
 }
 
 // OnMessage sets the handler for incoming data channel messages.
+// Thread-safe: can be called concurrently with callback invocations.
 func (p *PeerConnection) OnMessage(handler func([]byte)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.onMessage = handler
 }
 
 // OnOpen sets the handler for when the data channel opens.
+// Thread-safe: can be called concurrently with callback invocations.
 func (p *PeerConnection) OnOpen(handler func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.onOpen = handler
 }
 
 // OnClose sets the handler for when the connection closes.
+// Thread-safe: can be called concurrently with callback invocations.
 func (p *PeerConnection) OnClose(handler func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.onClose = handler
 }
 

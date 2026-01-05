@@ -1,7 +1,9 @@
 package crypto
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -68,6 +70,23 @@ func PublicKeyFromCertDER(der []byte) ([]byte, error) {
 	}
 
 	return pubKeyBytes, nil
+}
+
+// VerifyingKeyFromCert extracts a VerifyingKey from an x509 certificate.
+// This is used to verify tokens when the client presents a TLS certificate.
+func VerifyingKeyFromCert(cert *x509.Certificate) (VerifyingKey, error) {
+	if cert == nil {
+		return nil, fmt.Errorf("certificate is nil")
+	}
+
+	switch pub := cert.PublicKey.(type) {
+	case ed25519.PublicKey:
+		return &Ed25519VerifyingKey{publicKey: pub}, nil
+	case *rsa.PublicKey:
+		return &RsaPssVerifyingKey{publicKey: pub}, nil
+	default:
+		return nil, fmt.Errorf("unsupported public key type: %T", pub)
+	}
 }
 
 // FingerprintFromCertDER generates a SHA256 fingerprint from a certificate.

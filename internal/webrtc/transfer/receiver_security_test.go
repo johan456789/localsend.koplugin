@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"localsend-cli/internal/localsend/session"
 )
@@ -342,5 +344,158 @@ func TestRTCReceiver_FilenameIsSanitized(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// =============================================================================
+// Concurrency/Race Condition Tests
+// =============================================================================
+
+// TestRTCReceiver_sendError_Race verifies that sendError() is thread-safe.
+// sendError reads r.peer which can be modified by other goroutines.
+func TestRTCReceiver_sendError_Race(t *testing.T) {
+	r := &RTCReceiver{
+		peer:        nil,
+		fileTokens:  make(map[string]string),
+		fileWriters: make(map[string]*os.File),
+		filePaths:   make(map[string]string),
+		fileHashers: makeHasherMap(),
+	}
+
+	var wg sync.WaitGroup
+	const goroutines = 50
+
+	// Concurrent sendError calls
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.sendError("test error")
+		}()
+	}
+
+	// Concurrent peer modifications (simulating AcceptOffer and Close)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.mu.Lock()
+			r.peer = nil
+			r.mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+}
+
+// =============================================================================
+// Deadlock Prevention Tests
+// =============================================================================
+
+// TestRTCReceiver_handleFileList_NoDeadlock verifies that the onSelectFiles
+// callback can safely access receiver methods without causing a deadlock.
+// Before the fix, handleFileList would call the callback while holding the mutex,
+// and if the callback tried to call Close() or other methods, it would deadlock.
+func TestRTCReceiver_handleFileList_NoDeadlock(t *testing.T) {
+	tmpDir := t.TempDir()
+	r := &RTCReceiver{
+		saveDir:     tmpDir,
+		fileTokens:  make(map[string]string),
+		fileWriters: make(map[string]*os.File),
+		filePaths:   make(map[string]string),
+		fileHashers: makeHasherMap(),
+		files: []RTCFileDto{
+			{ID: "test-1", FileName: "test.txt", Size: 100},
+		},
+		state: stateWaitFileList,
+	}
+
+	// Set a callback that attempts to access the receiver
+	// This would deadlock if the mutex is still held when callback is invoked
+	callbackDone := make(chan struct{})
+	r.OnSelectFiles(func(files []RTCFileDto) []string {
+		// This tries to access the receiver - would deadlock if mutex held
+		_ = r.saveDir // read access
+		close(callbackDone)
+		// Return file IDs to avoid nil peer panic in response path
+		ids := make([]string, len(files))
+		for i, f := range files {
+			ids[i] = f.ID
+		}
+		return ids
+	})
+
+	// Simulate receiving a file list message
+	// This will call handleMessage which acquires the mutex
+	done := make(chan struct{})
+	go func() {
+		defer func() {
+			recover() // Ignore panic from nil peer in later code paths
+			close(done)
+		}()
+		data := []byte(`{"status":"OK","files":[{"id":"test-1","fileName":"test.txt","size":100}]}`)
+		r.handleMessage(data)
+	}()
+
+	// Wait with timeout
+	select {
+	case <-done:
+		// Success - no deadlock
+	case <-callbackDone:
+		// Callback executed, wait for handleMessage to complete
+		<-done
+	case <-time.After(2 * time.Second):
+		t.Fatal("Deadlock detected: handleMessage did not complete within timeout")
+	}
+}
+
+// TestRTCReceiver_CallbackCanAccessMethods tests that after the fix,
+// callbacks can safely call receiver methods that acquire the mutex.
+func TestRTCReceiver_CallbackCanAccessMethods(t *testing.T) {
+	tmpDir := t.TempDir()
+	r := &RTCReceiver{
+		saveDir:     tmpDir,
+		fileTokens:  make(map[string]string),
+		fileWriters: make(map[string]*os.File),
+		filePaths:   make(map[string]string),
+		fileHashers: makeHasherMap(),
+		files: []RTCFileDto{
+			{ID: "test-1", FileName: "test.txt", Size: 100},
+		},
+		state: stateWaitFileList,
+	}
+
+	// This is the key test: callback calls a method that needs the mutex
+	// sendError() acquires the mutex - this would deadlock before the fix
+	callbackExecuted := false
+	r.OnSelectFiles(func(files []RTCFileDto) []string {
+		r.sendError("test from callback")
+		callbackExecuted = true
+		// Return all file IDs to avoid the "DECLINED" path which needs a peer
+		ids := make([]string, len(files))
+		for i, f := range files {
+			ids[i] = f.ID
+		}
+		return ids
+	})
+
+	// Use a timeout to detect deadlock
+	done := make(chan struct{})
+	go func() {
+		defer func() {
+			recover() // Ignore panic from nil peer in later code paths
+			close(done)
+		}()
+		data := []byte(`{"status":"OK","files":[{"id":"test-1","fileName":"test.txt","size":100}]}`)
+		r.handleMessage(data)
+	}()
+
+	select {
+	case <-done:
+		if !callbackExecuted {
+			t.Error("Callback was not executed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Deadlock detected: handleMessage did not complete within timeout")
 	}
 }

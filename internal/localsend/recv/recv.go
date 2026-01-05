@@ -39,12 +39,27 @@ type FileReceiver struct {
 	listenAddr        string           // Custom listen address (defaults to constants.DefaultListenAddr)
 
 	// configMu protects configuration fields that can be modified after creation
-	// (expectedPin, allowedExtensions, transferLogPath, transferLogFile, onTransferCmd, router, listenAddr)
+	// (expectedPin, allowedExtensions, transferLogPath, transferLogFile, onTransferCmd, router, listenAddr, pinAttempts)
 	configMu sync.RWMutex
+
+	// PIN rate limiting
+	pinAttempts map[string]*pinAttemptInfo // IP -> attempt info
 
 	// V3 nonce caches for token verification
 	receivedNonceCache  *localsend.NonceCache // nonces received from clients
 	generatedNonceCache *localsend.NonceCache // nonces generated for clients
+}
+
+// PIN rate limiting constants
+const (
+	maxPINAttempts   = 3               // Maximum incorrect PIN attempts before lockout
+	pinBlockDuration = 5 * time.Minute // Duration of lockout after max attempts
+)
+
+// pinAttemptInfo tracks failed PIN attempts for an IP
+type pinAttemptInfo struct {
+	count     int
+	blockedAt time.Time
 }
 
 // TransferLogEntry represents a single transfer log entry
@@ -216,6 +231,56 @@ func (fr *FileReceiver) getExpectedPIN() string {
 	return fr.expectedPin
 }
 
+// isPINBlocked returns true if the IP is currently blocked due to too many failed PIN attempts.
+func (fr *FileReceiver) isPINBlocked(ip string) bool {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
+
+	info, ok := fr.pinAttempts[ip]
+	if !ok {
+		return false
+	}
+
+	// Check if block has expired
+	if info.count >= maxPINAttempts {
+		if time.Since(info.blockedAt) > pinBlockDuration {
+			delete(fr.pinAttempts, ip) // Clear expired block
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// recordPINAttempt records a failed PIN attempt for an IP.
+func (fr *FileReceiver) recordPINAttempt(ip string) {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
+
+	if fr.pinAttempts == nil {
+		fr.pinAttempts = make(map[string]*pinAttemptInfo)
+	}
+
+	info, ok := fr.pinAttempts[ip]
+	if !ok {
+		info = &pinAttemptInfo{}
+		fr.pinAttempts[ip] = info
+	}
+
+	info.count++
+	if info.count >= maxPINAttempts {
+		info.blockedAt = time.Now()
+		slog.Warn("PIN rate limit reached, blocking IP", "ip", ip, "duration", pinBlockDuration)
+	}
+}
+
+// clearPINAttempts clears failed PIN attempts for an IP (on successful auth).
+func (fr *FileReceiver) clearPINAttempts(ip string) {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
+	delete(fr.pinAttempts, ip)
+}
+
 // hasExtensionFilter returns true if an extension filter is configured.
 // Used by handlers to check if filtering is needed.
 func (fr *FileReceiver) hasExtensionFilter() bool {
@@ -308,8 +373,13 @@ func (fr *FileReceiver) Start(ctx context.Context) error {
 // startDiscoveryWithRetry starts the discovery/advertisement loop.
 // If discoverer wasn't created at Init (no network), it retries every 5 seconds until success or context cancellation.
 func (fr *FileReceiver) startDiscoveryWithRetry(ctx context.Context) {
-	// If discoverer already exists, just start it
+	// If discoverer already exists, just start it with context awareness
 	if fr.discoverier != nil {
+		// Watch for context cancellation to shutdown the discoverer
+		go func() {
+			<-ctx.Done()
+			_ = fr.discoverier.Shutdown()
+		}()
 		_ = fr.discoverier.Listen()
 		return
 	}
@@ -330,18 +400,16 @@ func (fr *FileReceiver) startDiscoveryWithRetry(ctx context.Context) {
 				continue
 			}
 			slog.Info("Discovery started (network became available)")
+			// Watch for context cancellation to shutdown the discoverer
+			go func() {
+				<-ctx.Done()
+				_ = fr.discoverier.Shutdown()
+			}()
 			// Success - start the listen loop (blocks until shutdown)
 			_ = fr.discoverier.Listen()
 			return
 		}
 	}
-}
-
-func (fr *FileReceiver) advertise() error {
-	if fr.discoverier == nil {
-		return nil // Discovery not available
-	}
-	return fr.discoverier.Listen()
 }
 
 func (fr *FileReceiver) Stop() error {

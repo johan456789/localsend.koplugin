@@ -67,10 +67,10 @@ type RTCSender struct {
 	acceptedIDs []string
 
 	// Channels
-	ready    chan struct{}
-	accepted chan map[string]string // fileId -> token
-	declined chan struct{}
-	errors   chan error
+	accepted  chan map[string]string // fileId -> token
+	declined  chan struct{}
+	errors    chan error
+	closeOnce sync.Once // Ensures channels are closed only once
 }
 
 // NewRTCSender creates a new WebRTC sender.
@@ -82,7 +82,6 @@ func NewRTCSender(sig *signaling.SignalingClient, key *crypto.SigningKey, pin st
 		sessionID:  uuid.New().String()[:11], // Short session ID like official
 		state:      senderStateInit,
 		fileTokens: make(map[string]string),
-		ready:      make(chan struct{}),
 		accepted:   make(chan map[string]string, 1),
 		declined:   make(chan struct{}, 1),
 		errors:     make(chan error, 1),
@@ -519,7 +518,15 @@ func (s *RTCSender) SendFiles() error {
 }
 
 // Close closes the sender and peer connection.
+// Channels are closed exactly once using sync.Once to prevent panic.
 func (s *RTCSender) Close() error {
+	// Close channels safely (only once)
+	s.closeOnce.Do(func() {
+		close(s.accepted)
+		close(s.declined)
+		close(s.errors)
+	})
+
 	if s.peer != nil {
 		return s.peer.Close()
 	}

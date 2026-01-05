@@ -549,3 +549,127 @@ func TestNonceCacheIntegration(t *testing.T) {
 		t.Errorf("Combined nonce length = %d; want 64", len(combinedNonce))
 	}
 }
+
+// =============================================================================
+// PIN Rate Limiting Tests
+// =============================================================================
+
+func TestPreUploadHandler_PINRateLimiting_BlocksAfter3Attempts(t *testing.T) {
+	fr := newTestReceiver()
+	fr.SetPIN("123456")
+
+	app := fiber.New()
+	app.Post(constants.PreuploadPath, fr.preUploadHandler)
+
+	body := []byte(`{"info":{"alias":"Sender"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100}}}`)
+
+	// First 3 attempts with wrong PIN should return 401
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("POST", constants.PreuploadPath+"?pin=wrongpin", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, _ := app.Test(req)
+
+		if resp.StatusCode != 401 {
+			t.Errorf("Attempt %d: Status = %d; want 401", i+1, resp.StatusCode)
+		}
+	}
+
+	// 4th attempt should be rate limited (429)
+	req := httptest.NewRequest("POST", constants.PreuploadPath+"?pin=wrongpin", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, _ := app.Test(req)
+
+	if resp.StatusCode != 429 {
+		t.Errorf("4th attempt: Status = %d; want 429 (rate limited)", resp.StatusCode)
+	}
+}
+
+func TestPreUploadHandler_PINRateLimiting_CorrectPINBlockedAfterLockout(t *testing.T) {
+	fr := newTestReceiver()
+	fr.SetPIN("123456")
+
+	app := fiber.New()
+	app.Post(constants.PreuploadPath, fr.preUploadHandler)
+
+	body := []byte(`{"info":{"alias":"Sender"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100}}}`)
+
+	// Exhaust attempts
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("POST", constants.PreuploadPath+"?pin=wrongpin", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		_, _ = app.Test(req)
+	}
+
+	// Even correct PIN should be blocked
+	req := httptest.NewRequest("POST", constants.PreuploadPath+"?pin=123456", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, _ := app.Test(req)
+
+	if resp.StatusCode != 429 {
+		t.Errorf("Correct PIN after lockout: Status = %d; want 429", resp.StatusCode)
+	}
+}
+
+func TestPreUploadHandler_PINRateLimiting_ClearsOnSuccess(t *testing.T) {
+	fr := newTestReceiver()
+	fr.SetPIN("123456")
+	fr.saveToDir = t.TempDir()
+
+	app := fiber.New()
+	app.Post(constants.PreuploadPath, fr.preUploadHandler)
+
+	body := []byte(`{"info":{"alias":"Sender"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100}}}`)
+
+	// 2 failed attempts (below lockout threshold)
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("POST", constants.PreuploadPath+"?pin=wrongpin", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		_, _ = app.Test(req)
+	}
+
+	// Correct PIN should succeed and clear attempts
+	req := httptest.NewRequest("POST", constants.PreuploadPath+"?pin=123456", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, _ := app.Test(req)
+
+	// Should succeed (200)
+	if resp.StatusCode != 200 {
+		t.Errorf("Correct PIN: Status = %d; want 200", resp.StatusCode)
+	}
+}
+
+func TestPreUploadV3Handler_PINRateLimiting(t *testing.T) {
+	fr := newTestReceiver()
+	fr.SetPIN("123456")
+
+	app := fiber.New()
+	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
+
+	body := []byte(`{"info":{"alias":"Sender"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100}}}`)
+
+	// First 3 attempts with wrong PIN should return 401
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("POST", constants.PreuploadPathV3+"?pin=wrongpin", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, _ := app.Test(req)
+
+		if resp.StatusCode != 401 {
+			t.Errorf("Attempt %d: Status = %d; want 401", i+1, resp.StatusCode)
+		}
+	}
+
+	// 4th attempt should be rate limited (429)
+	req := httptest.NewRequest("POST", constants.PreuploadPathV3+"?pin=wrongpin", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, _ := app.Test(req)
+
+	if resp.StatusCode != 429 {
+		t.Errorf("4th attempt: Status = %d; want 429 (rate limited)", resp.StatusCode)
+	}
+}

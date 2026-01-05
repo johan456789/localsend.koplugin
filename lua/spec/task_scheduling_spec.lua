@@ -410,21 +410,21 @@ describe("LocalSend Task Scheduling", function()
                 transfer_check_count = transfer_check_count + 1
             end
 
-            -- First call: sets last_sentinel_value, no trigger
+            -- First call: sets last_sentinel_value AND triggers (first transfer fix)
             LocalSend._ServerState.last_sentinel_value = nil
             package.loaded["util"].readFromFile = function() return "12345" end
             instance:_checkSentinelFile()
-            assert.equal(0, transfer_check_count, "First call should not trigger (no previous value)")
+            assert.equal(1, transfer_check_count, "First call should trigger (handles first transfer)")
             assert.equal("12345", LocalSend._ServerState.last_sentinel_value)
 
             -- Second call with same value: no trigger
             instance:_checkSentinelFile()
-            assert.equal(0, transfer_check_count, "Same value should not trigger")
+            assert.equal(1, transfer_check_count, "Same value should not trigger")
 
             -- Third call with different value: should trigger
             package.loaded["util"].readFromFile = function() return "67890" end
             instance:_checkSentinelFile()
-            assert.equal(1, transfer_check_count, "Different value should trigger transfer check")
+            assert.equal(2, transfer_check_count, "Different value should trigger transfer check")
             assert.equal("67890", LocalSend._ServerState.last_sentinel_value)
         end)
 

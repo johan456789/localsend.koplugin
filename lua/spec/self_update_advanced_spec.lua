@@ -156,8 +156,9 @@ describe("Self-Update Advanced", function()
             show = function() end,
             close = function() end,
             scheduleIn = function(self, delay, callback)
-                if callback then callback() end
+                -- Don't execute immediately to avoid stack overflow from auto-update loop
             end,
+            unschedule = function() end,
         }
         package.loaded["pluginshare"] = {}
 

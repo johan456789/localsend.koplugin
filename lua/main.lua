@@ -194,6 +194,11 @@ function LocalSend:init()
     self.routing_enabled = G_reader_settings:isTrue("LocalSend_routing_enabled") -- Whether routing is active
     self.last_transfer_count = 0
 
+    -- Auto update check settings
+    self.auto_update_check = G_reader_settings:nilOrTrue("LocalSend_auto_update_check")
+    self.update_check_interval_hours = G_reader_settings:readSetting("LocalSend_update_check_interval_hours") or 168  -- Weekly default
+    self.last_update_check = G_reader_settings:readSetting("LocalSend_last_update_check") or 0
+
     -- Cache for menu rendering (avoids disk I/O on every menu open)
     -- Updated via _updateCache() on state changes
     self._cached_running = false
@@ -206,6 +211,9 @@ function LocalSend:init()
     end
     self.resume_start_task = function()
         self:start(true)  -- silent=true to suppress notification
+    end
+    self.check_update_task = function()
+        self:_autoCheckForUpdates()
     end
 
     -- Clean up orphaned resources from previous crashes
@@ -240,6 +248,11 @@ function LocalSend:init()
 
     -- Register event handlers based on current state
     self:registerEvents()
+
+    -- Schedule auto update check if enabled
+    if self.auto_update_check then
+        self:_scheduleUpdateCheck()
+    end
 
     self.ui.menu:registerToMainMenu(self)
     self:onDispatcherRegisterActions()
@@ -315,6 +328,7 @@ function LocalSend:_onSuspend()
     -- Unschedule polling before stopping
     self:_unschedulePolling()
     self:_unscheduleResume()
+    self:_unscheduleUpdateCheck()
 
     if self:isRunning() then
         ServerState.was_running_before_suspend = true
@@ -328,6 +342,12 @@ end
 -- Restart server after device resumes (if it was running before)
 function LocalSend:_onResume()
     logger.dbg("[LocalSend] onResume")
+
+    -- Reschedule update check after resume
+    if self.auto_update_check then
+        self:_scheduleUpdateCheck()
+    end
+
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
         if NetworkMgr:isConnected() then
             -- Network already available (fast reconnect or didn't disconnect)
@@ -550,6 +570,10 @@ function LocalSend:onCloseWidget()
     self:_unscheduleResume()
     self.resume_start_task = nil
 
+    -- Unschedule update check task
+    self:_unscheduleUpdateCheck()
+    self.check_update_task = nil
+
     -- Note: Server process continues running - new widget instance
     -- will take over polling responsibility in init() if server is running
 end
@@ -740,9 +764,9 @@ function LocalSend:_checkForNewTransfers()
             text = T(_("%1 files received. Latest: %2"), #new_transfers, latest.filename)
         end
 
-        UIManager:show(InfoMessage:new{
+        UIManager:show(Notification:new{
             text = text,
-            timeout = 5,
+            timeout = 3,
         })
     end
 end
@@ -761,8 +785,10 @@ function LocalSend:_checkSentinelFile()
     local content = util.readFromFile(transfer_notify_file)
     if content then
         content = content:gsub("%s+", "")  -- Trim whitespace
-        if ServerState.last_sentinel_value and content ~= ServerState.last_sentinel_value then
-            -- Sentinel changed! Trigger immediate transfer check
+        -- Trigger check if:
+        -- 1. First time seeing sentinel (last_sentinel_value is nil) - handles first transfer
+        -- 2. Sentinel content changed - handles subsequent transfers
+        if ServerState.last_sentinel_value == nil or content ~= ServerState.last_sentinel_value then
             logger.dbg("[LocalSend] Sentinel file changed, checking for new transfers")
             self:_checkForNewTransfers()
         end
@@ -1682,6 +1708,104 @@ function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
     })
 end
 
+-- =========================================================================
+-- Auto Update Check Methods
+-- =========================================================================
+
+-- Calculate seconds until next update check
+function LocalSend:_getUpdateCheckDelay()
+    local now = os.time()
+    local interval_seconds = self.update_check_interval_hours * 3600
+    local time_since_last = now - self.last_update_check
+    local delay = interval_seconds - time_since_last
+    -- If we're past due, schedule a short delay (60s) to not flood on startup
+    if delay <= 0 then
+        return 60  -- 1 minute delay for startup
+    end
+    return delay
+end
+
+-- Schedule the next update check
+function LocalSend:_scheduleUpdateCheck()
+    if not self.auto_update_check then
+        return
+    end
+
+    local delay = self:_getUpdateCheckDelay()
+    logger.dbg("[LocalSend] Scheduling update check in", delay, "seconds")
+    UIManager:scheduleIn(delay, self.check_update_task)
+end
+
+-- Unschedule update check task
+function LocalSend:_unscheduleUpdateCheck()
+    if self.check_update_task then
+        UIManager:unschedule(self.check_update_task)
+    end
+end
+
+-- Auto update check (silent, uses Notification not ConfirmBox)
+function LocalSend:_autoCheckForUpdates()
+    -- If offline, silently skip and reschedule
+    if not NetworkMgr:isOnline() then
+        self:_scheduleUpdateCheck()
+        return
+    end
+
+    self:_doAutoCheckForUpdates()
+end
+
+function LocalSend:_doAutoCheckForUpdates()
+    -- Fetch release info silently (similar to doCheckForUpdates)
+    local tmp_file = "/tmp/localsend_update_check.json"
+    local cmd = string.format(
+        "curl -s -o '%s' -w '%%{http_code}' --connect-timeout 10 -H 'Accept: application/vnd.github.v3+json' '%s'",
+        tmp_file, GITHUB_RELEASE_URL)
+
+    local handle = io.popen(cmd)
+    local http_code = handle:read("*a")
+    handle:close()
+
+    -- Update last check time regardless of result
+    self.last_update_check = os.time()
+    G_reader_settings:saveSetting("LocalSend_last_update_check", self.last_update_check)
+
+    if http_code ~= "200" then
+        -- Silently fail for auto-check
+        logger.dbg("[LocalSend] Auto update check failed, HTTP:", http_code)
+        os.remove(tmp_file)
+        self:_scheduleUpdateCheck()
+        return
+    end
+
+    local content = util.readFromFile(tmp_file)
+    os.remove(tmp_file)
+
+    if not content then
+        self:_scheduleUpdateCheck()
+        return
+    end
+
+    local ok, release = pcall(json.decode, content)
+    if not ok or not release or not release.tag_name then
+        self:_scheduleUpdateCheck()
+        return
+    end
+
+    local latest_version = release.tag_name:gsub("^v", "")
+    local current_version = PLUGIN_VERSION:gsub("^v", "")
+
+    -- Check if update available
+    if compareVersions(current_version, latest_version) < 0 then
+        -- Show update notification (modal, requires dismissal)
+        UIManager:show(InfoMessage:new{
+            text = T(_("LocalSend update available: %1\nGo to LocalSend menu to install."), release.tag_name),
+        })
+    end
+
+    -- Schedule next check
+    self:_scheduleUpdateCheck()
+end
+
 function LocalSend:checkForUpdates()
     -- Use NetworkMgr:runWhenOnline to handle network prompting automatically
     -- This provides better UX by prompting user to connect if offline
@@ -1959,6 +2083,61 @@ function LocalSend:addToMainMenu(menu_items)
             },
             {
                 text = "---",
+            },
+            {
+                text = _("Auto-check for updates"),
+                checked_func = function() return self.auto_update_check end,
+                callback = function()
+                    self.auto_update_check = not self.auto_update_check
+                    G_reader_settings:flipNilOrTrue("LocalSend_auto_update_check")
+                    if self.auto_update_check then
+                        self:_scheduleUpdateCheck()
+                    else
+                        self:_unscheduleUpdateCheck()
+                    end
+                end,
+            },
+            {
+                text_func = function()
+                    local intervals = { [12] = "12h", [24] = "24h", [72] = "3 days", [168] = "Weekly" }
+                    local label = intervals[self.update_check_interval_hours] or (self.update_check_interval_hours .. "h")
+                    return T(_("Update check interval (%1)"), label)
+                end,
+                enabled_func = function() return self.auto_update_check end,
+                sub_item_table = {
+                    {
+                        text = _("Every 12 hours"),
+                        checked_func = function() return self.update_check_interval_hours == 12 end,
+                        callback = function()
+                            self.update_check_interval_hours = 12
+                            G_reader_settings:saveSetting("LocalSend_update_check_interval_hours", 12)
+                        end,
+                    },
+                    {
+                        text = _("Every 24 hours"),
+                        checked_func = function() return self.update_check_interval_hours == 24 end,
+                        callback = function()
+                            self.update_check_interval_hours = 24
+                            G_reader_settings:saveSetting("LocalSend_update_check_interval_hours", 24)
+                        end,
+                    },
+                    {
+                        text = _("Every 3 days"),
+                        checked_func = function() return self.update_check_interval_hours == 72 end,
+                        callback = function()
+                            self.update_check_interval_hours = 72
+                            G_reader_settings:saveSetting("LocalSend_update_check_interval_hours", 72)
+                        end,
+                    },
+                    {
+                        text = _("Weekly (default)"),
+                        checked_func = function() return self.update_check_interval_hours == 168 end,
+                        callback = function()
+                            self.update_check_interval_hours = 168
+                            G_reader_settings:saveSetting("LocalSend_update_check_interval_hours", 168)
+                        end,
+                    },
+                },
             },
             {
                 text_func = function()

@@ -7,6 +7,7 @@ describe("checkForNewTransfers", function()
     local transfer_log_content
     local transfer_log_exists
     local notifications_shown
+    local toast_notifications_shown  -- Track Notification (toast) widget
     local scheduled_callbacks
     local is_running
 
@@ -79,6 +80,7 @@ describe("checkForNewTransfers", function()
         transfer_log_content = {}
         transfer_log_exists = false
         notifications_shown = {}
+        toast_notifications_shown = {}  -- Track Notification (toast) widget
         scheduled_callbacks = {}
         is_running = false
 
@@ -127,7 +129,12 @@ describe("checkForNewTransfers", function()
             end,
         }
 
-        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
+        package.loaded["ui/widget/notification"] = {
+            new = function(self, o)
+                table.insert(toast_notifications_shown, o)
+                return o
+            end,
+        }
         package.loaded["ui/network/manager"] = {
             isOnline = function() return true end,
             runWhenOnline = function(self, callback) callback() end,
@@ -213,6 +220,9 @@ describe("checkForNewTransfers", function()
             }
             instance.isRunning = function() return false end
 
+            -- Clear scheduled callbacks from init (like auto-update check)
+            scheduled_callbacks = {}
+
             -- Pass current generation
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
@@ -244,9 +254,9 @@ describe("checkForNewTransfers", function()
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
 
-            assert.equal(1, #notifications_shown)
+            assert.equal(1, #toast_notifications_shown)
             -- Template function uses %1, %2 placeholders - check for those or actual filename
-            local text = notifications_shown[1].text
+            local text = toast_notifications_shown[1].text
             assert.truthy(text:match("File received") or text:match("received"))
         end)
 
@@ -273,9 +283,9 @@ describe("checkForNewTransfers", function()
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
 
-            assert.equal(1, #notifications_shown)
+            assert.equal(1, #toast_notifications_shown)
             -- Template function uses %1, %2 placeholders
-            local text = notifications_shown[1].text
+            local text = toast_notifications_shown[1].text
             assert.truthy(text:match("files received") or text:match("received"))
         end)
 
@@ -341,6 +351,9 @@ describe("checkForNewTransfers", function()
             }
             instance.isRunning = function() return true end
 
+            -- Clear scheduled callbacks from init (like auto-update check)
+            scheduled_callbacks = {}
+
             instance:checkForNewTransfers()
 
             -- Should NOT schedule - sentinel polling handles this now
@@ -366,6 +379,9 @@ describe("checkForNewTransfers", function()
                 check_count = check_count + 1
                 return check_count <= 1 -- Running first time, stopped second time
             end
+
+            -- Clear scheduled callbacks from init (like auto-update check)
+            scheduled_callbacks = {}
 
             -- Pass current generation
             local gen = LocalSend._ServerState.polling_generation
@@ -403,10 +419,78 @@ describe("checkForNewTransfers", function()
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
 
-            assert.equal(1, #notifications_shown)
+            assert.equal(1, #toast_notifications_shown)
             -- Template function uses %1 placeholder
-            local text = notifications_shown[1].text
+            local text = toast_notifications_shown[1].text
             assert.truthy(text:match("File received") or text:match("received"))
+        end)
+    end)
+
+    describe("notification widget type", function()
+        it("should use Notification (toast) instead of InfoMessage (modal)", function()
+            is_running = true
+            transfer_log_exists = true
+            transfer_log_content = {
+                '{"filename":"book.epub","size":1024}',
+            }
+
+            LocalSend = require("main")
+            -- Reset ServerState for test
+            LocalSend._ServerState.last_log_position = 0
+            LocalSend._ServerState.polling_generation = 0
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            instance.isRunning = function() return true end
+
+            -- Clear both notification arrays
+            notifications_shown = {}  -- InfoMessage
+            toast_notifications_shown = {}  -- Notification (toast)
+
+            -- Pass current generation
+            local gen = LocalSend._ServerState.polling_generation
+            instance:checkForNewTransfers(gen)
+
+            -- Should use Notification (toast) not InfoMessage
+            assert.equal(0, #notifications_shown,
+                "Should NOT use InfoMessage (modal) for file transfer notifications")
+            assert.equal(1, #toast_notifications_shown,
+                "Should use Notification (toast) for file transfer notifications")
+
+            -- Verify notification content
+            local text = toast_notifications_shown[1].text
+            assert.truthy(text:match("File received") or text:match("received"),
+                "Toast notification should contain filename info")
+        end)
+
+        it("should set appropriate timeout for toast notifications", function()
+            is_running = true
+            transfer_log_exists = true
+            transfer_log_content = {
+                '{"filename":"book.epub","size":1024}',
+            }
+
+            LocalSend = require("main")
+            LocalSend._ServerState.last_log_position = 0
+            LocalSend._ServerState.polling_generation = 0
+
+            local instance = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            instance.isRunning = function() return true end
+
+            toast_notifications_shown = {}
+
+            local gen = LocalSend._ServerState.polling_generation
+            instance:checkForNewTransfers(gen)
+
+            assert.equal(1, #toast_notifications_shown)
+            -- Toast should have a reasonable timeout (2-5 seconds)
+            local timeout = toast_notifications_shown[1].timeout
+            assert.is_truthy(timeout, "Toast notification should have a timeout")
+            assert.is_true(timeout >= 2 and timeout <= 5,
+                "Toast timeout should be between 2 and 5 seconds")
         end)
     end)
 end)

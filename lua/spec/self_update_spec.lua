@@ -166,9 +166,10 @@ describe("Self-Update", function()
             show = function() end,
             close = function() end,
             scheduleIn = function(self, delay, callback)
-                -- Execute immediately for testing
-                if callback then callback() end
+                -- Don't execute immediately to avoid stack overflow from auto-update loop
+                -- Tests can call callbacks manually if needed
             end,
+            unschedule = function() end,
         }
         package.loaded["pluginshare"] = {}
 

@@ -2129,9 +2129,18 @@ function LocalSend:addToMainMenu(menu_items)
                 text = "---",
             },
             {
-                text = _("Auto-check for updates"),
+                text_func = function()
+                    if self.auto_update_check then
+                        local intervals = { [12] = "12h", [24] = "24h", [72] = "3 days", [168] = "Weekly" }
+                        local label = intervals[self.update_check_interval_hours] or (self.update_check_interval_hours .. "h")
+                        return T(_("Auto-check for updates (%1)"), label)
+                    else
+                        return _("Auto-check for updates")
+                    end
+                end,
                 checked_func = function() return self.auto_update_check end,
-                callback = function()
+                -- Long-press to quick toggle enable/disable
+                hold_callback = function(touchmenu_instance)
                     self.auto_update_check = not self.auto_update_check
                     G_reader_settings:flipNilOrTrue("LocalSend_auto_update_check")
                     if self.auto_update_check then
@@ -2139,18 +2148,29 @@ function LocalSend:addToMainMenu(menu_items)
                     else
                         self:_unscheduleUpdateCheck()
                     end
+                    if touchmenu_instance then
+                        touchmenu_instance:updateItems()
+                    end
                 end,
-            },
-            {
-                text_func = function()
-                    local intervals = { [12] = "12h", [24] = "24h", [72] = "3 days", [168] = "Weekly" }
-                    local label = intervals[self.update_check_interval_hours] or (self.update_check_interval_hours .. "h")
-                    return T(_("Update check interval (%1)"), label)
-                end,
-                enabled_func = function() return self.auto_update_check end,
+                -- Tap to open submenu for interval configuration
                 sub_item_table = {
                     {
+                        text = _("Enable auto-check"),
+                        checked_func = function() return self.auto_update_check end,
+                        callback = function()
+                            self.auto_update_check = not self.auto_update_check
+                            G_reader_settings:flipNilOrTrue("LocalSend_auto_update_check")
+                            if self.auto_update_check then
+                                self:_scheduleUpdateCheck()
+                            else
+                                self:_unscheduleUpdateCheck()
+                            end
+                        end,
+                    },
+                    { text = "---" },
+                    {
                         text = _("Every 12 hours"),
+                        enabled_func = function() return self.auto_update_check end,
                         checked_func = function() return self.update_check_interval_hours == 12 end,
                         callback = function()
                             self.update_check_interval_hours = 12
@@ -2159,6 +2179,7 @@ function LocalSend:addToMainMenu(menu_items)
                     },
                     {
                         text = _("Every 24 hours"),
+                        enabled_func = function() return self.auto_update_check end,
                         checked_func = function() return self.update_check_interval_hours == 24 end,
                         callback = function()
                             self.update_check_interval_hours = 24
@@ -2167,6 +2188,7 @@ function LocalSend:addToMainMenu(menu_items)
                     },
                     {
                         text = _("Every 3 days"),
+                        enabled_func = function() return self.auto_update_check end,
                         checked_func = function() return self.update_check_interval_hours == 72 end,
                         callback = function()
                             self.update_check_interval_hours = 72
@@ -2175,6 +2197,7 @@ function LocalSend:addToMainMenu(menu_items)
                     },
                     {
                         text = _("Weekly (default)"),
+                        enabled_func = function() return self.auto_update_check end,
                         checked_func = function() return self.update_check_interval_hours == 168 end,
                         callback = function()
                             self.update_check_interval_hours = 168

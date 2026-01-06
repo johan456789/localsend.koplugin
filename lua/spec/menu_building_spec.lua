@@ -1,128 +1,20 @@
 require 'busted.runner'()
+local helper = require("spec.test_helper")
 
 -- Tests for menu building functions
 
 describe("Menu Building", function()
-    local LocalSend
-    local settings
-
     setup(function()
-        package.loaded["ffi/util"] = {
-            template = function(s, ...) return s end,
-            usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-        }
-        package.loaded["datastorage"] = {
-            getFullDataDir = function() return "/tmp/koreader" end,
-        }
-        package.loaded["device"] = {
-            isKindle = function() return false end,
-            retrieveNetworkInfo = function() return "WiFi" end,
-        }
-        package.loaded["dispatcher"] = { registerAction = function() end }
-        package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/buttondialog"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = {
-            isOnline = function() return true end,
-            runWhenOnline = function(self, callback) callback() end,
-            runWhenConnected = function(self, callback) callback() end,
-            isConnected = function() return true end,
-        }
-        package.loaded["ui/uimanager"] = {
-            show = function() end,
-            close = function() end,
-            scheduleIn = function() end,
-            unschedule = function() end,
-            preventStandby = function() end,
-            allowStandby = function() end,
-            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
-        }
-        package.loaded["pluginshare"] = {}
-
-        local WidgetContainer = {}
-        WidgetContainer.__index = WidgetContainer
-        function WidgetContainer:extend(o)
-            o = o or {}
-            setmetatable(o, self)
-            self.__index = self
-            o.__index = o
-            return o
-        end
-        function WidgetContainer:new(o)
-            o = o or {}
-            setmetatable(o, self)
-            if o.init then o:init() end
-            return o
-        end
-        package.loaded["ui/widget/container/widgetcontainer"] = WidgetContainer
-
-        package.loaded["logger"] = {
-            err = function() end,
-            warn = function() end,
-            info = function() end,
-            dbg = function() end,
-        }
-        package.loaded["util"] = {
-            shell_escape = function(t)
-                local escaped = {}
-                for _, v in ipairs(t) do
-                    if v == nil then
-                        table.insert(escaped, "''")
-                    else
-                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
-                    end
-                end
-                return table.concat(escaped, " ")
-            end,
-            pathExists = function(path)
-                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                return false
-            end,
-        }
-        package.loaded["gettext"] = setmetatable({}, {
-            __call = function(_, s) return s end,
-        })
-        package.loaded["json"] = {
-            encode = function(t) return "{}" end,
-            decode = function(s) return {} end,
-        }
-        package.loaded["localsend_utils"] = require("localsend_utils")
-
-        _G.dofile = function(path)
-            if path:match("_meta%.lua$") then
-                return { version = "v1.1.1" }
-            end
-        end
+        helper.setup_complete()
     end)
 
     before_each(function()
-        settings = {}
-        _G.G_reader_settings = {
-            readSetting = function(self, key) return settings[key] end,
-            saveSetting = function(self, key, value) settings[key] = value end,
-            isTrue = function(self, key) return settings[key] == true end,
-            nilOrTrue = function(self, key) return settings[key] ~= false end,
-            flipNilOrTrue = function(self, key) settings[key] = not self:nilOrTrue(key) end,
-            flipNilOrFalse = function(self, key) settings[key] = not self:isTrue(key) end,
-        }
-
-        package.loaded["main"] = nil
+        helper.before_each()
     end)
 
     describe("buildExtensionPresetsMenu", function()
         it("returns a table of menu items", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local menu = instance:buildExtensionPresetsMenu()
 
@@ -131,10 +23,7 @@ describe("Menu Building", function()
         end)
 
         it("includes 'All files' option", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local menu = instance:buildExtensionPresetsMenu()
 
@@ -149,10 +38,7 @@ describe("Menu Building", function()
         end)
 
         it("includes eBook presets", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local menu = instance:buildExtensionPresetsMenu()
 
@@ -167,10 +53,7 @@ describe("Menu Building", function()
         end)
 
         it("includes 'Custom...' option", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local menu = instance:buildExtensionPresetsMenu()
 
@@ -186,10 +69,7 @@ describe("Menu Building", function()
         end)
 
         it("marks current selection as checked", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.accept_ext = "epub,pdf,mobi,azw3"
 
             local menu = instance:buildExtensionPresetsMenu()
@@ -208,10 +88,7 @@ describe("Menu Building", function()
 
     describe("buildExtensionRoutingMenu", function()
         it("returns empty add option when no routes", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.ext_dirs = {}
 
             local menu = instance:buildExtensionRoutingMenu()
@@ -228,10 +105,7 @@ describe("Menu Building", function()
         end)
 
         it("shows enable toggle when routes exist", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.ext_dirs = { epub = "/books" }
             instance.routing_enabled = true
 
@@ -250,10 +124,7 @@ describe("Menu Building", function()
         end)
 
         it("lists existing routes", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.ext_dirs = {
                 epub = "/books",
                 pdf = "/documents",
@@ -274,10 +145,7 @@ describe("Menu Building", function()
         end)
 
         it("shows 'accept all' option when routes exist", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.ext_dirs = { epub = "/books" }
             instance.routing_accept_all = false
 
@@ -296,10 +164,7 @@ describe("Menu Building", function()
         end)
 
         it("does not show 'accept all' option when no routes", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.ext_dirs = {}
 
             local menu = instance:buildExtensionRoutingMenu()
@@ -314,10 +179,7 @@ describe("Menu Building", function()
 
     describe("addToMainMenu", function()
         it("adds localsend entry to menu_items", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local menu_items = {}
             instance:addToMainMenu(menu_items)
@@ -326,10 +188,7 @@ describe("Menu Building", function()
         end)
 
         it("has text_func that shows status", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local menu_items = {}
             instance:addToMainMenu(menu_items)
@@ -345,7 +204,7 @@ describe("Menu Building", function()
             instance._cached_running = true
             instance._cached_transfer_count = 0
             local text_running = menu_items.localsend.text_func()
-            -- Template uses %1 placeholder, so match "(running)" or the template pattern
+            -- Template uses %1 placeholder, so match "running" or the template pattern
             assert.truthy(text_running:match("running") or text_running:match("LocalSend"))
 
             -- When running with transfers (use cached value)
@@ -356,10 +215,7 @@ describe("Menu Building", function()
         end)
 
         it("has sub_item_table with expected items", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local menu_items = {}
             instance:addToMainMenu(menu_items)
@@ -401,10 +257,7 @@ describe("Menu Building", function()
         end)
 
         it("disables settings when server is running", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local menu_items = {}
             instance:addToMainMenu(menu_items)
@@ -431,10 +284,7 @@ describe("Menu Building", function()
         end)
 
         it("sets sorting_hint to network", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local menu_items = {}
             instance:addToMainMenu(menu_items)
@@ -445,10 +295,7 @@ describe("Menu Building", function()
 
     describe("text_func dynamic behavior", function()
         it("device name shows '(KOReader)' when empty", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.device_name = ""
 
             local menu_items = {}
@@ -481,29 +328,7 @@ describe("Menu Building", function()
         end)
 
         it("device name shows actual name when set", function()
-            -- Need proper template function
-            package.loaded["ffi/util"] = {
-                template = function(s, ...)
-                    local args = {...}
-                    local result = s
-                    for i, v in ipairs(args) do
-                        result = result:gsub("%%" .. i, tostring(v))
-                    end
-                    return result
-                end,
-                usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-                sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            }
-            package.loaded["main"] = nil
-
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.device_name = "My Kindle"
 
             local menu_items = {}
@@ -533,28 +358,7 @@ describe("Menu Building", function()
         end)
 
         it("PIN code shows '(enabled)' when set", function()
-            package.loaded["ffi/util"] = {
-                template = function(s, ...)
-                    local args = {...}
-                    local result = s
-                    for i, v in ipairs(args) do
-                        result = result:gsub("%%" .. i, tostring(v))
-                    end
-                    return result
-                end,
-                usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-                sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            }
-            package.loaded["main"] = nil
-
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.pin = "1234"
 
             local menu_items = {}
@@ -584,28 +388,7 @@ describe("Menu Building", function()
         end)
 
         it("PIN code shows '(disabled)' when empty", function()
-            package.loaded["ffi/util"] = {
-                template = function(s, ...)
-                    local args = {...}
-                    local result = s
-                    for i, v in ipairs(args) do
-                        result = result:gsub("%%" .. i, tostring(v))
-                    end
-                    return result
-                end,
-                usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-                sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            }
-            package.loaded["main"] = nil
-
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.pin = ""
 
             local menu_items = {}
@@ -635,28 +418,7 @@ describe("Menu Building", function()
         end)
 
         it("file type routing shows rule count", function()
-            package.loaded["ffi/util"] = {
-                template = function(s, ...)
-                    local args = {...}
-                    local result = s
-                    for i, v in ipairs(args) do
-                        result = result:gsub("%%" .. i, tostring(v))
-                    end
-                    return result
-                end,
-                usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-                sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            }
-            package.loaded["main"] = nil
-
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.ext_dirs = { epub = "/books", pdf = "/docs" }
             instance.routing_enabled = true
 
@@ -689,10 +451,7 @@ describe("Menu Building", function()
 
     describe("enabled_func behavior", function()
         it("recent transfers enabled only when transfers exist", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local menu_items = {}
             instance:addToMainMenu(menu_items)
@@ -727,11 +486,7 @@ describe("Menu Building", function()
     -- =========================================================================
     describe("Settings menu cache consistency", function()
         it("Settings submenu enabled_func should use _cached_running not isRunning()", function()
-            LocalSend = require("main")
-
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Get the menu items
             local menu_items = {}
@@ -764,11 +519,7 @@ describe("Menu Building", function()
         end)
 
         it("Settings submenu enabled_func should return true when _cached_running is false", function()
-            LocalSend = require("main")
-
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local menu_items = {}
             instance:addToMainMenu(menu_items)

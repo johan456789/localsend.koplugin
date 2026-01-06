@@ -1,135 +1,18 @@
 require 'busted.runner'()
+local helper = require("spec.test_helper")
 
 -- Tests for command building and effective extension calculation
 -- This tests the logic that determines what extensions are accepted
 
 describe("Command Building Logic", function()
     local LocalSend
-    local settings
 
     setup(function()
-        package.loaded["ffi/util"] = {
-            template = function(s, ...) return s end,
-            usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-        }
-        package.loaded["datastorage"] = {
-            getFullDataDir = function() return "/tmp/koreader" end,
-        }
-        package.loaded["device"] = {
-            isKindle = function() return false end,
-            retrieveNetworkInfo = function() return "WiFi" end,
-        }
-        package.loaded["dispatcher"] = { registerAction = function() end }
-        package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = {
-            isOnline = function() return true end,
-            runWhenOnline = function(self, callback) callback() end,
-            runWhenConnected = function(self, callback) callback() end,
-            isConnected = function() return true end,
-        }
-        package.loaded["ui/uimanager"] = {
-            show = function() end,
-            close = function() end,
-            scheduleIn = function() end,
-            unschedule = function() end,
-            preventStandby = function() end,
-            allowStandby = function() end,
-            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
-        }
-        package.loaded["pluginshare"] = {}
-
-        local WidgetContainer = {}
-        WidgetContainer.__index = WidgetContainer
-        function WidgetContainer:extend(o)
-            o = o or {}
-            setmetatable(o, self)
-            self.__index = self
-            o.__index = o
-            return o
-        end
-        function WidgetContainer:new(o)
-            o = o or {}
-            setmetatable(o, self)
-            if o.init then o:init() end
-            return o
-        end
-        package.loaded["ui/widget/container/widgetcontainer"] = WidgetContainer
-
-        package.loaded["logger"] = {
-            err = function() end,
-            warn = function() end,
-            info = function() end,
-            dbg = function() end,
-        }
-        package.loaded["util"] = {
-            shell_escape = function(t)
-                local escaped = {}
-                for _, v in ipairs(t) do
-                    if v == nil then
-                        table.insert(escaped, "''")
-                    else
-                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
-                    end
-                end
-                return table.concat(escaped, " ")
-            end,
-            pathExists = function(path)
-                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                return false
-            end,
-            makePath = function(path)
-                return true
-            end,
-            readFromFile = function(path)
-                return nil
-            end,
-            splitFilePathName = function(file)
-                if file == nil or file == "" then return "", "" end
-                if not file:find("/") then return "", file end
-                return file:match("(.*/)(.*)")
-            end,
-        }
-        package.loaded["gettext"] = setmetatable({}, {
-            __call = function(_, s) return s end,
-        })
-        package.loaded["json"] = {
-            encode = function(t) return "{}" end,
-            decode = function(s) return {} end,
-        }
-        package.loaded["localsend_utils"] = require("localsend_utils")
-
-        settings = {}
-        _G.G_reader_settings = {
-            readSetting = function(self, key) return settings[key] end,
-            saveSetting = function(self, key, value) settings[key] = value end,
-            isTrue = function(self, key) return settings[key] == true end,
-            nilOrTrue = function(self, key) return settings[key] ~= false end,
-            flipNilOrTrue = function(self, key) settings[key] = not self:nilOrTrue(key) end,
-            flipNilOrFalse = function(self, key) settings[key] = not self:isTrue(key) end,
-            _reset = function()
-                for k in pairs(settings) do settings[k] = nil end
-            end,
-        }
-
-        _G.dofile = function(path)
-            if path:match("_meta%.lua$") then
-                return { version = "v1.1.1" }
-            end
-        end
+        helper.setup_complete()
     end)
 
     before_each(function()
-        G_reader_settings._reset()
-        package.loaded["main"] = nil
+        helper.before_each()
     end)
 
     -- Helper to get effective_accept_ext using same logic as start()
@@ -152,10 +35,7 @@ describe("Command Building Logic", function()
 
     describe("effective extension calculation", function()
         it("uses accept_ext when routing is disabled", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             instance.routing_enabled = false
             instance.accept_ext = "epub,pdf"
@@ -166,10 +46,7 @@ describe("Command Building Logic", function()
         end)
 
         it("uses routed extensions when routing enabled and accept_all is false", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             instance.routing_enabled = true
             instance.routing_accept_all = false
@@ -182,10 +59,7 @@ describe("Command Building Logic", function()
         end)
 
         it("accepts all when routing enabled and accept_all is true", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             instance.routing_enabled = true
             instance.routing_accept_all = true
@@ -197,10 +71,7 @@ describe("Command Building Logic", function()
         end)
 
         it("uses accept_ext when routing enabled but no routes defined", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             instance.routing_enabled = true
             instance.accept_ext = "epub,pdf"
@@ -213,18 +84,15 @@ describe("Command Building Logic", function()
 
     describe("settings persistence", function()
         it("loads settings from G_reader_settings on init", function()
-            settings["LocalSend_port"] = "12345"
-            settings["LocalSend_save_dir"] = "/custom/path"
-            settings["LocalSend_device_name"] = "My Device"
-            settings["LocalSend_pin"] = "1234"
-            settings["LocalSend_accept_ext"] = "epub,pdf"
-            settings["LocalSend_use_https"] = false
-            settings["LocalSend_autostart"] = true
+            helper.state.settings["LocalSend_port"] = "12345"
+            helper.state.settings["LocalSend_save_dir"] = "/custom/path"
+            helper.state.settings["LocalSend_device_name"] = "My Device"
+            helper.state.settings["LocalSend_pin"] = "1234"
+            helper.state.settings["LocalSend_accept_ext"] = "epub,pdf"
+            helper.state.settings["LocalSend_use_https"] = false
+            helper.state.settings["LocalSend_autostart"] = true
 
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("12345", instance.port)
             assert.equal("/custom/path", instance.save_dir)
@@ -236,10 +104,7 @@ describe("Command Building Logic", function()
         end)
 
         it("uses defaults when settings are nil", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("53317", instance.port)
             assert.equal("/mnt/us/documents", instance.save_dir)
@@ -251,23 +116,17 @@ describe("Command Building Logic", function()
         end)
 
         it("rejects invalid port and uses default", function()
-            settings["LocalSend_port"] = "invalid"
+            helper.state.settings["LocalSend_port"] = "invalid"
 
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("53317", instance.port)
         end)
 
         it("rejects out of range port and uses default", function()
-            settings["LocalSend_port"] = "99999"
+            helper.state.settings["LocalSend_port"] = "99999"
 
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("53317", instance.port)
         end)
@@ -275,42 +134,24 @@ describe("Command Building Logic", function()
 
     describe("HTTPS and WebRTC flags", function()
         it("use_https defaults to true", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
+            local instance = helper.create_instance()
             assert.is_true(instance.use_https)
         end)
 
         it("use_webrtc defaults to false", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
+            local instance = helper.create_instance()
             assert.is_false(instance.use_webrtc)
         end)
 
         it("respects explicit false for use_https", function()
-            settings["LocalSend_use_https"] = false
-
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
+            helper.state.settings["LocalSend_use_https"] = false
+            local instance = helper.create_instance()
             assert.is_false(instance.use_https)
         end)
 
         it("respects explicit true for use_webrtc", function()
-            settings["LocalSend_use_webrtc"] = true
-
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
+            helper.state.settings["LocalSend_use_webrtc"] = true
+            local instance = helper.create_instance()
             assert.is_true(instance.use_webrtc)
         end)
     end)

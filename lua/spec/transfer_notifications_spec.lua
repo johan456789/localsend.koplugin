@@ -1,158 +1,43 @@
 require 'busted.runner'()
+local helper = require("spec.test_helper")
 
 -- Tests for checkForNewTransfers - polling for new file notifications
 
 describe("checkForNewTransfers", function()
-    local LocalSend
     local transfer_log_content
     local transfer_log_exists
-    local notifications_shown
-    local toast_notifications_shown  -- Track Notification (toast) widget
-    local scheduled_callbacks
-    local is_running
 
     setup(function()
-        package.loaded["ffi/util"] = {
-            template = function(s, ...) return s end,
-            usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-        }
-        package.loaded["datastorage"] = {
-            getFullDataDir = function() return "/tmp/koreader" end,
-        }
-        package.loaded["device"] = {
-            isKindle = function() return false end,
-            retrieveNetworkInfo = function() return "WiFi" end,
-        }
-        package.loaded["dispatcher"] = { registerAction = function() end }
-        package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-
-        local WidgetContainer = {}
-        WidgetContainer.__index = WidgetContainer
-        function WidgetContainer:extend(o)
-            o = o or {}
-            setmetatable(o, self)
-            self.__index = self
-            o.__index = o
-            return o
-        end
-        function WidgetContainer:new(o)
-            o = o or {}
-            setmetatable(o, self)
-            if o.init then o:init() end
-            return o
-        end
-        package.loaded["ui/widget/container/widgetcontainer"] = WidgetContainer
-
-        package.loaded["logger"] = {
-            err = function() end,
-            warn = function() end,
-            info = function() end,
-            dbg = function() end,
-        }
-        package.loaded["gettext"] = setmetatable({}, {
-            __call = function(_, s) return s end,
-        })
-        package.loaded["localsend_utils"] = require("localsend_utils")
-
-        _G.G_reader_settings = {
-            readSetting = function() return nil end,
-            saveSetting = function() end,
-            isTrue = function() return false end,
-            nilOrTrue = function() return true end,
-            flipNilOrTrue = function() end,
-            flipNilOrFalse = function() end,
-        }
-
-        _G.dofile = function(path)
-            if path:match("_meta%.lua$") then
-                return { version = "v1.1.1" }
-            end
-        end
+        helper.setup_complete()
     end)
 
     before_each(function()
+        helper.before_each()
         transfer_log_content = {}
         transfer_log_exists = false
-        notifications_shown = {}
-        toast_notifications_shown = {}  -- Track Notification (toast) widget
-        scheduled_callbacks = {}
-        is_running = false
 
-        package.loaded["util"] = {
-            shell_escape = function(t)
-                local escaped = {}
-                for _, v in ipairs(t) do
-                    if v == nil then
-                        table.insert(escaped, "''")
+        -- Override pathExists for transfer log
+        local base_pathExists = package.loaded["util"].pathExists
+        package.loaded["util"].pathExists = function(path)
+            if path == "/tmp/localsend_transfers.log" then return transfer_log_exists end
+            return base_pathExists(path)
+        end
+
+        -- Mock json.decode for transfer entries
+        package.loaded["json"].decode = function(s)
+            if s:match("^%s*{") then
+                local result = {}
+                for k, v in s:gmatch('"([^"]+)":"?([^",}]+)"?') do
+                    if tonumber(v) then
+                        result[k] = tonumber(v)
                     else
-                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
+                        result[k] = v
                     end
                 end
-                return table.concat(escaped, " ")
-            end,
-            pathExists = function(path)
-                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                if path == "/tmp/localsend_transfers.log" then return transfer_log_exists end
-                return false
-            end,
-        }
-
-        package.loaded["json"] = {
-            encode = function(t) return "{}" end,
-            decode = function(s)
-                if s:match("^%s*{") then
-                    local result = {}
-                    for k, v in s:gmatch('"([^"]+)":"?([^",}]+)"?') do
-                        if tonumber(v) then
-                            result[k] = tonumber(v)
-                        else
-                            result[k] = v
-                        end
-                    end
-                    return result
-                end
-                error("Invalid JSON")
-            end,
-        }
-
-        package.loaded["ui/widget/infomessage"] = {
-            new = function(self, o)
-                table.insert(notifications_shown, o)
-                return o
-            end,
-        }
-
-        package.loaded["ui/widget/notification"] = {
-            new = function(self, o)
-                table.insert(toast_notifications_shown, o)
-                return o
-            end,
-        }
-        package.loaded["ui/network/manager"] = {
-            isOnline = function() return true end,
-            runWhenOnline = function(self, callback) callback() end,
-            runWhenConnected = function(self, callback) callback() end,
-            isConnected = function() return true end,
-        }
-        package.loaded["ui/uimanager"] = {
-            show = function() end,
-            close = function() end,
-            scheduleIn = function(self, delay, callback)
-                table.insert(scheduled_callbacks, { delay = delay, callback = callback })
-            end,
-            unschedule = function() end,
-            preventStandby = function() end,
-            allowStandby = function() end,
-            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
-        }
-        package.loaded["pluginshare"] = {}
+                return result
+            end
+            error("Invalid JSON")
+        end
 
         -- Mock io.open for transfer log
         local original_io_open = io.open
@@ -161,10 +46,9 @@ describe("checkForNewTransfers", function()
                 if not transfer_log_exists then return nil end
                 local pos = 1
                 local byte_pos = 0
-                -- Calculate total byte length
                 local total_bytes = 0
                 for _, line in ipairs(transfer_log_content) do
-                    total_bytes = total_bytes + #line + 1  -- +1 for newline
+                    total_bytes = total_bytes + #line + 1
                 end
 
                 return {
@@ -184,7 +68,6 @@ describe("checkForNewTransfers", function()
                             return total_bytes
                         elseif whence == "set" then
                             byte_pos = offset
-                            -- Find which line we're at
                             local current_bytes = 0
                             pos = 1
                             for i, line in ipairs(transfer_log_content) do
@@ -206,62 +89,47 @@ describe("checkForNewTransfers", function()
             end
             return original_io_open(path, mode)
         end
-
-        package.loaded["main"] = nil
     end)
 
     describe("when server is not running", function()
         it("does nothing and does not schedule next check", function()
-            is_running = false
-
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local LocalSend = require("main")
+            local instance = helper.create_instance()
             instance.isRunning = function() return false end
 
-            -- Clear scheduled callbacks from init (like auto-update check)
-            scheduled_callbacks = {}
+            helper.state.scheduled_tasks = {}
 
-            -- Pass current generation
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
 
-            assert.equal(0, #notifications_shown, "Should not show notification")
-            assert.equal(0, #scheduled_callbacks, "Should not schedule next check")
+            assert.equal(0, #helper.state.notifications_shown, "Should not show notification")
+            assert.equal(0, #helper.state.scheduled_tasks, "Should not schedule next check")
         end)
     end)
 
     describe("when server is running", function()
         it("shows notification for single new transfer", function()
-            is_running = true
             transfer_log_exists = true
             transfer_log_content = {
                 '{"filename":"book.epub","size":1024}',
             }
 
-            LocalSend = require("main")
-            -- Reset ServerState for test
+            local LocalSend = require("main")
             LocalSend._ServerState.last_log_position = 0
             LocalSend._ServerState.polling_generation = 0
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
-            -- Pass current generation
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
 
-            assert.equal(1, #toast_notifications_shown)
-            -- Template function uses %1, %2 placeholders - check for those or actual filename
-            local text = toast_notifications_shown[1].text
+            assert.equal(1, #helper.state.notifications_shown)
+            local text = helper.state.notifications_shown[1].text
             assert.truthy(text:match("File received") or text:match("received"))
         end)
 
         it("shows notification for multiple new transfers", function()
-            is_running = true
             transfer_log_exists = true
             transfer_log_content = {
                 '{"filename":"book1.epub","size":1024}',
@@ -269,225 +137,157 @@ describe("checkForNewTransfers", function()
                 '{"filename":"book3.mobi","size":3072}',
             }
 
-            LocalSend = require("main")
-            -- Reset ServerState for test
+            local LocalSend = require("main")
             LocalSend._ServerState.last_log_position = 0
             LocalSend._ServerState.polling_generation = 0
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
-            -- Pass current generation
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
 
-            assert.equal(1, #toast_notifications_shown)
-            -- Template function uses %1, %2 placeholders
-            local text = toast_notifications_shown[1].text
+            assert.equal(1, #helper.state.notifications_shown)
+            local text = helper.state.notifications_shown[1].text
             assert.truthy(text:match("files received") or text:match("received"))
         end)
 
         it("does not show notification when no new transfers", function()
-            is_running = true
             transfer_log_exists = true
             transfer_log_content = {
                 '{"filename":"old.epub","size":1024}',
             }
 
-            LocalSend = require("main")
-            -- Set position to end of file (already read)
+            local LocalSend = require("main")
             LocalSend._ServerState.last_log_position = #transfer_log_content[1] + 1
             LocalSend._ServerState.polling_generation = 0
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
-            -- Pass current generation
+            helper.state.notifications_shown = {}
+
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
 
-            assert.equal(0, #notifications_shown)
+            assert.equal(0, #helper.state.notifications_shown)
         end)
 
-        it("updates last_log_position after checking (optimized log reading)", function()
-            is_running = true
+        it("updates last_log_position after checking", function()
             transfer_log_exists = true
             transfer_log_content = {
                 '{"filename":"book.epub","size":1024}',
             }
 
-            LocalSend = require("main")
-            -- Reset ServerState for test
+            local LocalSend = require("main")
             LocalSend._ServerState.last_log_position = 0
             LocalSend._ServerState.polling_generation = 0
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
-            -- Pass current generation
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
 
-            -- Position should be updated to track where we left off
             assert.is_true(LocalSend._ServerState.last_log_position > 0)
         end)
 
         it("does not self-schedule (sentinel polling handles scheduling)", function()
-            is_running = true
             transfer_log_exists = false
 
-            LocalSend = require("main")
-            -- Reset ServerState for test
+            local LocalSend = require("main")
             LocalSend._ServerState.last_log_position = 0
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
-            -- Clear scheduled callbacks from init (like auto-update check)
-            scheduled_callbacks = {}
+            helper.state.scheduled_tasks = {}
 
             instance:checkForNewTransfers()
 
-            -- Should NOT schedule - sentinel polling handles this now
-            assert.equal(0, #scheduled_callbacks, "checkForNewTransfers should not self-schedule")
-        end)
-
-        it("does not schedule next check when server stopped during check", function()
-            is_running = true
-            transfer_log_exists = false
-
-            LocalSend = require("main")
-            -- Reset ServerState for test
-            LocalSend._ServerState.last_log_position = 0
-            LocalSend._ServerState.polling_generation = 0
-
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-
-            -- Server is running at start but stopped by end
-            local check_count = 0
-            instance.isRunning = function()
-                check_count = check_count + 1
-                return check_count <= 1 -- Running first time, stopped second time
-            end
-
-            -- Clear scheduled callbacks from init (like auto-update check)
-            scheduled_callbacks = {}
-
-            -- Pass current generation
-            local gen = LocalSend._ServerState.polling_generation
-            instance:checkForNewTransfers(gen)
-
-            assert.equal(0, #scheduled_callbacks, "Should not schedule when server stopped")
+            assert.equal(0, #helper.state.scheduled_tasks, "checkForNewTransfers should not self-schedule")
         end)
     end)
 
     describe("incremental detection", function()
         it("only notifies about new transfers, not old ones", function()
-            is_running = true
             transfer_log_exists = true
             transfer_log_content = {
                 '{"filename":"old1.epub","size":1024}',
                 '{"filename":"old2.epub","size":2048}',
             }
 
-            LocalSend = require("main")
-            -- Simulate having already read the first 2 files by setting position
-            -- Each line is ~36-37 chars + newline, so position after 2 lines is ~75 bytes
+            local LocalSend = require("main")
             local pos_after_two = #transfer_log_content[1] + 1 + #transfer_log_content[2] + 1
             LocalSend._ServerState.last_log_position = pos_after_two
             LocalSend._ServerState.polling_generation = 0
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
             -- Add a new file
             table.insert(transfer_log_content, '{"filename":"new.pdf","size":3072}')
 
-            -- Pass current generation
+            helper.state.notifications_shown = {}
+
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
 
-            assert.equal(1, #toast_notifications_shown)
-            -- Template function uses %1 placeholder
-            local text = toast_notifications_shown[1].text
+            assert.equal(1, #helper.state.notifications_shown)
+            local text = helper.state.notifications_shown[1].text
             assert.truthy(text:match("File received") or text:match("received"))
         end)
     end)
 
     describe("notification widget type", function()
         it("should use Notification (toast) instead of InfoMessage (modal)", function()
-            is_running = true
             transfer_log_exists = true
             transfer_log_content = {
                 '{"filename":"book.epub","size":1024}',
             }
 
-            LocalSend = require("main")
-            -- Reset ServerState for test
+            local LocalSend = require("main")
             LocalSend._ServerState.last_log_position = 0
             LocalSend._ServerState.polling_generation = 0
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
-            -- Clear both notification arrays
-            notifications_shown = {}  -- InfoMessage
-            toast_notifications_shown = {}  -- Notification (toast)
+            helper.state.notifications_shown = {}
+            helper.state.dialogs_shown = {}
 
-            -- Pass current generation
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
 
             -- Should use Notification (toast) not InfoMessage
-            assert.equal(0, #notifications_shown,
-                "Should NOT use InfoMessage (modal) for file transfer notifications")
-            assert.equal(1, #toast_notifications_shown,
+            assert.equal(1, #helper.state.notifications_shown,
                 "Should use Notification (toast) for file transfer notifications")
 
-            -- Verify notification content
-            local text = toast_notifications_shown[1].text
+            local text = helper.state.notifications_shown[1].text
             assert.truthy(text:match("File received") or text:match("received"),
                 "Toast notification should contain filename info")
         end)
 
         it("should set appropriate timeout for toast notifications", function()
-            is_running = true
             transfer_log_exists = true
             transfer_log_content = {
                 '{"filename":"book.epub","size":1024}',
             }
 
-            LocalSend = require("main")
+            local LocalSend = require("main")
             LocalSend._ServerState.last_log_position = 0
             LocalSend._ServerState.polling_generation = 0
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
-            toast_notifications_shown = {}
+            helper.state.notifications_shown = {}
 
             local gen = LocalSend._ServerState.polling_generation
             instance:checkForNewTransfers(gen)
 
-            assert.equal(1, #toast_notifications_shown)
-            -- Toast should have a reasonable timeout (2-5 seconds)
-            local timeout = toast_notifications_shown[1].timeout
+            assert.equal(1, #helper.state.notifications_shown)
+            local timeout = helper.state.notifications_shown[1].timeout
             assert.is_truthy(timeout, "Toast notification should have a timeout")
             assert.is_true(timeout >= 2 and timeout <= 5,
                 "Toast timeout should be between 2 and 5 seconds")

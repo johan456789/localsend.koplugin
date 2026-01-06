@@ -1,313 +1,168 @@
 require 'busted.runner'()
+local helper = require("spec.test_helper")
 
 -- Tests for init() function
 
 describe("init() function", function()
     local LocalSend
-    local settings
 
     setup(function()
-        package.loaded["ffi/util"] = {
-            template = function(s, ...) return s end,
-            usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-        }
-        package.loaded["datastorage"] = {
-            getFullDataDir = function() return "/tmp/koreader" end,
-        }
-        package.loaded["device"] = {
-            isKindle = function() return false end,
-            retrieveNetworkInfo = function() return "WiFi" end,
-        }
-        package.loaded["dispatcher"] = { registerAction = function() end }
-        package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = {
-            isOnline = function() return true end,
-            runWhenOnline = function(self, callback) callback() end,
-            runWhenConnected = function(self, callback) callback() end,
-            isConnected = function() return true end,
-        }
-        package.loaded["ui/uimanager"] = {
-            show = function() end,
-            close = function() end,
-            scheduleIn = function() end,
-            unschedule = function() end,
-            preventStandby = function() end,
-            allowStandby = function() end,
-            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
-        }
-        package.loaded["pluginshare"] = {}
-
-        local WidgetContainer = {}
-        WidgetContainer.__index = WidgetContainer
-        function WidgetContainer:extend(o)
-            o = o or {}
-            setmetatable(o, self)
-            self.__index = self
-            o.__index = o
-            return o
-        end
-        function WidgetContainer:new(o)
-            o = o or {}
-            setmetatable(o, self)
-            if o.init then o:init() end
-            return o
-        end
-        package.loaded["ui/widget/container/widgetcontainer"] = WidgetContainer
-
-        package.loaded["logger"] = {
-            err = function() end,
-            warn = function(...) end,
-            info = function() end,
-            dbg = function() end,
-        }
-        package.loaded["gettext"] = setmetatable({}, {
-            __call = function(_, s) return s end,
-        })
-        package.loaded["json"] = {
-            encode = function(t) return "{}" end,
-            decode = function(s) return {} end,
-        }
-
-        _G.dofile = function(path)
-            if path:match("_meta%.lua$") then
-                return { version = "v1.1.1" }
-            end
-        end
+        helper.setup_complete()
     end)
 
     before_each(function()
-        settings = {}
-        -- Note: ServerState resets automatically when module is reloaded (package.loaded["main"] = nil)
-
-        _G.G_reader_settings = {
-            readSetting = function(self, key) return settings[key] end,
-            saveSetting = function(self, key, value) settings[key] = value end,
-            isTrue = function(self, key) return settings[key] == true end,
-            nilOrTrue = function(self, key) return settings[key] ~= false end,
-            flipNilOrTrue = function(self, key) settings[key] = not self:nilOrTrue(key) end,
-            flipNilOrFalse = function(self, key) settings[key] = not self:isTrue(key) end,
-        }
-
-        package.loaded["util"] = {
-            shell_escape = function(t)
-                local escaped = {}
-                for _, v in ipairs(t) do
-                    if v == nil then
-                        table.insert(escaped, "''")
-                    else
-                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
-                    end
-                end
-                return table.concat(escaped, " ")
-            end,
-            pathExists = function(path)
-                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                return false
-            end,
-        }
-
-        package.loaded["localsend_utils"] = require("localsend_utils")
-        package.loaded["main"] = nil
-    end)
-
-    after_each(function()
-        -- ServerState cleanup happens automatically via module reload in before_each
+        helper.before_each()
     end)
 
     describe("settings loading", function()
         it("should load port from settings", function()
-            settings["LocalSend_port"] = "12345"
+            helper.state.settings["LocalSend_port"] = "12345"
 
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("12345", instance.port)
         end)
 
         it("should use default port 53317 when not set", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("53317", instance.port)
         end)
 
         it("should use default port for invalid port", function()
-            settings["LocalSend_port"] = "99999" -- Invalid
+            helper.state.settings["LocalSend_port"] = "99999" -- Invalid
 
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("53317", instance.port)
         end)
 
         it("should load save_dir from settings", function()
-            settings["LocalSend_save_dir"] = "/custom/path"
+            helper.state.settings["LocalSend_save_dir"] = "/custom/path"
 
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("/custom/path", instance.save_dir)
         end)
 
         it("should use default save_dir when not set", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("/mnt/us/documents", instance.save_dir)
         end)
 
         it("should load device_name from settings", function()
-            settings["LocalSend_device_name"] = "My Device"
+            helper.state.settings["LocalSend_device_name"] = "My Device"
 
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("My Device", instance.device_name)
         end)
 
         it("should default to empty device_name", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("", instance.device_name)
         end)
 
         it("should load pin from settings", function()
-            settings["LocalSend_pin"] = "1234"
+            helper.state.settings["LocalSend_pin"] = "1234"
 
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("1234", instance.pin)
         end)
 
         it("should default to empty pin", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("", instance.pin)
         end)
 
         it("should load use_https from settings (default true)", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_true(instance.use_https)
         end)
 
         it("should load use_https=false when explicitly disabled", function()
-            settings["LocalSend_use_https"] = false
+            helper.state.settings["LocalSend_use_https"] = false
 
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_false(instance.use_https)
         end)
 
         it("should load autostart from settings", function()
-            settings["LocalSend_autostart"] = true
+            helper.state.settings["LocalSend_autostart"] = true
 
             LocalSend = require("main")
             -- Don't create instance yet - need to mock start
             local start_called = false
             LocalSend.start = function() start_called = true end
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_true(instance.autostart)
         end)
 
         it("should load accept_ext from settings", function()
-            settings["LocalSend_accept_ext"] = "epub,pdf"
+            helper.state.settings["LocalSend_accept_ext"] = "epub,pdf"
 
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal("epub,pdf", instance.accept_ext)
         end)
 
         it("should load use_webrtc from settings (default false)", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_false(instance.use_webrtc)
         end)
 
         it("should load ext_dirs from settings", function()
-            settings["LocalSend_ext_dirs"] = { epub = "/books", pdf = "/docs" }
+            helper.state.settings["LocalSend_ext_dirs"] = { epub = "/books", pdf = "/docs" }
 
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.same({ epub = "/books", pdf = "/docs" }, instance.ext_dirs)
         end)
 
         it("should default ext_dirs to empty table", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.same({}, instance.ext_dirs)
         end)
 
         it("should load routing_accept_all from settings", function()
-            settings["LocalSend_routing_accept_all"] = true
+            helper.state.settings["LocalSend_routing_accept_all"] = true
 
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_true(instance.routing_accept_all)
         end)
 
         it("should load routing_enabled from settings", function()
-            settings["LocalSend_routing_enabled"] = true
+            helper.state.settings["LocalSend_routing_enabled"] = true
 
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_true(instance.routing_enabled)
         end)
@@ -316,9 +171,7 @@ describe("init() function", function()
     describe("last_transfer_count initialization", function()
         it("should initialize last_transfer_count to 0", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal(0, instance.last_transfer_count)
         end)
@@ -350,9 +203,7 @@ describe("init() function", function()
                 dispatcher_called = true
             end
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_true(dispatcher_called)
         end)
@@ -360,7 +211,7 @@ describe("init() function", function()
 
     describe("autostart logic", function()
         it("should call start() when autostart enabled and not user_stopped", function()
-            settings["LocalSend_autostart"] = true
+            helper.state.settings["LocalSend_autostart"] = true
             -- ServerState.user_stopped is false by default after fresh module load
 
             LocalSend = require("main")
@@ -368,30 +219,26 @@ describe("init() function", function()
             local start_called = false
             LocalSend.start = function() start_called = true end
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_true(start_called)
         end)
 
         it("should NOT call start() when autostart disabled", function()
-            settings["LocalSend_autostart"] = false
+            helper.state.settings["LocalSend_autostart"] = false
 
             LocalSend = require("main")
 
             local start_called = false
             LocalSend.start = function() start_called = true end
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_false(start_called)
         end)
 
         it("should NOT call start() when user_stopped flag is set", function()
-            settings["LocalSend_autostart"] = true
+            helper.state.settings["LocalSend_autostart"] = true
 
             LocalSend = require("main")
             LocalSend._ServerState.user_stopped = true
@@ -399,11 +246,164 @@ describe("init() function", function()
             local start_called = false
             LocalSend.start = function() start_called = true end
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_false(start_called)
+        end)
+    end)
+end)
+
+-- Tests for dispatcher action registration (merged from dispatcher_spec.lua)
+describe("onDispatcherRegisterActions", function()
+    local LocalSend
+    local registered_actions = {}
+
+    setup(function()
+        helper.setup_complete()
+        -- Override dispatcher mock to capture registered actions
+        package.loaded["dispatcher"] = {
+            registerAction = function(self, action_id, action_def)
+                registered_actions[action_id] = action_def
+            end,
+        }
+    end)
+
+    before_each(function()
+        helper.before_each()
+        -- Clear registered_actions without replacing the table
+        for k in pairs(registered_actions) do
+            registered_actions[k] = nil
+        end
+    end)
+
+    describe("action registration", function()
+        it("should register toggle_localsend_server action", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+
+            assert.is_not_nil(registered_actions["toggle_localsend_server"])
+        end)
+
+        it("should set category to 'none'", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+
+            assert.equal("none", registered_actions["toggle_localsend_server"].category)
+        end)
+
+        it("should set event to 'ToggleLocalSend'", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+
+            assert.equal("ToggleLocalSend", registered_actions["toggle_localsend_server"].event)
+        end)
+
+        it("should have a title", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+
+            assert.is_not_nil(registered_actions["toggle_localsend_server"].title)
+            assert.truthy(registered_actions["toggle_localsend_server"].title:match("LocalSend") or
+                         registered_actions["toggle_localsend_server"].title:match("Toggle"))
+        end)
+
+        it("should set general to true", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+
+            assert.is_true(registered_actions["toggle_localsend_server"].general)
+        end)
+    end)
+
+    describe("dispatcher integration", function()
+        it("should be called during init", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+
+            -- Should have been called during init
+            assert.is_not_nil(registered_actions["toggle_localsend_server"])
+        end)
+    end)
+end)
+
+-- Tests for _meta.lua loading (merged from meta_loading_spec.lua)
+describe("_meta.lua loading", function()
+    local original_dofile
+
+    setup(function()
+        original_dofile = _G.dofile
+        helper.setup_complete()
+    end)
+
+    teardown(function()
+        _G.dofile = original_dofile
+    end)
+
+    before_each(function()
+        helper.before_each()
+    end)
+
+    describe("when _meta.lua is missing", function()
+        it("should gracefully handle missing _meta.lua file", function()
+            _G.dofile = function(path)
+                if path:match("_meta%.lua$") then
+                    error("cannot open " .. path .. ": No such file or directory")
+                end
+            end
+
+            local ok, result = pcall(function()
+                return require("main")
+            end)
+
+            assert.is_true(ok, "Plugin should load gracefully when _meta.lua is missing")
+        end)
+    end)
+
+    describe("when _meta.lua is corrupted", function()
+        it("should gracefully handle corrupted _meta.lua file", function()
+            _G.dofile = function(path)
+                if path:match("_meta%.lua$") then
+                    error("syntax error in " .. path)
+                end
+            end
+
+            local ok, result = pcall(function()
+                return require("main")
+            end)
+
+            assert.is_true(ok, "Plugin should load gracefully when _meta.lua has syntax error")
+        end)
+    end)
+
+    describe("when _meta.lua returns nil", function()
+        it("should gracefully handle when _meta.lua returns nil", function()
+            _G.dofile = function(path)
+                if path:match("_meta%.lua$") then
+                    return nil
+                end
+            end
+
+            local ok, result = pcall(function()
+                return require("main")
+            end)
+
+            assert.is_true(ok, "Plugin should load gracefully when _meta.lua returns nil")
+        end)
+    end)
+
+    describe("when _meta.lua is valid", function()
+        it("should load version from valid _meta.lua", function()
+            _G.dofile = function(path)
+                if path:match("_meta%.lua$") then
+                    return { version = "v1.2.3", name = "LocalSend" }
+                end
+            end
+
+            local ok, result = pcall(function()
+                return require("main")
+            end)
+
+            assert.is_true(ok)
         end)
     end)
 end)

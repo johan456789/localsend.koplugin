@@ -1,171 +1,29 @@
 require 'busted.runner'()
+local helper = require("spec.test_helper")
 
--- Tests for certificate management: rotateCertificates
+-- Tests for certificate management and restart functionality
 -- Note: setupCertificates and saveCertificates have been removed.
 -- Go now manages certificates directly in a certs/ folder next to the binary.
 
 describe("Certificate Management", function()
-    local LocalSend
-    local os_execute_calls
-    local path_exists_map
-    local notifications_shown
-
     setup(function()
-        package.loaded["ffi/util"] = {
-            template = function(s, ...) return s end,
-            usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-        }
-        package.loaded["datastorage"] = {
-            getFullDataDir = function() return "/tmp/koreader" end,
-        }
-        package.loaded["device"] = {
-            isKindle = function() return false end,
-            retrieveNetworkInfo = function() return "WiFi" end,
-        }
-        package.loaded["dispatcher"] = { registerAction = function() end }
-        package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-
-        local WidgetContainer = {}
-        WidgetContainer.__index = WidgetContainer
-        function WidgetContainer:extend(o)
-            o = o or {}
-            setmetatable(o, self)
-            self.__index = self
-            o.__index = o
-            return o
-        end
-        function WidgetContainer:new(o)
-            o = o or {}
-            setmetatable(o, self)
-            if o.init then o:init() end
-            return o
-        end
-        package.loaded["ui/widget/container/widgetcontainer"] = WidgetContainer
-
-        package.loaded["logger"] = {
-            err = function() end,
-            warn = function() end,
-            info = function() end,
-            dbg = function() end,
-        }
-        package.loaded["gettext"] = setmetatable({}, {
-            __call = function(_, s) return s end,
-        })
-        package.loaded["json"] = {
-            encode = function(t) return "{}" end,
-            decode = function(s) return {} end,
-        }
-
-        _G.dofile = function(path)
-            if path:match("_meta%.lua$") then
-                return { version = "v1.1.1" }
-            end
-        end
+        helper.setup_complete()
     end)
 
     before_each(function()
-        os_execute_calls = {}
-        path_exists_map = {
-            ["/tmp/koreader/plugins/localsend.koplugin"] = true,
-            ["/tmp/koreader/plugins/localsend.koplugin/localsend"] = true,
-        }
-        notifications_shown = {}
-
-        _G.G_reader_settings = {
-            readSetting = function() return nil end,
-            saveSetting = function() end,
-            isTrue = function() return false end,
-            nilOrTrue = function() return true end,
-            flipNilOrTrue = function() end,
-            flipNilOrFalse = function() end,
-        }
-
-        package.loaded["util"] = {
-            shell_escape = function(t)
-                local escaped = {}
-                for _, v in ipairs(t) do
-                    if v == nil then
-                        table.insert(escaped, "''")
-                    else
-                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
-                    end
-                end
-                return table.concat(escaped, " ")
-            end,
-            pathExists = function(path)
-                if path_exists_map[path] ~= nil then
-                    return path_exists_map[path]
-                end
-                return false
-            end,
-            makePath = function(path)
-                -- Track makePath calls via os_execute_calls for test compatibility
-                table.insert(os_execute_calls, "'mkdir' '-p' '" .. path .. "'")
-                return true
-            end,
-            readFromFile = function(path)
-                return nil
-            end,
-            splitFilePathName = function(file)
-                if file == nil or file == "" then return "", "" end
-                if not file:find("/") then return "", file end
-                return file:match("(.*/)(.*)$")
-            end,
-        }
-
-        package.loaded["ui/widget/infomessage"] = {
-            new = function(self, o)
-                table.insert(notifications_shown, o)
-                return o
-            end,
-        }
-
-        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = {
-            isOnline = function() return true end,
-            runWhenOnline = function(self, callback) callback() end,
-            runWhenConnected = function(self, callback) callback() end,
-            isConnected = function() return true end,
-        }
-        package.loaded["ui/uimanager"] = {
-            show = function() end,
-            close = function() end,
-            scheduleIn = function() end,
-            unschedule = function() end,
-            preventStandby = function() end,
-            allowStandby = function() end,
-            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
-        }
-        package.loaded["pluginshare"] = {}
-
-        _G.os.execute = function(cmd)
-            table.insert(os_execute_calls, cmd)
-            return 0
-        end
-
-        package.loaded["localsend_utils"] = require("localsend_utils")
-        package.loaded["main"] = nil
+        helper.before_each()
+        helper.mock_os_execute()
     end)
 
     describe("rotateCertificates", function()
         it("should remove certificates from certs folder", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
-            os_execute_calls = {}
             instance:rotateCertificates()
 
             local found_rm_key = false
             local found_rm_crt = false
-            for _, cmd in ipairs(os_execute_calls) do
+            for _, cmd in ipairs(helper.state.os_execute_calls) do
                 if cmd:match("'rm' '%-f'") then
                     if cmd:match("certs/server%.key%.pem") then
                         found_rm_key = true
@@ -179,42 +37,81 @@ describe("Certificate Management", function()
             assert.is_true(found_rm_crt, "Should remove cert from certs folder")
         end)
 
-        it("should show notification about certificate rotation", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+        it("should remove exactly 2 certificate files", function()
+            local instance = helper.create_instance()
 
-            notifications_shown = {}
             instance:rotateCertificates()
 
-            local found_notification = false
-            for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("Certificates cleared") then
-                    found_notification = true
-                    break
-                end
+            local rm_count = 0
+            for _, cmd in ipairs(helper.state.os_execute_calls) do
+                if cmd:match("^'rm' '%-f'") then rm_count = rm_count + 1 end
             end
-            assert.is_true(found_notification, "Should show rotation notification")
+            assert.equal(2, rm_count, "Should remove 2 certificate files")
+        end)
+
+        it("should show notification about certificate rotation", function()
+            local instance = helper.create_instance()
+
+            instance:rotateCertificates()
+
+            local notification = helper.find_notification("Certificates cleared")
+            assert.is_truthy(notification, "Should show rotation notification")
         end)
 
         it("notification should mention new certificates will be generated", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
-            notifications_shown = {}
             instance:rotateCertificates()
 
-            local found_regen_msg = false
-            for _, n in ipairs(notifications_shown) do
-                if n.text and n.text:match("generated on next start") then
-                    found_regen_msg = true
-                    break
-                end
+            local notification = helper.find_notification("generated on next start")
+            assert.is_truthy(notification, "Should mention regeneration on next start")
+        end)
+
+        it("notification should have timeout", function()
+            local instance = helper.create_instance()
+
+            instance:rotateCertificates()
+
+            assert.equal(3, helper.state.notifications_shown[1].timeout)
+        end)
+    end)
+
+    describe("restart", function()
+        it("stops server then starts when running", function()
+            local instance = helper.create_instance()
+
+            local stop_called = false
+            local start_called = false
+            local stop_called_first = false
+
+            instance.isRunning = function() return true end
+            instance.stopServer = function(self, silent)
+                stop_called = true
+                if not start_called then stop_called_first = true end
             end
-            assert.is_true(found_regen_msg, "Should mention regeneration on next start")
+            instance.start = function() start_called = true end
+
+            instance:restart()
+
+            assert.is_true(stop_called, "Should call stopServer")
+            assert.is_true(start_called, "Should call start")
+            assert.is_true(stop_called_first, "Should stop before starting")
+        end)
+
+        it("only starts when not running", function()
+            local instance = helper.create_instance()
+
+            local stop_called = false
+            local start_called = false
+
+            instance.isRunning = function() return false end
+            instance.stopServer = function(self, silent) stop_called = true end
+            instance.start = function() start_called = true end
+
+            instance:restart()
+
+            assert.is_false(stop_called, "Should not call stopServer when not running")
+            assert.is_true(start_called, "Should call start")
         end)
     end)
 end)

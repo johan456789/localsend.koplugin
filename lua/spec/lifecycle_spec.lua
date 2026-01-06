@@ -1,187 +1,49 @@
 require 'busted.runner'()
+local helper = require("spec.test_helper")
 
 -- Tests for LocalSend plugin lifecycle behavior
 -- These tests verify the plugin behaves correctly during KOReader events
 
 describe("LocalSend Lifecycle", function()
     local LocalSend
-    local notifications_shown
-    local server_stopped
 
     setup(function()
-        -- Mock KOReader dependencies
-        package.loaded["ffi/util"] = {
-            template = function(s, ...) return s end,
-            usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-        }
-        package.loaded["datastorage"] = {
-            getFullDataDir = function() return "/tmp/koreader" end,
-        }
-        package.loaded["device"] = {
-            isKindle = function() return false end,
-            retrieveNetworkInfo = function() return "WiFi: 192.168.1.100" end,
-        }
-        package.loaded["dispatcher"] = {
-            registerAction = function() end,
-        }
-        package.loaded["ui/widget/infomessage"] = {
-            new = function(self, o)
-                table.insert(notifications_shown, o.text or "notification")
-                return o
-            end,
-        }
-        package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = {
-            isOnline = function() return true end,
-            runWhenOnline = function(self, callback) callback() end,
-            runWhenConnected = function(self, callback) callback() end,
-            isConnected = function() return true end,
-        }
-        package.loaded["ui/uimanager"] = {
-            show = function() end,
-            close = function() end,
-            scheduleIn = function() end,
-            unschedule = function() end,
-            preventStandby = function() end,
-            allowStandby = function() end,
-            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
-            unschedule = function() end,
-        }
-        package.loaded["pluginshare"] = {}
-
-        -- Mock WidgetContainer
-        local WidgetContainer = {}
-        WidgetContainer.__index = WidgetContainer
-        function WidgetContainer:extend(o)
-            o = o or {}
-            setmetatable(o, self)
-            self.__index = self
-            o.__index = o
-            return o
-        end
-        function WidgetContainer:new(o)
-            o = o or {}
-            setmetatable(o, self)
-            if o.init then o:init() end
-            return o
-        end
-        package.loaded["ui/widget/container/widgetcontainer"] = WidgetContainer
-
-        package.loaded["logger"] = {
-            err = function() end,
-            warn = function() end,
-            info = function() end,
-            dbg = function() end,
-        }
-        package.loaded["util"] = {
-            shell_escape = function(t)
-                local escaped = {}
-                for _, v in ipairs(t) do
-                    if v == nil then
-                        table.insert(escaped, "''")
-                    else
-                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
-                    end
-                end
-                return table.concat(escaped, " ")
-            end,
-            pathExists = function(path)
-                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                return false
-            end,
-            makePath = function(path) return true end,
-        }
-        package.loaded["gettext"] = setmetatable({}, {
-            __call = function(_, s) return s end,
-        })
-        package.loaded["json"] = {
-            encode = function(t) return "{}" end,
-            decode = function(s) return {} end,
-        }
-        package.loaded["localsend_utils"] = require("localsend_utils")
-
-        -- Mock G_reader_settings
-        local settings = {}
-        _G.G_reader_settings = {
-            readSetting = function(self, key) return settings[key] end,
-            saveSetting = function(self, key, value) settings[key] = value end,
-            isTrue = function(self, key) return settings[key] == true end,
-            nilOrTrue = function(self, key) return settings[key] ~= false end,
-            flipNilOrTrue = function(self, key) settings[key] = not self:nilOrTrue(key) end,
-            flipNilOrFalse = function(self, key) settings[key] = not self:isTrue(key) end,
-            _settings = settings,
-            _reset = function()
-                for k in pairs(settings) do settings[k] = nil end
-            end,
-        }
-
-        -- Mock dofile for _meta.lua
-        _G.dofile = function(path)
-            if path:match("_meta%.lua$") then
-                return { version = "v1.1.1" }
-            end
-            error("dofile not mocked for: " .. path)
-        end
+        helper.setup_complete()
     end)
 
     before_each(function()
-        notifications_shown = {}
-        server_stopped = false
-        G_reader_settings._reset()
-
-        -- Reset package.loaded to get fresh LocalSend instance
-        package.loaded["main"] = nil
+        helper.before_each()
     end)
 
     describe("start() when server already running", function()
         it("should NOT show notification if server is already running", function()
-            -- Load the module
-            LocalSend = require("main")
-
-            -- Create instance with mocked menu
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Mock isRunning to return true (server already running)
             instance.isRunning = function() return true end
 
             -- Clear any notifications from init
-            notifications_shown = {}
+            helper.reset_state()
 
             -- Call start()
             instance:start()
 
             -- Should NOT have shown any notification
-            assert.equal(0, #notifications_shown,
+            assert.equal(0, #helper.state.notifications_shown,
                 "No notification should be shown when server is already running")
         end)
     end)
 
     describe("onExit vs onCloseWidget behavior", function()
         it("should have onExit method defined", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_function(instance.onExit,
                 "onExit should be defined for cleanup on KOReader exit")
         end)
 
         it("should have onCloseWidget method that cleans up tasks but NOT server", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- onCloseWidget SHOULD exist to clean up scheduled Lua tasks
             -- But it should NOT stop the server (server persists across document switches)
@@ -200,10 +62,7 @@ describe("LocalSend Lifecycle", function()
         end)
 
         it("onExit should stop server if running", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local stop_called = false
             instance.isRunning = function() return true end
@@ -215,10 +74,7 @@ describe("LocalSend Lifecycle", function()
         end)
 
         it("onExit should not error if server not running", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             instance.isRunning = function() return false end
 
@@ -231,7 +87,7 @@ describe("LocalSend Lifecycle", function()
 
     describe("autostart behavior", function()
         it("should call start() during init when autostart is enabled", function()
-            G_reader_settings._settings["LocalSend_autostart"] = true
+            helper.state.settings["LocalSend_autostart"] = true
 
             LocalSend = require("main")
 
@@ -241,9 +97,7 @@ describe("LocalSend Lifecycle", function()
                 start_called = true
             end
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_true(start_called, "start() should be called when autostart is enabled")
 
@@ -251,7 +105,7 @@ describe("LocalSend Lifecycle", function()
         end)
 
         it("should NOT call start() during init when autostart is disabled", function()
-            G_reader_settings._settings["LocalSend_autostart"] = false
+            helper.state.settings["LocalSend_autostart"] = false
 
             LocalSend = require("main")
 
@@ -261,9 +115,7 @@ describe("LocalSend Lifecycle", function()
                 start_called = true
             end
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_false(start_called, "start() should NOT be called when autostart is disabled")
 
@@ -271,7 +123,7 @@ describe("LocalSend Lifecycle", function()
         end)
 
         it("should NOT autostart after user explicitly stops server", function()
-            G_reader_settings._settings["LocalSend_autostart"] = true
+            helper.state.settings["LocalSend_autostart"] = true
 
             LocalSend = require("main")
             LocalSend._ServerState.user_stopped = false -- Clear any previous state
@@ -310,9 +162,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend = require("main")
             LocalSend._ServerState.user_stopped = true -- Simulate user had stopped
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             instance.isRunning = function() return false end
             instance.start = function() end -- Mock start
@@ -331,9 +181,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend = require("main")
             LocalSend._ServerState.user_stopped = false
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             instance.stopServer = function() return true end
 
@@ -348,7 +196,7 @@ describe("LocalSend Lifecycle", function()
         end)
 
         it("should allow autostart after user manually restarts", function()
-            G_reader_settings._settings["LocalSend_autostart"] = true
+            helper.state.settings["LocalSend_autostart"] = true
 
             LocalSend = require("main")
             LocalSend._ServerState.user_stopped = false
@@ -391,56 +239,28 @@ describe("LocalSend Lifecycle", function()
     end)
 
     describe("suspend/resume behavior", function()
-        it("should have _onSuspend implementation defined", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-            assert.is_function(instance._onSuspend)
-        end)
-
-        it("should have _onResume implementation defined", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-            assert.is_function(instance._onResume)
-        end)
-
-        it("should have _onEnterStandby implementation defined", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-            assert.is_function(instance._onEnterStandby)
-        end)
-
-        it("should have _onLeaveStandby implementation defined", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-            assert.is_function(instance._onLeaveStandby)
-        end)
+        -- Parametrized method existence tests
+        local lifecycle_methods = {"_onSuspend", "_onResume", "_onEnterStandby", "_onLeaveStandby"}
+        for _, method in ipairs(lifecycle_methods) do
+            it("should have " .. method .. " implementation defined", function()
+                local instance = helper.create_instance()
+                assert.is_function(instance[method])
+            end)
+        end
 
         it("onSuspend should be registered when autostart is enabled", function()
-            _G.G_reader_settings._settings["LocalSend_autostart"] = true
+            helper.state.settings["LocalSend_autostart"] = true
             package.loaded["main"] = nil  -- Force reload
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             assert.is_function(instance.onSuspend, "onSuspend should be registered when autostart is enabled")
-            _G.G_reader_settings._settings["LocalSend_autostart"] = nil
         end)
 
         it("_onSuspend should stop server and set was_running_before_suspend", function()
             LocalSend = require("main")
             LocalSend._ServerState.was_running_before_suspend = false
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local stop_called = false
             instance.isRunning = function() return true end
@@ -460,9 +280,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend = require("main")
             LocalSend._ServerState.was_running_before_suspend = true -- Previously set
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             instance.isRunning = function() return false end
 
@@ -476,9 +294,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend = require("main")
             LocalSend._ServerState.user_stopped = false
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Set flag AFTER widget creation (simulating suspend after widget exists)
             LocalSend._ServerState.was_running_before_suspend = true
@@ -505,10 +321,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend._ServerState.was_running_before_suspend = true
             LocalSend._ServerState.user_stopped = true
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-        package.loaded["pluginshare"] = {}
+            local instance = helper.create_instance()
 
             local start_called = false
             instance.start = function(self, silent)
@@ -530,9 +343,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend._ServerState.was_running_before_suspend = false
             LocalSend._ServerState.user_stopped = false
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local start_called = false
             instance.start = function(self, silent)
@@ -549,9 +360,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend = require("main")
             LocalSend._ServerState.was_running_before_suspend = false
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local stop_called = false
             instance.isRunning = function() return true end
@@ -571,9 +380,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend = require("main")
             LocalSend._ServerState.user_stopped = false
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Set flag AFTER widget creation (simulating standby after widget exists)
             LocalSend._ServerState.was_running_before_suspend = true
@@ -600,9 +407,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend._ServerState.was_running_before_suspend = true
             LocalSend._ServerState.user_stopped = true
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local start_called = false
             instance.start = function(self, silent)
@@ -624,9 +429,7 @@ describe("LocalSend Lifecycle", function()
         it("start(true) should not show success notification", function()
             LocalSend = require("main")
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Mock necessary functions
             local is_running = false
@@ -643,7 +446,7 @@ describe("LocalSend Lifecycle", function()
             os.execute = function() is_running = true; return 0 end
 
             -- Clear notifications
-            notifications_shown = {}
+            helper.reset_state()
 
             -- Start with silent=true
             instance:start(true)
@@ -652,24 +455,16 @@ describe("LocalSend Lifecycle", function()
             os.execute = original_execute
 
             -- Should NOT have shown the "LocalSend Ready" notification
-            local found_ready_notification = false
-            for _, msg in ipairs(notifications_shown) do
-                if msg and msg:match("LocalSend Ready") then
-                    found_ready_notification = true
-                    break
-                end
-            end
+            local found_ready_notification = helper.find_notification("LocalSend Ready")
 
-            assert.is_false(found_ready_notification,
+            assert.is_nil(found_ready_notification,
                 "start(true) should not show 'LocalSend Ready' notification")
         end)
 
         it("start(true) should not clear transfer log", function()
             LocalSend = require("main")
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local clear_log_called = false
             local is_running = false
@@ -696,9 +491,7 @@ describe("LocalSend Lifecycle", function()
         it("start(false) should clear transfer log", function()
             LocalSend = require("main")
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local clear_log_called = false
             local is_running = false
@@ -729,9 +522,7 @@ describe("LocalSend Lifecycle", function()
     describe("network disconnect/reconnect behavior", function()
         it("should have _onNetworkDisconnected implementation defined", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_function(instance._onNetworkDisconnected,
                 "_onNetworkDisconnected implementation should be defined to handle WiFi loss")
@@ -739,9 +530,7 @@ describe("LocalSend Lifecycle", function()
 
         it("should have _onNetworkConnected implementation defined", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_function(instance._onNetworkConnected,
                 "_onNetworkConnected implementation should be defined to handle WiFi reconnection")
@@ -758,9 +547,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend = require("main")
             LocalSend._ServerState.was_running_before_disconnect = false
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local stop_called = false
             instance.isRunning = function() return true end
@@ -781,9 +568,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend = require("main")
             LocalSend._ServerState.was_running_before_disconnect = true -- Previously set
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             instance.isRunning = function() return false end
 
@@ -798,9 +583,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend._ServerState.was_running_before_disconnect = true
             LocalSend._ServerState.user_stopped = false
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local start_called = false
             local start_silent = nil
@@ -825,9 +608,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend._ServerState.was_running_before_disconnect = true
             LocalSend._ServerState.user_stopped = true
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local start_called = false
             instance.start = function(self, silent)
@@ -849,9 +630,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend._ServerState.was_running_before_disconnect = false
             LocalSend._ServerState.user_stopped = false
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local start_called = false
             instance.start = function(self, silent)
@@ -871,9 +650,7 @@ describe("LocalSend Lifecycle", function()
     describe("onFlushSettings lifecycle", function()
         it("should have onFlushSettings method defined", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_function(instance.onFlushSettings,
                 "onFlushSettings should be defined for proper KOReader lifecycle compliance")
@@ -881,9 +658,7 @@ describe("LocalSend Lifecycle", function()
 
         it("onFlushSettings should not error when called", function()
             LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.has_no.errors(function()
                 instance:onFlushSettings()
@@ -912,9 +687,7 @@ describe("LocalSend Lifecycle", function()
             end
 
             -- Create new widget instance - should detect missed resume
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Should have called start with silent=true (like resume would)
             assert.is_true(start_called,
@@ -942,9 +715,7 @@ describe("LocalSend Lifecycle", function()
                 start_called = true
             end
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_false(start_called,
                 "init() should NOT start if user explicitly stopped")
@@ -957,7 +728,7 @@ describe("LocalSend Lifecycle", function()
 
         it("init() should handle was_running_before_suspend separately from autostart", function()
             -- Both flags true: was_running_before_suspend takes precedence (silent start)
-            G_reader_settings._settings["LocalSend_autostart"] = true
+            helper.state.settings["LocalSend_autostart"] = true
             LocalSend = require("main")
             LocalSend._ServerState.was_running_before_suspend = true
             LocalSend._ServerState.user_stopped = false
@@ -970,9 +741,7 @@ describe("LocalSend Lifecycle", function()
                 table.insert(silent_values, silent)
             end
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Should start only once (was_running_before_suspend handled, autostart skipped)
             -- OR start twice but was_running_before_suspend uses silent=true
@@ -983,7 +752,6 @@ describe("LocalSend Lifecycle", function()
             -- Cleanup
             LocalSend.start = original_start
             LocalSend._ServerState.was_running_before_suspend = false
-            G_reader_settings._settings["LocalSend_autostart"] = nil
         end)
     end)
 end)

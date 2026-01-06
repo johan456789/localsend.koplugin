@@ -1,114 +1,18 @@
 require 'busted.runner'()
+local helper = require("spec.test_helper")
 
 -- Tests for iptables firewall management functions
 
 describe("Firewall Management", function()
-    local LocalSend
     local iptables_rules
     local os_execute_calls
 
     setup(function()
-        package.loaded["ffi/util"] = {
-            template = function(s, ...) return s end,
-            usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            sleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-        }
-        package.loaded["datastorage"] = {
-            getFullDataDir = function() return "/tmp/koreader" end,
-        }
-        package.loaded["dispatcher"] = { registerAction = function() end }
-        package.loaded["ui/widget/infomessage"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = {
-            isOnline = function() return true end,
-            runWhenOnline = function(self, callback) callback() end,
-            runWhenConnected = function(self, callback) callback() end,
-            isConnected = function() return true end,
-        }
-        package.loaded["ui/uimanager"] = {
-            show = function() end,
-            close = function() end,
-            scheduleIn = function() end,
-            unschedule = function() end,
-            preventStandby = function() end,
-            allowStandby = function() end,
-            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
-        }
-        package.loaded["pluginshare"] = {}
-
-        local WidgetContainer = {}
-        WidgetContainer.__index = WidgetContainer
-        function WidgetContainer:extend(o)
-            o = o or {}
-            setmetatable(o, self)
-            self.__index = self
-            o.__index = o
-            return o
-        end
-        function WidgetContainer:new(o)
-            o = o or {}
-            setmetatable(o, self)
-            if o.init then o:init() end
-            return o
-        end
-        package.loaded["ui/widget/container/widgetcontainer"] = WidgetContainer
-
-        package.loaded["logger"] = {
-            err = function() end,
-            warn = function() end,
-            info = function() end,
-            dbg = function() end,
-        }
-        package.loaded["util"] = {
-            shell_escape = function(t)
-                local escaped = {}
-                for _, v in ipairs(t) do
-                    if v == nil then
-                        table.insert(escaped, "''")
-                    else
-                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
-                    end
-                end
-                return table.concat(escaped, " ")
-            end,
-            pathExists = function(path)
-                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                return false
-            end,
-        }
-        package.loaded["gettext"] = setmetatable({}, {
-            __call = function(_, s) return s end,
-        })
-        package.loaded["json"] = {
-            encode = function(t) return "{}" end,
-            decode = function(s) return {} end,
-        }
-        package.loaded["localsend_utils"] = require("localsend_utils")
-
-        _G.G_reader_settings = {
-            readSetting = function() return nil end,
-            saveSetting = function() end,
-            isTrue = function() return false end,
-            nilOrTrue = function() return true end,
-            flipNilOrTrue = function() end,
-            flipNilOrFalse = function() end,
-        }
-
-        _G.dofile = function(path)
-            if path:match("_meta%.lua$") then
-                return { version = "v1.1.1" }
-            end
-        end
+        helper.setup_complete()
     end)
 
     before_each(function()
+        helper.before_each()
         iptables_rules = {}
         os_execute_calls = {}
 
@@ -163,10 +67,7 @@ describe("Firewall Management", function()
 
         describe("openFirewall", function()
             it("adds TCP rules for the configured port", function()
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
+                local instance = helper.create_instance()
                 instance.port = "53317"
 
                 instance:openFirewall()
@@ -177,10 +78,7 @@ describe("Firewall Management", function()
             end)
 
             it("adds UDP rules for discovery", function()
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
+                local instance = helper.create_instance()
                 instance.port = "53317"
 
                 instance:openFirewall()
@@ -190,10 +88,7 @@ describe("Firewall Management", function()
             end)
 
             it("adds WebRTC UDP port range when enabled", function()
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
+                local instance = helper.create_instance()
                 instance.port = "53317"
                 instance.use_webrtc = true
 
@@ -204,10 +99,7 @@ describe("Firewall Management", function()
             end)
 
             it("does not add WebRTC rules when disabled", function()
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
+                local instance = helper.create_instance()
                 instance.port = "53317"
                 instance.use_webrtc = false
 
@@ -218,22 +110,19 @@ describe("Firewall Management", function()
             end)
 
             it("does not add duplicate rules (idempotent)", function()
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
+                local instance = helper.create_instance()
                 instance.port = "53317"
 
                 -- Pre-add a rule
                 iptables_rules["INPUT -p tcp --dport 53317 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"] = true
 
                 local add_count = 0
-                local original_execute = os.execute
+                local base_execute = os.execute
                 _G.os.execute = function(cmd)
                     if cmd:match("iptables %-A INPUT %-p tcp .* 53317") then
                         add_count = add_count + 1
                     end
-                    return original_execute(cmd)
+                    return base_execute(cmd)
                 end
 
                 instance:openFirewall()
@@ -243,21 +132,18 @@ describe("Firewall Management", function()
             end)
 
             it("checks rule existence (-C) before adding (-A)", function()
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
+                local instance = helper.create_instance()
                 instance.port = "53317"
 
                 local command_order = {}
-                local original_execute = os.execute
+                local base_execute = os.execute
                 _G.os.execute = function(cmd)
                     if cmd:match("iptables %-C") then
                         table.insert(command_order, "check")
                     elseif cmd:match("iptables %-A") then
                         table.insert(command_order, "add")
                     end
-                    return original_execute(cmd)
+                    return base_execute(cmd)
                 end
 
                 instance:openFirewall()
@@ -279,10 +165,7 @@ describe("Firewall Management", function()
             end)
 
             it("rejects invalid port", function()
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
+                local instance = helper.create_instance()
                 instance.port = "invalid"
 
                 -- Clear calls
@@ -307,10 +190,7 @@ describe("Firewall Management", function()
                 iptables_rules["INPUT -p tcp --dport 53317 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"] = true
                 iptables_rules["OUTPUT -p tcp --sport 53317 -m conntrack --ctstate ESTABLISHED -j ACCEPT"] = true
 
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
+                local instance = helper.create_instance()
                 instance.port = "53317"
 
                 instance:closeFirewall()
@@ -331,10 +211,7 @@ describe("Firewall Management", function()
                 iptables_rules["INPUT -p udp --dport 53317 -j ACCEPT"] = true
                 iptables_rules["OUTPUT -p udp --sport 53317 -j ACCEPT"] = true
 
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
+                local instance = helper.create_instance()
                 instance.port = "53317"
 
                 instance:closeFirewall()
@@ -349,10 +226,7 @@ describe("Firewall Management", function()
             end)
 
             it("attempts to remove WebRTC rules (ignoring errors)", function()
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
+                local instance = helper.create_instance()
                 instance.port = "53317"
 
                 instance:closeFirewall()
@@ -369,10 +243,7 @@ describe("Firewall Management", function()
             end)
 
             it("rejects invalid port", function()
-                LocalSend = require("main")
-                local instance = LocalSend:new{
-                    ui = { menu = { registerToMainMenu = function() end } }
-                }
+                local instance = helper.create_instance()
                 instance.port = "99999" -- Out of range
 
                 os_execute_calls = {}
@@ -399,10 +270,7 @@ describe("Firewall Management", function()
         end)
 
         it("openFirewall does nothing", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.port = "53317"
 
             os_execute_calls = {}
@@ -419,10 +287,7 @@ describe("Firewall Management", function()
         end)
 
         it("closeFirewall does nothing", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.port = "53317"
 
             os_execute_calls = {}
@@ -449,10 +314,7 @@ describe("Firewall Management", function()
         end)
 
         it("rejects rules with semicolons (command chaining)", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             -- Simulate a malicious port that somehow bypassed validation
             -- (In practice, isValidPort prevents this, but defense in depth matters)
             local malicious_port = "53317; rm -rf /"
@@ -469,10 +331,7 @@ describe("Firewall Management", function()
         end)
 
         it("rejects rules with backticks (command substitution)", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.port = "53317`whoami`"
 
             os_execute_calls = {}
@@ -484,10 +343,7 @@ describe("Firewall Management", function()
         end)
 
         it("rejects rules with $() (command substitution)", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
             instance.port = "$(cat /etc/passwd)"
 
             os_execute_calls = {}

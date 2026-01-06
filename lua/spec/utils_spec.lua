@@ -1,5 +1,7 @@
 require 'busted.runner'()
 
+-- Tests for localsend_utils.lua - utility functions tested directly
+
 describe("LocalSend Utils", function()
     local lsutils
 
@@ -186,15 +188,6 @@ describe("LocalSend Utils", function()
             assert.is_nil(url)
             assert.is_nil(name)
         end)
-
-        it("returns nil for nil assets", function()
-            -- Should handle nil gracefully
-            local ok, err = pcall(function()
-                lsutils.findAssetForArch(nil, "armv7")
-            end)
-            -- Either returns nil or throws - both are acceptable
-            assert.is_true(true)
-        end)
     end)
 
     describe("validateDeviceName", function()
@@ -256,6 +249,23 @@ describe("LocalSend Utils", function()
 
         it("rejects names with quotes", function()
             assert.is_false(lsutils.validateDeviceName('test"quote'))
+        end)
+
+        it("handles nil name without error", function()
+            local ok, result = pcall(function()
+                return lsutils.validateDeviceName(nil)
+            end)
+            -- Should handle nil gracefully (treat as empty = valid for random name)
+            assert.is_true(ok, "validateDeviceName should not error on nil input")
+            if ok then
+                assert.is_true(result, "nil should be treated as valid (empty name)")
+            end
+        end)
+
+        it("allows names with newlines (matched by %s pattern)", function()
+            -- The implementation uses %s which matches newlines - document this behavior
+            local valid = lsutils.validateDeviceName("test\nname")
+            assert.is_true(valid)
         end)
     end)
 end)

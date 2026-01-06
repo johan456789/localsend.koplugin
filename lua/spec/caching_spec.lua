@@ -1,191 +1,42 @@
 require 'busted.runner'()
+local helper = require("spec.test_helper")
 
 -- Tests for caching isRunning() and getTransferCount()
 -- These tests verify cached values are used to avoid disk I/O on every menu render
 
 describe("LocalSend State Caching", function()
-    local LocalSend
-    local mock_is_running
-    local mock_transfer_count
-    local is_running_call_count
-    local get_transfer_count_call_count
-
     setup(function()
-        -- Mock KOReader dependencies
-        package.loaded["ffi/util"] = {
-            template = function(s, ...)
-                -- Simple substitution for %1, %2, etc.
-                local args = {...}
-                local result = s
-                for i, v in ipairs(args) do
-                    result = result:gsub("%%" .. i, tostring(v))
-                end
-                return result
-            end,
-            usleep = function() end,
-            isSubProcessDone = function() return true end,
-            terminateSubProcess = function() end,
-            sleep = function() end,
-        }
-        package.loaded["datastorage"] = {
-            getFullDataDir = function() return "/tmp/koreader" end,
-        }
-        package.loaded["device"] = {
-            isKindle = function() return false end,
-            retrieveNetworkInfo = function() return "WiFi: 192.168.1.100" end,
-        }
-        package.loaded["dispatcher"] = {
-            registerAction = function() end,
-        }
-        package.loaded["ui/widget/infomessage"] = {
-            new = function(self, o) return o end,
-        }
-        package.loaded["ui/widget/notification"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/inputdialog"] = { new = function(self, o) return o end }
-        package.loaded["ui/widget/pathchooser"] = { new = function(self, o) return o end }
-        package.loaded["ui/network/manager"] = {
-            isOnline = function() return true end,
-            runWhenOnline = function(self, callback) callback() end,
-            runWhenConnected = function(self, callback) callback() end,
-            isConnected = function() return true end,
-        }
-
-        package.loaded["ui/uimanager"] = {
-            show = function() end,
-            close = function() end,
-            scheduleIn = function() end,
-            unschedule = function() end,
-            preventStandby = function() end,
-            allowStandby = function() end,
-            getElapsedTimeSinceBoot = function() return { sec = 0, usec = 0 } end,
-            unschedule = function() end,
-        }
-        package.loaded["pluginshare"] = {}
-
-        -- Mock WidgetContainer
-        local WidgetContainer = {}
-        WidgetContainer.__index = WidgetContainer
-        function WidgetContainer:extend(o)
-            o = o or {}
-            setmetatable(o, self)
-            self.__index = self
-            o.__index = o
-            return o
-        end
-        function WidgetContainer:new(o)
-            o = o or {}
-            setmetatable(o, self)
-            if o.init then o:init() end
-            return o
-        end
-        package.loaded["ui/widget/container/widgetcontainer"] = WidgetContainer
-
-        package.loaded["logger"] = {
-            err = function() end,
-            warn = function() end,
-            info = function() end,
-            dbg = function() end,
-        }
-        package.loaded["util"] = {
-            shell_escape = function(t)
-                local escaped = {}
-                for _, v in ipairs(t) do
-                    if v == nil then
-                        table.insert(escaped, "''")
-                    else
-                        table.insert(escaped, "'" .. tostring(v):gsub("'", "'\\''") .. "'")
-                    end
-                end
-                return table.concat(escaped, " ")
-            end,
-            pathExists = function(path)
-                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                return false
-            end,
-            makePath = function() return true end,
-            readFromFile = function() return nil end,
-        }
-        package.loaded["gettext"] = setmetatable({}, {
-            __call = function(_, s) return s end,
-        })
-        package.loaded["json"] = {
-            encode = function(t) return "{}" end,
-            decode = function(s) return {} end,
-        }
-        package.loaded["localsend_utils"] = require("localsend_utils")
-
-        -- Mock G_reader_settings
-        local settings = {}
-        _G.G_reader_settings = {
-            readSetting = function(self, key) return settings[key] end,
-            saveSetting = function(self, key, value) settings[key] = value end,
-            isTrue = function(self, key) return settings[key] == true end,
-            nilOrTrue = function(self, key) return settings[key] ~= false end,
-            flipNilOrTrue = function(self, key) settings[key] = not self:nilOrTrue(key) end,
-            flipNilOrFalse = function(self, key) settings[key] = not self:isTrue(key) end,
-            _settings = settings,
-            _reset = function()
-                for k in pairs(settings) do settings[k] = nil end
-            end,
-        }
-
-        -- Mock dofile for _meta.lua
-        _G.dofile = function(path)
-            if path:match("_meta%.lua$") then
-                return { version = "v1.1.1" }
-            end
-            error("dofile not mocked for: " .. path)
-        end
+        helper.setup_complete()
     end)
 
     before_each(function()
-        G_reader_settings._reset()
-        package.loaded["main"] = nil
-
-        -- Reset call counts
-        is_running_call_count = 0
-        get_transfer_count_call_count = 0
-        mock_is_running = false
-        mock_transfer_count = 0
+        helper.before_each()
     end)
 
     describe("cache initialization", function()
         it("should have _cached_running field after init()", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_not_nil(instance._cached_running,
                 "_cached_running should be initialized in init()")
         end)
 
         it("should have _cached_transfer_count field after init()", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_not_nil(instance._cached_transfer_count,
                 "_cached_transfer_count should be initialized in init()")
         end)
 
         it("_cached_running should default to false", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_false(instance._cached_running,
                 "_cached_running should default to false")
         end)
 
         it("_cached_transfer_count should default to 0", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.equal(0, instance._cached_transfer_count,
                 "_cached_transfer_count should default to 0")
@@ -194,20 +45,14 @@ describe("LocalSend State Caching", function()
 
     describe("_updateCache method", function()
         it("should have _updateCache method", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             assert.is_function(instance._updateCache,
                 "_updateCache helper should exist")
         end)
 
         it("_updateCache should update _cached_running from isRunning()", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Mock isRunning to return true
             instance.isRunning = function() return true end
@@ -220,10 +65,7 @@ describe("LocalSend State Caching", function()
         end)
 
         it("_updateCache should update _cached_transfer_count from getTransferCount()", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Mock getTransferCount to return 5
             instance.isRunning = function() return false end
@@ -238,10 +80,7 @@ describe("LocalSend State Caching", function()
 
     describe("cache invalidation on state changes", function()
         it("start() should update cache after successful startup", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Track _updateCache calls after instance creation
             local update_cache_calls = 0
@@ -272,10 +111,7 @@ describe("LocalSend State Caching", function()
         end)
 
         it("stopServer() should update cache after stopping", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Track _updateCache calls
             local update_cache_calls = 0
@@ -328,10 +164,7 @@ describe("LocalSend State Caching", function()
         end)
 
         it("_checkForNewTransfers should update cache when transfers found", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local update_cache_called = false
             instance._updateCache = function(self)
@@ -350,10 +183,7 @@ describe("LocalSend State Caching", function()
 
     describe("menu uses cached values", function()
         it("text_func should use _cached_running instead of isRunning()", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Replace isRunning with a tracking version
             local original_isRunning = instance.isRunning
@@ -384,10 +214,7 @@ describe("LocalSend State Caching", function()
         end)
 
         it("text_func should use _cached_transfer_count instead of getTransferCount()", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Replace getTransferCount with a tracking version
             local original_getTransferCount = instance.getTransferCount
@@ -416,10 +243,7 @@ describe("LocalSend State Caching", function()
         end)
 
         it("sub-menu Start/Stop text_func should use _cached_running", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Track isRunning calls
             local isRunning_calls = 0
@@ -445,10 +269,7 @@ describe("LocalSend State Caching", function()
         end)
 
         it("Recent transfers text_func should use _cached_transfer_count", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Track getTransferCount calls
             local getTransferCount_calls = 0
@@ -474,10 +295,7 @@ describe("LocalSend State Caching", function()
         end)
 
         it("Recent transfers enabled_func should use _cached_transfer_count", function()
-            LocalSend = require("main")
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Track getTransferCount calls
             local getTransferCount_calls = 0
@@ -505,16 +323,14 @@ describe("LocalSend State Caching", function()
 
     describe("cache sync on init for existing server", function()
         it("init should sync cache if server is already running", function()
-            LocalSend = require("main")
+            local LocalSend = require("main")
 
             -- Temporarily make isRunning return true
             local orig_isRunning = LocalSend.isRunning
             LocalSend.isRunning = function() return true end
             LocalSend.getTransferCount = function() return 2 end
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Restore
             LocalSend.isRunning = orig_isRunning
@@ -532,18 +348,16 @@ describe("LocalSend State Caching", function()
     -- =========================================================================
     describe("ServerState transfer_count optimization", function()
         it("ServerState should have transfer_count field", function()
-            LocalSend = require("main")
+            local LocalSend = require("main")
             assert.is_not_nil(LocalSend._ServerState.transfer_count,
                 "ServerState should have transfer_count field for caching")
         end)
 
         it("clearTransferLog should reset ServerState.transfer_count to 0", function()
-            LocalSend = require("main")
+            local LocalSend = require("main")
             LocalSend._ServerState.transfer_count = 5
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             instance:clearTransferLog()
 
@@ -552,12 +366,10 @@ describe("LocalSend State Caching", function()
         end)
 
         it("getTransferCount should return ServerState.transfer_count", function()
-            LocalSend = require("main")
+            local LocalSend = require("main")
             LocalSend._ServerState.transfer_count = 42
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             local count = instance:getTransferCount()
 
@@ -566,12 +378,10 @@ describe("LocalSend State Caching", function()
         end)
 
         it("getTransferCount should NOT read file when using ServerState cache", function()
-            LocalSend = require("main")
+            local LocalSend = require("main")
             LocalSend._ServerState.transfer_count = 10
 
-            local instance = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance = helper.create_instance()
 
             -- Mock io.open to track if it's called for transfer log
             local io_open_called_for_log = false
@@ -592,7 +402,7 @@ describe("LocalSend State Caching", function()
         end)
 
         it("ServerState should NOT have deprecated polling_generation field", function()
-            LocalSend = require("main")
+            local LocalSend = require("main")
 
             assert.is_nil(LocalSend._ServerState.polling_generation,
                 "polling_generation is deprecated and should be removed")

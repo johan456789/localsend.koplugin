@@ -16,10 +16,27 @@ describe("Certificate Management", function()
     end)
 
     describe("rotateCertificates", function()
-        it("should remove certificates from certs folder", function()
+        it("should show confirmation dialog before removing certificates", function()
             local instance = helper.create_instance()
 
             instance:rotateCertificates()
+
+            local confirm = helper.find_dialog("ConfirmBox")
+            assert.is_truthy(confirm, "Should show ConfirmBox")
+            assert.is_truthy(confirm.text:match("TLS certificates"), "Should mention TLS certificates")
+            assert.equal("Delete", confirm.ok_text, "OK button should say 'Delete'")
+            assert.equal("Cancel", confirm.cancel_text, "Cancel button should say 'Cancel'")
+        end)
+
+        it("should remove certificates from certs folder after confirmation", function()
+            local instance = helper.create_instance()
+
+            instance:rotateCertificates()
+
+            -- Simulate clicking "Delete" on the ConfirmBox
+            local confirm = helper.find_dialog("ConfirmBox")
+            assert.is_truthy(confirm, "Should show ConfirmBox")
+            confirm.ok_callback()
 
             local found_rm_key = false
             local found_rm_crt = false
@@ -37,10 +54,14 @@ describe("Certificate Management", function()
             assert.is_true(found_rm_crt, "Should remove cert from certs folder")
         end)
 
-        it("should remove exactly 2 certificate files", function()
+        it("should remove exactly 2 certificate files after confirmation", function()
             local instance = helper.create_instance()
 
             instance:rotateCertificates()
+
+            -- Simulate clicking "Delete"
+            local confirm = helper.find_dialog("ConfirmBox")
+            confirm.ok_callback()
 
             local rm_count = 0
             for _, cmd in ipairs(helper.state.os_execute_calls) do
@@ -49,10 +70,14 @@ describe("Certificate Management", function()
             assert.equal(2, rm_count, "Should remove 2 certificate files")
         end)
 
-        it("should show notification about certificate rotation", function()
+        it("should show notification about certificate rotation after confirmation", function()
             local instance = helper.create_instance()
 
             instance:rotateCertificates()
+
+            -- Simulate clicking "Delete"
+            local confirm = helper.find_dialog("ConfirmBox")
+            confirm.ok_callback()
 
             local notification = helper.find_notification("Certificates cleared")
             assert.is_truthy(notification, "Should show rotation notification")
@@ -63,6 +88,10 @@ describe("Certificate Management", function()
 
             instance:rotateCertificates()
 
+            -- Simulate clicking "Delete"
+            local confirm = helper.find_dialog("ConfirmBox")
+            confirm.ok_callback()
+
             local notification = helper.find_notification("generated on next start")
             assert.is_truthy(notification, "Should mention regeneration on next start")
         end)
@@ -72,7 +101,29 @@ describe("Certificate Management", function()
 
             instance:rotateCertificates()
 
-            assert.equal(3, helper.state.notifications_shown[1].timeout)
+            -- Simulate clicking "Delete"
+            local confirm = helper.find_dialog("ConfirmBox")
+            confirm.ok_callback()
+
+            local notification = helper.find_notification("Certificates cleared")
+            assert.equal(3, notification.timeout)
+        end)
+
+        it("should not remove certificates if user cancels", function()
+            local instance = helper.create_instance()
+
+            instance:rotateCertificates()
+
+            -- User clicks "Cancel" - we just don't invoke ok_callback
+            local confirm = helper.find_dialog("ConfirmBox")
+            assert.is_truthy(confirm, "Should show ConfirmBox")
+
+            -- No ok_callback invoked, so check no rm commands were issued
+            local rm_count = 0
+            for _, cmd in ipairs(helper.state.os_execute_calls) do
+                if cmd:match("^'rm' '%-f'") then rm_count = rm_count + 1 end
+            end
+            assert.equal(0, rm_count, "Should not remove certificates when cancelled")
         end)
     end)
 

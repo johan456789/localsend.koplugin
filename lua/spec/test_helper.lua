@@ -400,6 +400,11 @@ function M.load_localsend_dialogs()
     package.loaded["localsend_dialogs"] = require("localsend_dialogs")
 end
 
+-- Load localsend_firewall (real module, not mocked)
+function M.load_localsend_firewall()
+    package.loaded["localsend_firewall"] = require("localsend_firewall")
+end
+
 -- Clear cached main module to get fresh instance
 function M.reset_main()
     package.loaded["main"] = nil
@@ -407,6 +412,7 @@ function M.reset_main()
     package.loaded["localsend_routing"] = nil  -- Also reset routing module
     package.loaded["localsend_transfers"] = nil  -- Also reset transfers module
     package.loaded["localsend_dialogs"] = nil  -- Also reset dialogs module
+    package.loaded["localsend_firewall"] = nil  -- Also reset firewall module
 end
 
 -- Complete setup - call all standard mocks
@@ -435,6 +441,7 @@ function M.setup_complete(opts)
     M.load_localsend_routing()
     M.load_localsend_transfers()
     M.load_localsend_dialogs()
+    M.load_localsend_firewall()
 end
 
 -- Standard before_each that resets state

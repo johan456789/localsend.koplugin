@@ -21,6 +21,7 @@ local lsupdate = require("localsend_update")
 local lsrouting = require("localsend_routing")
 local lstransfers = require("localsend_transfers")
 local lsdialogs = require("localsend_dialogs")
+local lsfirewall = require("localsend_firewall")
 
 -- Polling interval for sentinel file (cheap stat() only)
 local SENTINEL_POLL_INTERVAL = 2
@@ -32,47 +33,6 @@ local compareVersions = lsutils.compareVersions
 local findAssetForArch = lsutils.findAssetForArch
 local normalizeApostrophes = lsutils.normalizeApostrophes
 local validateDeviceName = lsutils.validateDeviceName
-
--- Check if an iptables rule exists (returns true if rule exists)
--- @param rule_args table Array of iptables arguments (e.g., {"INPUT", "-p", "tcp", "--dport", "53317", "-j", "ACCEPT"})
--- @return boolean True if rule exists, false otherwise
-local function iptablesRuleExists(rule_args)
-    -- Build command with -C (check) flag
-    local cmd_args = {"iptables", "-C"}
-    for _, arg in ipairs(rule_args) do
-        table.insert(cmd_args, arg)
-    end
-    -- Use shell_escape for proper argument quoting
-    local cmd = util.shell_escape(cmd_args) .. " 2>/dev/null"
-    local result = os.execute(cmd)
-    return result == 0
-end
-
--- Add iptables rule only if it doesn't already exist
--- @param rule_args table Array of iptables arguments (e.g., {"INPUT", "-p", "tcp", "--dport", "53317", "-j", "ACCEPT"})
--- @return boolean True if rule was added, false if it already existed
-local function iptablesAddIfMissing(rule_args)
-    if not iptablesRuleExists(rule_args) then
-        -- Build command with -A (append) flag
-        local cmd_args = {"iptables", "-A"}
-        for _, arg in ipairs(rule_args) do
-            table.insert(cmd_args, arg)
-        end
-        os.execute(util.shell_escape(cmd_args))
-        return true
-    end
-    return false
-end
-
--- Delete iptables rule (silently ignores if rule doesn't exist)
--- @param rule_args table Array of iptables arguments
-local function iptablesDelete(rule_args)
-    local cmd_args = {"iptables", "-D"}
-    for _, arg in ipairs(rule_args) do
-        table.insert(cmd_args, arg)
-    end
-    os.execute(util.shell_escape(cmd_args) .. " 2>/dev/null")
-end
 
 local data_dir = DataStorage:getFullDataDir()
 local plugin_path = data_dir .. "/plugins/localsend.koplugin"
@@ -180,6 +140,13 @@ function LocalSend:init()
         T = T,
         _ = _,
         G_reader_settings = G_reader_settings,
+    })
+
+    -- Initialize firewall module with dependencies
+    lsfirewall.init({
+        Device = Device,
+        util = util,
+        logger = logger,
     })
 
     -- Cache for menu rendering (avoids disk I/O on every menu open)
@@ -561,49 +528,21 @@ function LocalSend:onCloseWidget()
     -- will take over polling responsibility in init() if server is running
 end
 
+-- Firewall functions (delegated to localsend_firewall module)
 function LocalSend:openFirewall()
-    if Device:isKindle() then
-        if not isValidPort(self.port) then
-            logger.err("[LocalSend] Invalid port, cannot configure firewall")
-            return
-        end
-        local port = tostring(self.port)
-        -- TCP for file transfer (idempotent - won't add if already exists)
-        iptablesAddIfMissing({"INPUT", "-p", "tcp", "--dport", port,
-            "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED", "-j", "ACCEPT"})
-        iptablesAddIfMissing({"OUTPUT", "-p", "tcp", "--sport", port,
-            "-m", "conntrack", "--ctstate", "ESTABLISHED", "-j", "ACCEPT"})
-        -- UDP for device discovery
-        iptablesAddIfMissing({"INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"})
-        iptablesAddIfMissing({"OUTPUT", "-p", "udp", "--sport", port, "-j", "ACCEPT"})
-        -- WebRTC/ICE UDP ports - must match range in peer.go SetEphemeralUDPPortRange
-        if self.use_webrtc then
-            iptablesAddIfMissing({"INPUT", "-p", "udp", "--dport", "50000:50100", "-j", "ACCEPT"})
-            iptablesAddIfMissing({"OUTPUT", "-p", "udp", "--sport", "50000:50100", "-j", "ACCEPT"})
-            logger.dbg("[LocalSend] Firewall opened for WebRTC UDP ports (50000-50100)")
-        end
-        logger.dbg("[LocalSend] Firewall opened for port " .. self.port)
+    if not isValidPort(self.port) then
+        logger.err("[LocalSend] Invalid port, cannot configure firewall")
+        return
     end
+    lsfirewall.openFirewall(self.port, self.use_webrtc)
 end
 
 function LocalSend:closeFirewall()
-    if Device:isKindle() then
-        if not isValidPort(self.port) then
-            logger.err("[LocalSend] Invalid port, cannot configure firewall")
-            return
-        end
-        local port = tostring(self.port)
-        iptablesDelete({"INPUT", "-p", "tcp", "--dport", port,
-            "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED", "-j", "ACCEPT"})
-        iptablesDelete({"OUTPUT", "-p", "tcp", "--sport", port,
-            "-m", "conntrack", "--ctstate", "ESTABLISHED", "-j", "ACCEPT"})
-        iptablesDelete({"INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"})
-        iptablesDelete({"OUTPUT", "-p", "udp", "--sport", port, "-j", "ACCEPT"})
-        -- Clean up WebRTC UDP rules (ignore errors if they don't exist)
-        iptablesDelete({"INPUT", "-p", "udp", "--dport", "50000:50100", "-j", "ACCEPT"})
-        iptablesDelete({"OUTPUT", "-p", "udp", "--sport", "50000:50100", "-j", "ACCEPT"})
-        logger.dbg("[LocalSend] Firewall closed for port " .. self.port)
+    if not isValidPort(self.port) then
+        logger.err("[LocalSend] Invalid port, cannot configure firewall")
+        return
     end
+    lsfirewall.closeFirewall(self.port)
 end
 
 function LocalSend:validateDeviceName(name)

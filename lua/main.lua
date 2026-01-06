@@ -15,98 +15,20 @@ local _ = require("gettext")
 local T = ffiutil.template
 local json = require("json")
 local PluginShare = require("pluginshare")
+local state = require("localsend_state")
+local lsutils = require("localsend_utils")
+local lsupdate = require("localsend_update")
 
 -- Polling interval for sentinel file (cheap stat() only)
 local SENTINEL_POLL_INTERVAL = 2
 
-local GITHUB_RELEASE_URL = "https://api.github.com/repos/kaikozlov/localsend.koplugin/releases/latest"
-
--- Utility functions (inlined for backwards compatibility with older self-update)
--- Also available in localsend_utils.lua for testing
-
--- Validate that a path is safe for shell operations
-local function isValidPath(path)
-    if path == nil or path == "" then return false end
-    -- Reject paths with null bytes
-    if path:find("%z") then return false end
-    -- Must be absolute path
-    if not path:match("^/") then return false end
-    -- No command substitution patterns
-    if path:find("`") or path:find("%$%(") then return false end
-    return true
-end
-
--- Validate that a port number is safe for shell operations
-local function isValidPort(port)
-    if port == nil then return false end
-    local num = tonumber(port)
-    if num == nil then return false end
-    if num < 1 or num > 65535 then return false end
-    -- Ensure it's an integer
-    if num ~= math.floor(num) then return false end
-    return true
-end
-
--- Compare semantic versions
--- Returns: -1 if v1 < v2, 0 if equal, 1 if v1 > v2
-local function compareVersions(v1, v2)
-    local function parseVersion(v)
-        local parts = {}
-        for num in string.gmatch(v:gsub("^v", ""), "(%d+)") do
-            table.insert(parts, tonumber(num) or 0)
-        end
-        return parts
-    end
-
-    local p1, p2 = parseVersion(v1), parseVersion(v2)
-    for i = 1, math.max(#p1, #p2) do
-        local n1, n2 = p1[i] or 0, p2[i] or 0
-        if n1 < n2 then return -1 end
-        if n1 > n2 then return 1 end
-    end
-    return 0
-end
-
--- Find download asset URL for given architecture
-local function findAssetForArch(assets, arch)
-    local pattern = "localsend%-koplugin%-" .. arch .. "%.zip$"
-    for _, asset in ipairs(assets) do
-        if asset.name and asset.name:match(pattern) then
-            return asset.browser_download_url, asset.name
-        end
-    end
-    return nil, nil
-end
-
--- Normalize curly quotes to straight quotes
-local function normalizeApostrophes(str)
-    if str == nil then return nil end
-    -- Replace curly single quotes (U+2018, U+2019) with straight quote
-    return str:gsub("\xe2\x80\x98", "'"):gsub("\xe2\x80\x99", "'")
-end
-
--- Validate device name for LocalSend
-local function validateDeviceName(name)
-    -- Empty or nil name is valid (will use random name)
-    if name == nil or name == "" then
-        return true
-    end
-
-    -- Check length (reasonable limit)
-    if #name > 64 then
-        return false, "Device name is too long (max 64 characters)."
-    end
-
-    -- Normalize curly quotes to straight for validation
-    local normalized = normalizeApostrophes(name)
-
-    -- Only allow alphanumeric, spaces, hyphens, underscores, and apostrophes
-    if not normalized:match("^[%w%s%-_']+$") then
-        return false, "Device name can only contain letters, numbers, spaces, hyphens, underscores, and apostrophes."
-    end
-
-    return true
-end
+-- Import utility functions from localsend_utils module
+local isValidPath = lsutils.isValidPath
+local isValidPort = lsutils.isValidPort
+local compareVersions = lsutils.compareVersions
+local findAssetForArch = lsutils.findAssetForArch
+local normalizeApostrophes = lsutils.normalizeApostrophes
+local validateDeviceName = lsutils.validateDeviceName
 
 -- Check if an iptables rule exists (returns true if rule exists)
 -- @param rule_args table Array of iptables arguments (e.g., {"INPUT", "-p", "tcp", "--dport", "53317", "-j", "ACCEPT"})
@@ -149,34 +71,11 @@ local function iptablesDelete(rule_args)
     os.execute(util.shell_escape(cmd_args) .. " 2>/dev/null")
 end
 
--- Build a curl command for fetching JSON from a URL
--- @param output_file string Path to write response body
--- @param url string URL to fetch
--- @return string Shell-escaped curl command that outputs HTTP status code
-local function buildCurlCommand(output_file, url)
-    return util.shell_escape({
-        "curl", "-s",
-        "-o", output_file,
-        "-w", "%{http_code}",
-        "--connect-timeout", "10",
-        "-H", "Accept: application/vnd.github.v3+json",
-        url
-    })
-end
-
 local data_dir = DataStorage:getFullDataDir()
 local plugin_path = data_dir .. "/plugins/localsend.koplugin"
 
--- Module-local state that persists across widget instances (view switches)
--- This is preferred over _G globals for tracking state within a single KOReader session
-local ServerState = {
-    user_stopped = false,  -- True when user explicitly stopped the server
-    was_running_before_suspend = false,  -- True if server was running before suspend/standby
-    was_running_before_disconnect = false,  -- True if server was running before network disconnect
-    last_log_position = 0,  -- Track transfer log read position across instances
-    transfer_count = 0,  -- Cached transfer count (avoids full file read on e-readers)
-    last_sentinel_value = nil,  -- Last known content of sentinel file for fast change detection
-}
+-- ServerState is now in localsend_state.lua module
+local ServerState = state.ServerState
 
 -- Load plugin metadata safely (wrap dofile in pcall)
 local plugin_meta
@@ -238,6 +137,19 @@ function LocalSend:init()
     self.auto_update_check = G_reader_settings:nilOrTrue("LocalSend_auto_update_check")
     self.update_check_interval_hours = G_reader_settings:readSetting("LocalSend_update_check_interval_hours") or 168  -- Weekly default
     self.last_update_check = G_reader_settings:readSetting("LocalSend_last_update_check") or 0
+
+    -- Initialize update module with dependencies
+    lsupdate.init({
+        UIManager = UIManager,
+        InfoMessage = InfoMessage,
+        NetworkMgr = NetworkMgr,
+        util = util,
+        json = json,
+        logger = logger,
+        T = T,
+        _ = _,
+        G_reader_settings = G_reader_settings,
+    })
 
     -- Cache for menu rendering (avoids disk I/O on every menu open)
     -- Updated via _updateCache() on state changes
@@ -1566,184 +1478,15 @@ function LocalSend:rotateCertificates()
 end
 
 function LocalSend:getDeviceArch()
-    -- Detect device architecture for selecting the right binary
-    local handle = io.popen("uname -m")
-    if not handle then return nil end
-    local ok, arch = pcall(handle.read, handle, "*l")
-    handle:close()
-    if not ok then return nil end
-
-    if not arch then return nil end
-
-    -- Map uname output to our asset naming
-    -- arm64/aarch64: 64-bit ARM (newer devices)
-    -- armv7: 32-bit ARM with hardware float (most Kindles PW1+, returns "armv7l")
-    -- armv5: legacy 32-bit ARM with soft float (K3, K4, older devices)
-    if arch:match("^aarch64") or arch:match("^arm64") then
-        return "arm64"
-    elseif arch:match("^armv7") then
-        return "armv7"
-    elseif arch:match("^armv[56]") or arch:match("^arm") then
-        -- armv5, armv6, or generic "arm" -> use legacy armv5 binary
-        return "arm-legacy"
-    end
-
-    return nil
+    return lsupdate.getDeviceArch()
 end
 
 function LocalSend:performUpdate(download_url, asset_name, new_version)
-    -- Stop server if running
-    if self:isRunning() then
-        self:stopServer()
-    end
-
-    UIManager:show(InfoMessage:new{
-        text = _("Downloading update..."),
-        timeout = 2,
-    })
-
-    -- Give UI time to show the message
-    UIManager:scheduleIn(0.5, function()
-        self:doPerformUpdate(download_url, asset_name, new_version)
-    end)
+    lsupdate.performUpdate(self, download_url, asset_name, new_version, plugin_path)
 end
 
 function LocalSend:doPerformUpdate(download_url, asset_name, new_version)
-    local tmp_zip = "/tmp/localsend_update.zip"
-    local tmp_extract = "/tmp/localsend_update_extract"
-
-    -- Clean up any previous update attempt
-    os.remove(tmp_zip)
-    os.execute(util.shell_escape({"rm", "-rf", tmp_extract}))
-
-    -- Download the zip
-    local cmd = util.shell_escape({"curl", "-L", "-s", "-o", tmp_zip, "-w", "%{http_code}",
-        "--connect-timeout", "30", "--max-time", "120", download_url})
-
-    local handle = io.popen(cmd)
-    if not handle then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = _("Failed to execute download command."),
-        })
-        return
-    end
-    local http_code = handle:read("*a")
-    handle:close()
-
-    if http_code ~= "200" then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = T(_("Download failed.\nHTTP status: %1"), http_code),
-        })
-        os.remove(tmp_zip)
-        return
-    end
-
-    -- Verify zip was downloaded
-    if not util.pathExists(tmp_zip) then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = _("Download failed: file not saved."),
-        })
-        return
-    end
-
-    -- Create extraction directory
-    util.makePath(tmp_extract)
-
-    -- Extract the zip
-    local result = os.execute(util.shell_escape({"unzip", "-o", tmp_zip, "-d", tmp_extract}))
-
-    if result ~= 0 then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = _("Failed to extract update."),
-        })
-        os.remove(tmp_zip)
-        os.execute(util.shell_escape({"rm", "-rf", tmp_extract}))
-        return
-    end
-
-    -- The zip contains localsend.koplugin/ folder
-    local extracted_plugin = tmp_extract .. "/localsend.koplugin"
-
-    if not util.pathExists(extracted_plugin) then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = _("Invalid update package structure."),
-        })
-        os.remove(tmp_zip)
-        os.execute(util.shell_escape({"rm", "-rf", tmp_extract}))
-        return
-    end
-
-    -- Copy files to plugin directory
-    -- Core files that must exist:
-    local files_to_copy = { "main.lua", "_meta.lua", "localsend" }
-    local copy_failed = false
-
-    for _, file in ipairs(files_to_copy) do
-        local src = extracted_plugin .. "/" .. file
-        local dst = plugin_path .. "/" .. file
-
-        if util.pathExists(src) then
-            local cp_result = os.execute(util.shell_escape({"cp", src, dst}))
-            if cp_result ~= 0 then
-                copy_failed = true
-                logger.err("[LocalSend] Failed to copy:", file)
-            end
-        else
-            logger.warn("[LocalSend] File not in update package:", file)
-        end
-    end
-
-    -- Also copy any additional .lua files (for future-proofing)
-    -- This ensures new Lua modules are picked up without hardcoding names
-    -- Note: glob pattern must remain unquoted for shell expansion
-    -- Wrap in pcall to ensure handle is always closed on error
-    local ls_handle = io.popen(util.shell_escape({"ls"}) .. " " .. util.shell_escape({extracted_plugin}) .. "/*.lua 2>/dev/null")
-    if ls_handle then
-        local process_ok, process_err = pcall(function()
-            for lua_file in ls_handle:lines() do
-                local _, filename = util.splitFilePathName(lua_file)
-                -- Skip files we already copied
-                if filename and filename ~= "main.lua" and filename ~= "_meta.lua" then
-                    local dst = plugin_path .. "/" .. filename
-                    local cp_result = os.execute(util.shell_escape({"cp", lua_file, dst}))
-                    if cp_result ~= 0 then
-                        logger.warn("[LocalSend] Failed to copy additional lua file:", filename)
-                    else
-                        logger.dbg("[LocalSend] Copied additional lua file:", filename)
-                    end
-                end
-            end
-        end)
-        ls_handle:close()  -- Always close, even on error
-        if not process_ok then
-            logger.err("[LocalSend] Error processing lua files:", process_err)
-        end
-    end
-
-    -- Make binary executable
-    os.execute(util.shell_escape({"chmod", "+x", plugin_path .. "/localsend"}))
-
-    -- Cleanup
-    os.remove(tmp_zip)
-    os.execute(util.shell_escape({"rm", "-rf", tmp_extract}))
-
-    if copy_failed then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = _("Update partially failed. Some files could not be copied. Please update manually."),
-        })
-        return
-    end
-
-    -- Success!
-    UIManager:show(InfoMessage:new{
-        text = T(_("Update to %1 installed successfully!\n\nPlease restart KOReader for changes to take effect."), new_version),
-    })
+    lsupdate.doPerformUpdate(self, download_url, asset_name, new_version, plugin_path)
 end
 
 -- =========================================================================
@@ -1752,15 +1495,7 @@ end
 
 -- Calculate seconds until next update check
 function LocalSend:_getUpdateCheckDelay()
-    local now = os.time()
-    local interval_seconds = self.update_check_interval_hours * 3600
-    local time_since_last = now - self.last_update_check
-    local delay = interval_seconds - time_since_last
-    -- If we're past due, schedule a short delay (60s) to not flood on startup
-    if delay <= 0 then
-        return 60  -- 1 minute delay for startup
-    end
-    return delay
+    return lsupdate.getUpdateCheckDelay(self.last_update_check, self.update_check_interval_hours)
 end
 
 -- Schedule the next update check
@@ -1789,185 +1524,16 @@ function LocalSend:_autoCheckForUpdates()
         return
     end
 
-    self:_doAutoCheckForUpdates()
-end
-
-function LocalSend:_doAutoCheckForUpdates()
-    -- Fetch release info silently (similar to doCheckForUpdates)
-    local tmp_file = "/tmp/localsend_update_check.json"
-    local cmd = buildCurlCommand(tmp_file, GITHUB_RELEASE_URL)
-
-    local handle = io.popen(cmd)
-    if not handle then
-        -- Silently fail for auto-check
-        logger.dbg("[LocalSend] Auto update check failed: io.popen returned nil")
+    -- Create schedule_next callback for the update module
+    local schedule_next = function()
         self:_scheduleUpdateCheck()
-        return
-    end
-    local ok, http_code = pcall(handle.read, handle, "*a")
-    handle:close()
-    if not ok then
-        logger.dbg("[LocalSend] Auto update check failed: read error")
-        self:_scheduleUpdateCheck()
-        return
     end
 
-    -- Update last check time regardless of result
-    self.last_update_check = os.time()
-    G_reader_settings:saveSetting("LocalSend_last_update_check", self.last_update_check)
-
-    if http_code ~= "200" then
-        -- Silently fail for auto-check
-        logger.dbg("[LocalSend] Auto update check failed, HTTP:", http_code)
-        os.remove(tmp_file)
-        self:_scheduleUpdateCheck()
-        return
-    end
-
-    local content = util.readFromFile(tmp_file)
-    os.remove(tmp_file)
-
-    if not content then
-        self:_scheduleUpdateCheck()
-        return
-    end
-
-    local ok, release = pcall(json.decode, content)
-    if not ok or not release or not release.tag_name then
-        self:_scheduleUpdateCheck()
-        return
-    end
-
-    local latest_version = release.tag_name:gsub("^v", "")
-    local current_version = PLUGIN_VERSION:gsub("^v", "")
-
-    -- Check if update available
-    if compareVersions(current_version, latest_version) < 0 then
-        -- Show update notification (modal, requires dismissal)
-        UIManager:show(InfoMessage:new{
-            text = T(_("LocalSend update available: %1\nGo to LocalSend menu to install."), release.tag_name),
-        })
-    end
-
-    -- Schedule next check
-    self:_scheduleUpdateCheck()
+    lsupdate.doAutoCheckForUpdates(self, PLUGIN_VERSION, schedule_next)
 end
 
 function LocalSend:checkForUpdates()
-    -- Use NetworkMgr:runWhenOnline to handle network prompting automatically
-    -- This provides better UX by prompting user to connect if offline
-    NetworkMgr:runWhenOnline(function()
-        self:doCheckForUpdates()
-    end)
-end
-
-function LocalSend:doCheckForUpdates()
-    UIManager:show(InfoMessage:new{
-        text = _("Checking for updates..."),
-        timeout = 2,
-    })
-
-    -- Use curl to fetch the latest release info
-    local tmp_file = "/tmp/localsend_update_check.json"
-    local cmd = buildCurlCommand(tmp_file, GITHUB_RELEASE_URL)
-
-    local handle = io.popen(cmd)
-    if not handle then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = _("Failed to execute update check command."),
-        })
-        return
-    end
-    local ok, http_code = pcall(handle.read, handle, "*a")
-    handle:close()
-    if not ok then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = _("Failed to read update check response."),
-        })
-        return
-    end
-
-    if http_code ~= "200" then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = T(_("Failed to check for updates.\nHTTP status: %1\n\nPlease check your internet connection."), http_code),
-        })
-        os.remove(tmp_file)
-        return
-    end
-
-    local content = util.readFromFile(tmp_file)
-    os.remove(tmp_file)
-
-    if not content then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = _("Failed to read update information."),
-        })
-        return
-    end
-
-    local ok, release = pcall(json.decode, content)
-    if not ok or not release or not release.tag_name then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = _("Failed to parse update information."),
-        })
-        return
-    end
-
-    local latest_version = release.tag_name:gsub("^v", "")
-    local current_version = PLUGIN_VERSION:gsub("^v", "")
-
-    if compareVersions(current_version, latest_version) >= 0 then
-        UIManager:show(InfoMessage:new{
-            text = T(_("You're up to date!\n\nCurrent version: %1\nLatest version: %2"), PLUGIN_VERSION, release.tag_name),
-            timeout = 5,
-        })
-    else
-        -- Update available - check if we can auto-update
-        local arch = self:getDeviceArch()
-        local download_url, asset_name
-
-        if arch and release.assets then
-            download_url, asset_name = findAssetForArch(release.assets, arch)
-        end
-
-        local release_notes = release.body or _("No release notes available.")
-        -- Truncate if too long
-        if #release_notes > 300 then
-            release_notes = release_notes:sub(1, 300) .. "..."
-        end
-
-        if download_url then
-            -- Can auto-update
-            local ConfirmBox = require("ui/widget/confirmbox")
-            UIManager:show(ConfirmBox:new{
-                text = T(_("Update available!\n\nCurrent: %1\nLatest: %2\n\n%3\n\nInstall update now?"),
-                    PLUGIN_VERSION, release.tag_name, release_notes),
-                ok_text = _("Install"),
-                cancel_text = _("Later"),
-                ok_callback = function()
-                    self:performUpdate(download_url, asset_name, release.tag_name)
-                end,
-            })
-        else
-            -- Can't auto-update (unknown arch or no matching asset)
-            local reason
-            if not arch then
-                reason = _("\n\nAuto-update not available: unknown device architecture.")
-            else
-                reason = T(_("\n\nAuto-update not available: no package for %1 architecture."), arch)
-            end
-
-            UIManager:show(InfoMessage:new{
-                text = T(_("Update available!\n\nCurrent: %1\nLatest: %2\n\n%3%4\n\nVisit GitHub to download manually."),
-                    PLUGIN_VERSION, release.tag_name, release_notes, reason),
-            })
-        end
-    end
+    lsupdate.checkForUpdates(self, PLUGIN_VERSION, plugin_path)
 end
 
 function LocalSend:addToMainMenu(menu_items)

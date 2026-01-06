@@ -346,14 +346,49 @@ function M.mock_pluginshare()
     package.loaded["pluginshare"] = {}
 end
 
+-- Mock localsend_state module
+function M.mock_localsend_state()
+    package.loaded["localsend_state"] = {
+        ServerState = {
+            user_stopped = false,
+            was_running_before_suspend = false,
+            was_running_before_disconnect = false,
+            last_log_position = 0,
+            transfer_count = 0,
+            last_sentinel_value = nil,
+        },
+    }
+    -- Expose for testing (matches LocalSend._ServerState pattern)
+    package.loaded["localsend_state"]._ServerState = package.loaded["localsend_state"].ServerState
+end
+
+-- Reset localsend_state module to fresh state
+function M.reset_localsend_state()
+    if package.loaded["localsend_state"] then
+        local state = package.loaded["localsend_state"]
+        state.ServerState.user_stopped = false
+        state.ServerState.was_running_before_suspend = false
+        state.ServerState.was_running_before_disconnect = false
+        state.ServerState.last_log_position = 0
+        state.ServerState.transfer_count = 0
+        state.ServerState.last_sentinel_value = nil
+    end
+end
+
 -- Load localsend_utils (real module, not mocked)
 function M.load_localsend_utils()
     package.loaded["localsend_utils"] = require("localsend_utils")
 end
 
+-- Load localsend_update (real module, not mocked)
+function M.load_localsend_update()
+    package.loaded["localsend_update"] = require("localsend_update")
+end
+
 -- Clear cached main module to get fresh instance
 function M.reset_main()
     package.loaded["main"] = nil
+    package.loaded["localsend_update"] = nil  -- Also reset update module
 end
 
 -- Complete setup - call all standard mocks
@@ -376,12 +411,15 @@ function M.setup_complete(opts)
     M.mock_settings()
     M.mock_dofile(opts.version)
     M.mock_pluginshare()
+    M.mock_localsend_state()
     M.load_localsend_utils()
+    M.load_localsend_update()
 end
 
 -- Standard before_each that resets state
 function M.before_each()
     M.reset_state()
+    M.reset_localsend_state()
     M.reset_main()
 end
 

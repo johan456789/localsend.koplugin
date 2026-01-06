@@ -390,11 +390,17 @@ function M.load_localsend_routing()
     package.loaded["localsend_routing"] = require("localsend_routing")
 end
 
+-- Load localsend_transfers (real module, not mocked)
+function M.load_localsend_transfers()
+    package.loaded["localsend_transfers"] = require("localsend_transfers")
+end
+
 -- Clear cached main module to get fresh instance
 function M.reset_main()
     package.loaded["main"] = nil
     package.loaded["localsend_update"] = nil  -- Also reset update module
     package.loaded["localsend_routing"] = nil  -- Also reset routing module
+    package.loaded["localsend_transfers"] = nil  -- Also reset transfers module
 end
 
 -- Complete setup - call all standard mocks
@@ -421,6 +427,7 @@ function M.setup_complete(opts)
     M.load_localsend_utils()
     M.load_localsend_update()
     M.load_localsend_routing()
+    M.load_localsend_transfers()
 end
 
 -- Standard before_each that resets state

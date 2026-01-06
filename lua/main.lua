@@ -19,6 +19,7 @@ local state = require("localsend_state")
 local lsutils = require("localsend_utils")
 local lsupdate = require("localsend_update")
 local lsrouting = require("localsend_routing")
+local lstransfers = require("localsend_transfers")
 
 -- Polling interval for sentinel file (cheap stat() only)
 local SENTINEL_POLL_INTERVAL = 2
@@ -163,6 +164,18 @@ function LocalSend:init()
         T = T,
         _ = _,
         G_reader_settings = G_reader_settings,
+    })
+
+    -- Initialize transfers module with dependencies
+    lstransfers.init({
+        UIManager = UIManager,
+        InfoMessage = InfoMessage,
+        Notification = Notification,
+        util = util,
+        json = json,
+        logger = logger,
+        T = T,
+        _ = _,
     })
 
     -- Cache for menu rendering (avoids disk I/O on every menu open)
@@ -625,136 +638,29 @@ function LocalSend:validateSaveDir(path)
     return true
 end
 
+-- Transfer logging functions (delegated to localsend_transfers module)
 function LocalSend:getTransferLog()
-    local transfers = {}
-    if not util.pathExists(transfer_log_file) then
-        return transfers
-    end
-
-    local f = io.open(transfer_log_file, "r")
-    if not f then return transfers end
-
-    for line in f:lines() do
-        local ok, entry = pcall(json.decode, line)
-        if ok and entry then
-            table.insert(transfers, entry)
-        end
-    end
-    f:close()
-
-    return transfers
+    return lstransfers.getTransferLog()
 end
 
--- Optimized log reading - only reads new entries since last check
--- This is more efficient for e-reader CPUs that poll every 5 seconds
--- Uses ServerState.last_log_position to persist across widget instances
 function LocalSend:getNewTransfers()
-    local transfers = {}
-    if not util.pathExists(transfer_log_file) then
-        ServerState.last_log_position = 0
-        return transfers
-    end
-
-    local f = io.open(transfer_log_file, "r")
-    if not f then
-        ServerState.last_log_position = 0
-        return transfers
-    end
-
-    -- Check if file was truncated (position beyond file size)
-    local file_size = f:seek("end")
-    if ServerState.last_log_position > file_size then
-        ServerState.last_log_position = 0
-    end
-
-    -- Seek to last known position
-    f:seek("set", ServerState.last_log_position)
-
-    for line in f:lines() do
-        local ok, entry = pcall(json.decode, line)
-        if ok and entry then
-            table.insert(transfers, entry)
-        end
-    end
-
-    -- Save new position and update cached count
-    ServerState.last_log_position = f:seek()
-    ServerState.transfer_count = ServerState.transfer_count + #transfers
-    f:close()
-
-    return transfers
+    return lstransfers.getNewTransfers()
 end
 
--- Returns the cached transfer count (avoids file I/O on e-readers)
--- Count is updated by getNewTransfers() and cleared by clearTransferLog()
 function LocalSend:getTransferCount()
-    return ServerState.transfer_count
+    return lstransfers.getTransferCount()
 end
 
 function LocalSend:clearTransferLog()
-    os.remove(transfer_log_file)
-    os.remove(transfer_notify_file)  -- Also remove sentinel file
-    ServerState.last_log_position = 0  -- Reset position tracking when log is cleared
-    ServerState.transfer_count = 0  -- Reset cached count
-    ServerState.last_sentinel_value = nil  -- Reset sentinel tracking
+    lstransfers.clearTransferLog()
 end
 
--- Internal polling method called by the stored task reference
--- No generation counter needed - proper unscheduling handles stale callbacks
 function LocalSend:_checkForNewTransfers()
-    if not self:isRunning() then
-        return
-    end
-
-    -- Use optimized getNewTransfers() instead of reading the whole file
-    local new_transfers = self:getNewTransfers()
-    if #new_transfers > 0 then
-        -- Update cache to reflect new transfer count
-        self:_updateCache()
-
-        local latest = new_transfers[#new_transfers]
-        local text
-        if #new_transfers == 1 then
-            text = T(_("File received: %1"), latest.filename)
-        else
-            text = T(_("%1 files received. Latest: %2"), #new_transfers, latest.filename)
-        end
-
-        UIManager:show(Notification:new{
-            text = text,
-            timeout = 3,
-        })
-    end
+    lstransfers.checkForNewTransfers(self)
 end
 
--- Fast sentinel file check - reads tiny sentinel file content
--- When content changes, triggers an immediate full log check
 function LocalSend:_checkSentinelFile()
-    if not self:isRunning() then
-        -- Server died unexpectedly - clean up state so UI reflects reality
-        self:_cleanupServerState()
-        logger.dbg("[LocalSend] Server died, cleaned up state")
-        return
-    end
-
-    -- Read sentinel file content (tiny file with just a timestamp)
-    local content = util.readFromFile(transfer_notify_file)
-    if content then
-        content = content:gsub("%s+", "")  -- Trim whitespace
-        -- Trigger check if:
-        -- 1. First time seeing sentinel (last_sentinel_value is nil) - handles first transfer
-        -- 2. Sentinel content changed - handles subsequent transfers
-        if ServerState.last_sentinel_value == nil or content ~= ServerState.last_sentinel_value then
-            logger.dbg("[LocalSend] Sentinel file changed, checking for new transfers")
-            self:_checkForNewTransfers()
-        end
-        ServerState.last_sentinel_value = content
-    end
-
-    -- Schedule next sentinel check
-    if self:isRunning() then
-        UIManager:scheduleIn(SENTINEL_POLL_INTERVAL, self.check_sentinel_task)
-    end
+    lstransfers.checkSentinelFile(self)
 end
 
 -- Start the LocalSend server
@@ -1207,28 +1113,7 @@ function LocalSend:buildExtensionRoutingMenu()
 end
 
 function LocalSend:showRecentTransfers()
-    local transfers = self:getTransferLog()
-
-    if #transfers == 0 then
-        UIManager:show(InfoMessage:new{
-            text = _("No recent transfers."),
-            timeout = 3,
-        })
-        return
-    end
-
-    -- Build text showing recent transfers (last 10)
-    local lines = {}
-    local start_idx = math.max(1, #transfers - 9)
-    for i = start_idx, #transfers do
-        local t = transfers[i]
-        local size_str = t.size and string.format(" (%s)", util.getFriendlySize(t.size)) or ""
-        table.insert(lines, string.format("%d. %s%s", i, t.filename, size_str))
-    end
-
-    UIManager:show(InfoMessage:new{
-        text = T(_("Recent transfers (%1 total):\n\n%2"), #transfers, table.concat(lines, "\n")),
-    })
+    lstransfers.showRecentTransfers(self)
 end
 
 function LocalSend:rotateCertificates()

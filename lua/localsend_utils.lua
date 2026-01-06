@@ -107,4 +107,24 @@ function M.validateDeviceName(name)
     return true
 end
 
+--- Build a radio button menu from a list of options
+-- @param options table Array of {value, text} pairs
+-- @param get_value function Returns the current selected value
+-- @param set_value function(value) Called when an option is selected
+-- @param enabled_func function Optional: returns whether options are enabled
+-- @return table Menu items with radio = true
+function M.buildRadioMenu(options, get_value, set_value, enabled_func)
+    local menu = {}
+    for _, opt in ipairs(options) do
+        table.insert(menu, {
+            text = opt.text,
+            checked_func = function() return get_value() == opt.value end,
+            radio = true,
+            enabled_func = enabled_func,
+            callback = function() set_value(opt.value) end,
+        })
+    end
+    return menu
+end
+
 return M

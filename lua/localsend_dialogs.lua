@@ -2,16 +2,18 @@
 -- UI dialog helpers for LocalSend plugin
 -- Handles save directory picker, device name, PIN, and extension dialogs
 
+local lsutils = require("localsend_utils")
+
 local M = {}
 
 -- Extension presets for allowed extensions menu
 M.EXTENSION_PRESETS = {
-    { name = "All files", value = "" },
-    { name = "eBooks (epub, pdf, mobi, azw3)", value = "epub,pdf,mobi,azw3" },
-    { name = "eBooks + CBZ (comics)", value = "epub,pdf,mobi,azw3,cbz,cbr" },
-    { name = "PDF only", value = "pdf" },
-    { name = "EPUB only", value = "epub" },
-    { name = "Custom...", value = nil },
+    { text = "All files", value = "" },
+    { text = "eBooks (epub, pdf, mobi, azw3)", value = "epub,pdf,mobi,azw3" },
+    { text = "eBooks + CBZ (comics)", value = "epub,pdf,mobi,azw3,cbz,cbr" },
+    { text = "PDF only", value = "pdf" },
+    { text = "EPUB only", value = "epub" },
+    { text = "Custom...", value = nil },
 }
 
 -- Dependencies container (set via M.init)
@@ -23,12 +25,12 @@ function M.init(d)
     deps = d
     -- Translate preset names after gettext is available
     M.EXTENSION_PRESETS = {
-        { name = deps._("All files"), value = "" },
-        { name = deps._("eBooks (epub, pdf, mobi, azw3)"), value = "epub,pdf,mobi,azw3" },
-        { name = deps._("eBooks + CBZ (comics)"), value = "epub,pdf,mobi,azw3,cbz,cbr" },
-        { name = deps._("PDF only"), value = "pdf" },
-        { name = deps._("EPUB only"), value = "epub" },
-        { name = deps._("Custom..."), value = nil },
+        { text = deps._("All files"), value = "" },
+        { text = deps._("eBooks (epub, pdf, mobi, azw3)"), value = "epub,pdf,mobi,azw3" },
+        { text = deps._("eBooks + CBZ (comics)"), value = "epub,pdf,mobi,azw3,cbz,cbr" },
+        { text = deps._("PDF only"), value = "pdf" },
+        { text = deps._("EPUB only"), value = "epub" },
+        { text = deps._("Custom..."), value = nil },
     }
 end
 
@@ -188,7 +190,8 @@ end
 
 -- Show input dialog for custom extensions
 -- @param instance table LocalSend instance
-function M.showCustomExtDialog(instance)
+-- @param touchmenu_instance table Optional menu instance to refresh after save
+function M.showCustomExtDialog(instance, touchmenu_instance)
     local dialog
     dialog = deps.InputDialog:new{
         title = deps._("Custom extensions"),
@@ -211,6 +214,10 @@ function M.showCustomExtDialog(instance)
                         instance.accept_ext = dialog:getInputText()
                         deps.G_reader_settings:saveSetting("LocalSend_accept_ext", instance.accept_ext)
                         deps.UIManager:close(dialog)
+                        -- Refresh menu to show Custom as selected
+                        if touchmenu_instance then
+                            touchmenu_instance:updateItems()
+                        end
                     end,
                 },
             },
@@ -224,30 +231,55 @@ end
 -- @param instance table LocalSend instance
 -- @return table Menu items
 function M.buildExtensionPresetsMenu(instance)
-    local menu = {}
+    -- Filter out the Custom option (value = nil) for radio menu
+    local radio_presets = {}
+    local custom_preset = nil
     for _, preset in ipairs(M.EXTENSION_PRESETS) do
         if preset.value == nil then
-            -- Custom option
-            table.insert(menu, {
-                text = preset.name,
-                keep_menu_open = true,
-                callback = function()
-                    instance:showCustomExtDialog()
-                end,
-            })
+            custom_preset = preset
         else
-            table.insert(menu, {
-                text = preset.name,
-                checked_func = function()
-                    return instance.accept_ext == preset.value
-                end,
-                callback = function()
-                    instance.accept_ext = preset.value
-                    deps.G_reader_settings:saveSetting("LocalSend_accept_ext", instance.accept_ext)
-                end,
-            })
+            table.insert(radio_presets, preset)
         end
     end
+
+    -- Build radio menu for standard presets
+    local menu = lsutils.buildRadioMenu(
+        radio_presets,
+        function() return instance.accept_ext end,
+        function(v)
+            instance.accept_ext = v
+            deps.G_reader_settings:saveSetting("LocalSend_accept_ext", v)
+        end
+    )
+
+    -- Build a set of known preset values for quick lookup
+    local preset_values = {}
+    for _, preset in ipairs(radio_presets) do
+        preset_values[preset.value] = true
+    end
+
+    -- Add Custom option at the end
+    if custom_preset then
+        table.insert(menu, {
+            text_func = function()
+                -- Show current custom value if one is set and doesn't match a preset
+                if instance.accept_ext ~= "" and not preset_values[instance.accept_ext] then
+                    return deps.T("%1 (%2)", custom_preset.text, instance.accept_ext)
+                end
+                return custom_preset.text
+            end,
+            radio = true,
+            checked_func = function()
+                -- Custom is selected when current value doesn't match any preset
+                return not preset_values[instance.accept_ext]
+            end,
+            keep_menu_open = true,
+            callback = function(touchmenu_instance)
+                instance:showCustomExtDialog(touchmenu_instance)
+            end,
+        })
+    end
+
     return menu
 end
 

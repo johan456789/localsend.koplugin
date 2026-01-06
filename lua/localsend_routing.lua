@@ -234,8 +234,8 @@ function M.buildExtensionRoutingMenu(instance)
             end,
             help_text = deps._("When enabled, files are routed to directories based on extension. " ..
                 "When disabled, all files go to the main save directory."),
+            separator = true,
         })
-        table.insert(menu, { text = "---" })
     end
 
     -- Show existing routes
@@ -281,8 +281,9 @@ function M.buildExtensionRoutingMenu(instance)
         })
     end
 
-    if has_routes then
-        table.insert(menu, { text = "---" })
+    -- Add separator after routes (mark the last route item)
+    if has_routes and #menu > 0 then
+        menu[#menu].separator = true
     end
 
     -- Add new route option

@@ -8,6 +8,7 @@ local M = {}
 
 -- Constants
 M.GITHUB_RELEASE_URL = "https://api.github.com/repos/kaikozlov/localsend.koplugin/releases/latest"
+M.REINSTALL_MARKER_FILE = ".reinstall_required"
 
 -- Dependencies container (set via M.init)
 local deps = {}
@@ -16,6 +17,37 @@ local deps = {}
 -- @param d table Dependencies: { UIManager, InfoMessage, NetworkMgr, util, json, logger, T, _ }
 function M.init(d)
     deps = d
+end
+
+-- Check if reinstall marker file exists
+-- @param plugin_path string Path to plugin directory
+-- @return boolean True if reinstall is required
+function M.isReinstallRequired(plugin_path)
+    local marker_path = plugin_path .. "/" .. M.REINSTALL_MARKER_FILE
+    local f = io.open(marker_path, "r")
+    if f then
+        f:close()
+        return true
+    end
+    return false
+end
+
+-- Create reinstall marker file (called on update failure)
+-- @param plugin_path string Path to plugin directory
+function M.setReinstallRequired(plugin_path)
+    local marker_path = plugin_path .. "/" .. M.REINSTALL_MARKER_FILE
+    local f = io.open(marker_path, "w")
+    if f then
+        f:write("Update failed at " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n")
+        f:close()
+    end
+end
+
+-- Clear reinstall marker file (called on successful update)
+-- @param plugin_path string Path to plugin directory
+function M.clearReinstallRequired(plugin_path)
+    local marker_path = plugin_path .. "/" .. M.REINSTALL_MARKER_FILE
+    os.remove(marker_path)
 end
 
 -- Build a curl command for fetching JSON from a URL
@@ -136,6 +168,19 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
         return
     end
 
+    -- Track which lua files are in the update package (for orphan cleanup later)
+    local new_lua_files = {}
+    local track_handle = io.popen("ls " .. deps.util.shell_escape({extracted_plugin}) .. "/*.lua 2>/dev/null")
+    if track_handle then
+        for lua_file in track_handle:lines() do
+            local _, filename = deps.util.splitFilePathName(lua_file)
+            if filename then
+                new_lua_files[filename] = true
+            end
+        end
+        track_handle:close()
+    end
+
     -- Copy files to plugin directory
     -- Core files that must exist:
     local files_to_copy = { "main.lua", "_meta.lua", "localsend" }
@@ -157,10 +202,10 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     end
 
     -- Also copy any additional .lua files (for future-proofing)
-    local ls_handle = io.popen(deps.util.shell_escape({"ls"}) .. " " .. deps.util.shell_escape({extracted_plugin}) .. "/*.lua 2>/dev/null")
-    if ls_handle then
+    local copy_handle = io.popen(deps.util.shell_escape({"ls"}) .. " " .. deps.util.shell_escape({extracted_plugin}) .. "/*.lua 2>/dev/null")
+    if copy_handle then
         local process_ok, process_err = pcall(function()
-            for lua_file in ls_handle:lines() do
+            for lua_file in copy_handle:lines() do
                 local _, filename = deps.util.splitFilePathName(lua_file)
                 -- Skip files we already copied
                 if filename and filename ~= "main.lua" and filename ~= "_meta.lua" then
@@ -174,7 +219,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
                 end
             end
         end)
-        ls_handle:close()
+        copy_handle:close()
         if not process_ok then
             deps.logger.err("[LocalSend] Error processing lua files:", process_err)
         end
@@ -183,19 +228,44 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     -- Make binary executable
     os.execute(deps.util.shell_escape({"chmod", "+x", plugin_path .. "/localsend"}))
 
+    -- Remove orphaned lua files (files that exist locally but not in the update)
+    -- Only do this if copy succeeded to avoid leaving plugin in broken state
+    -- Never remove critical files needed for recovery
+    local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true }
+    if not copy_failed then
+        local old_ls_handle = io.popen("ls " .. deps.util.shell_escape({plugin_path}) .. "/*.lua 2>/dev/null")
+        if old_ls_handle then
+            for old_file in old_ls_handle:lines() do
+                local _, filename = deps.util.splitFilePathName(old_file)
+                if filename and not new_lua_files[filename] and not protected_files[filename] then
+                    local rm_ok = os.remove(plugin_path .. "/" .. filename)
+                    if rm_ok then
+                        deps.logger.dbg("[LocalSend] Removed orphaned file:", filename)
+                    else
+                        deps.logger.warn("[LocalSend] Failed to remove orphaned file:", filename)
+                    end
+                end
+            end
+            old_ls_handle:close()
+        end
+    end
+
     -- Cleanup
     os.remove(tmp_zip)
     os.execute(deps.util.shell_escape({"rm", "-rf", tmp_extract}))
 
     if copy_failed then
+        -- Mark that reinstall is required so user sees warning on restart
+        M.setReinstallRequired(plugin_path)
         deps.UIManager:show(deps.InfoMessage:new{
             icon = "notice-warning",
-            text = deps._("Update partially failed. Some files could not be copied. Please update manually."),
+            text = deps._("Update partially failed. Some files could not be copied. Please reinstall the plugin."),
         })
         return
     end
 
-    -- Success!
+    -- Success! Clear any previous reinstall marker
+    M.clearReinstallRequired(plugin_path)
     deps.UIManager:show(deps.InfoMessage:new{
         text = deps.T(deps._("Update to %1 installed successfully!\n\nPlease restart KOReader for changes to take effect."), new_version),
     })
@@ -365,19 +435,35 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
     local latest_version = release.tag_name:gsub("^v", "")
     local current_version = plugin_version:gsub("^v", "")
 
-    if lsutils.compareVersions(current_version, latest_version) >= 0 then
-        deps.UIManager:show(deps.InfoMessage:new{
-            text = deps.T(deps._("You're up to date!\n\nCurrent version: %1\nLatest version: %2"), plugin_version, release.tag_name),
-            timeout = 5,
-        })
-    else
-        -- Update available - check if we can auto-update
-        local arch = M.getDeviceArch()
-        local download_url, asset_name
+    -- Check if we can auto-update (needed for both update and reinstall)
+    local arch = M.getDeviceArch()
+    local download_url, asset_name
 
-        if arch and release.assets then
-            download_url, asset_name = lsutils.findAssetForArch(release.assets, arch)
+    if arch and release.assets then
+        download_url, asset_name = lsutils.findAssetForArch(release.assets, arch)
+    end
+
+    if lsutils.compareVersions(current_version, latest_version) >= 0 then
+        -- Up to date - offer reinstall option if possible
+        if download_url then
+            local ConfirmBox = require("ui/widget/confirmbox")
+            local up_to_date_msg = deps._("You're up to date!\n\nCurrent version: %1\nLatest version: %2\n\nReinstall anyway?")
+            deps.UIManager:show(ConfirmBox:new{
+                text = deps.T(up_to_date_msg, plugin_version, release.tag_name),
+                ok_text = deps._("Reinstall"),
+                cancel_text = deps._("Cancel"),
+                ok_callback = function()
+                    M.performUpdate(instance, download_url, asset_name, release.tag_name, plugin_path)
+                end,
+            })
+        else
+            deps.UIManager:show(deps.InfoMessage:new{
+                text = deps.T(deps._("You're up to date!\n\nCurrent version: %1\nLatest version: %2"), plugin_version, release.tag_name),
+                timeout = 5,
+            })
         end
+    else
+        -- Update available
 
         local release_notes = release.body or deps._("No release notes available.")
         -- Truncate if too long

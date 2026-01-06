@@ -59,7 +59,9 @@ describe("Menu Building", function()
 
             local found = false
             for _, item in ipairs(menu) do
-                if item.text and item.text:match("Custom") then
+                -- Check both static text and text_func (used for dynamic display)
+                local text = item.text or (item.text_func and item.text_func())
+                if text and text:match("Custom") then
                     found = true
                     assert.is_true(item.keep_menu_open, "Custom should keep menu open")
                     break

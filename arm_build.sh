@@ -31,7 +31,7 @@ done
 
 # Check for existing binaries if package-only mode
 if $PACKAGE_ONLY; then
-    if [[ ! -f "$BIN_DIR/localsend-armv-legacy" ]] || [[ ! -f "$BIN_DIR/localsend-armv7" ]] || [[ ! -f "$BIN_DIR/localsend-arm64" ]]; then
+    if [[ ! -f "$BIN_DIR/localsend-arm-legacy" ]] || [[ ! -f "$BIN_DIR/localsend-armv7" ]] || [[ ! -f "$BIN_DIR/localsend-arm64" ]]; then
         echo "Error: Binaries not found. Run a full build first."
         exit 1
     fi
@@ -49,9 +49,7 @@ fi
 mkdir -p "$BUILD_DIR/$PLUGIN_NAME"
 
 # Copy plugin source files to build directory
-cp "$PLUGIN_SRC/main.lua" "$BUILD_DIR/$PLUGIN_NAME/"
-cp "$PLUGIN_SRC/_meta.lua" "$BUILD_DIR/$PLUGIN_NAME/"
-cp "$PLUGIN_SRC/localsend_utils.lua" "$BUILD_DIR/$PLUGIN_NAME/"
+cp "$PLUGIN_SRC"/*.lua "$BUILD_DIR/$PLUGIN_NAME/"
 
 if ! $PACKAGE_ONLY; then
     # Build for armv5 (soft-float, legacy devices like K3)

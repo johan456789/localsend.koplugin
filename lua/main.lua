@@ -15,28 +15,51 @@ local _ = require("gettext")
 local T = ffiutil.template
 local json = require("json")
 local PluginShare = require("pluginshare")
-local state = require("localsend_state")
+
+-- Critical modules (required for recovery mode)
 local lsutils = require("localsend_utils")
 local lsupdate = require("localsend_update")
-local lsrouting = require("localsend_routing")
-local lstransfers = require("localsend_transfers")
-local lsdialogs = require("localsend_dialogs")
-local lsfirewall = require("localsend_firewall")
-local lsserver = require("localsend_server")
+
+-- Optional modules - load with pcall for graceful degradation
+local RECOVERY_MODE = false
+local module_load_errors = {}
+
+local function tryRequire(name)
+    local ok, mod = pcall(require, name)
+    if ok then
+        return mod
+    else
+        table.insert(module_load_errors, name .. ": " .. tostring(mod))
+        return nil
+    end
+end
+
+local state = tryRequire("localsend_state")
+local lsrouting = tryRequire("localsend_routing")
+local lstransfers = tryRequire("localsend_transfers")
+local lsdialogs = tryRequire("localsend_dialogs")
+local lsfirewall = tryRequire("localsend_firewall")
+local lsserver = tryRequire("localsend_server")
+
+-- Check if any critical optional modules failed
+if not state or not lsserver then
+    RECOVERY_MODE = true
+    logger.warn("[LocalSend] Entering recovery mode due to missing modules")
+    for _, err in ipairs(module_load_errors) do
+        logger.warn("[LocalSend] Module load error:", err)
+    end
+end
 
 -- Import utility functions from localsend_utils module
 local isValidPath = lsutils.isValidPath
 local isValidPort = lsutils.isValidPort
-local compareVersions = lsutils.compareVersions
-local findAssetForArch = lsutils.findAssetForArch
-local normalizeApostrophes = lsutils.normalizeApostrophes
 local validateDeviceName = lsutils.validateDeviceName
 
 local data_dir = DataStorage:getFullDataDir()
 local plugin_path = data_dir .. "/plugins/localsend.koplugin"
 
--- ServerState is now in localsend_state.lua module
-local ServerState = state.ServerState
+-- ServerState is now in localsend_state.lua module (nil in recovery mode)
+local ServerState = state and state.ServerState or nil
 
 -- Load plugin metadata safely (wrap dofile in pcall)
 local plugin_meta
@@ -52,6 +75,12 @@ local PLUGIN_VERSION = plugin_meta.version or "unknown"
 local binary_path = plugin_path .. "/localsend"
 local certs_path = plugin_path .. "/certs"  -- Certs folder next to binary (managed by Go)
 
+-- Check if a previous update failed and reinstall is required
+local REINSTALL_REQUIRED = lsupdate.isReinstallRequired(plugin_path)
+if REINSTALL_REQUIRED then
+    logger.warn("[LocalSend] Reinstall required due to previous failed update")
+end
+
 -- Check if binary exists
 if not util.pathExists(binary_path) then
     return { disabled = true, }
@@ -63,6 +92,12 @@ local LocalSend = WidgetContainer:extend{
 }
 
 function LocalSend:init()
+    -- In recovery mode, only initialize update functionality
+    if RECOVERY_MODE then
+        self:_initRecoveryMode()
+        return
+    end
+
     local loaded_port = G_reader_settings:readSetting("LocalSend_port") or "53317"
     if not isValidPort(loaded_port) then
         logger.warn("[LocalSend] Invalid port in settings, using default 53317")
@@ -99,66 +134,72 @@ function LocalSend:init()
         G_reader_settings = G_reader_settings,
     })
 
-    -- Initialize routing module with dependencies
-    lsrouting.init({
-        UIManager = UIManager,
-        InfoMessage = InfoMessage,
-        InputDialog = InputDialog,
-        PathChooser = PathChooser,
-        json = json,
-        logger = logger,
-        T = T,
-        _ = _,
-        G_reader_settings = G_reader_settings,
-    })
+    -- Initialize optional modules with dependencies (guarded for recovery mode)
+    if lsrouting then
+        lsrouting.init({
+            UIManager = UIManager,
+            InfoMessage = InfoMessage,
+            InputDialog = InputDialog,
+            PathChooser = PathChooser,
+            json = json,
+            logger = logger,
+            T = T,
+            _ = _,
+            G_reader_settings = G_reader_settings,
+        })
+    end
 
-    -- Initialize transfers module with dependencies
-    lstransfers.init({
-        UIManager = UIManager,
-        InfoMessage = InfoMessage,
-        Notification = Notification,
-        util = util,
-        json = json,
-        logger = logger,
-        T = T,
-        _ = _,
-    })
+    if lstransfers then
+        lstransfers.init({
+            UIManager = UIManager,
+            InfoMessage = InfoMessage,
+            Notification = Notification,
+            util = util,
+            json = json,
+            logger = logger,
+            T = T,
+            _ = _,
+        })
+    end
 
-    -- Initialize dialogs module with dependencies
-    lsdialogs.init({
-        UIManager = UIManager,
-        InfoMessage = InfoMessage,
-        InputDialog = InputDialog,
-        PathChooser = PathChooser,
-        util = util,
-        logger = logger,
-        T = T,
-        _ = _,
-        G_reader_settings = G_reader_settings,
-    })
+    if lsdialogs then
+        lsdialogs.init({
+            UIManager = UIManager,
+            InfoMessage = InfoMessage,
+            InputDialog = InputDialog,
+            PathChooser = PathChooser,
+            util = util,
+            logger = logger,
+            T = T,
+            _ = _,
+            G_reader_settings = G_reader_settings,
+        })
+    end
 
-    -- Initialize firewall module with dependencies
-    lsfirewall.init({
-        Device = Device,
-        util = util,
-        logger = logger,
-    })
+    if lsfirewall then
+        lsfirewall.init({
+            Device = Device,
+            util = util,
+            logger = logger,
+        })
+    end
 
-    -- Initialize server module with dependencies
-    lsserver.init({
-        UIManager = UIManager,
-        InfoMessage = InfoMessage,
-        Notification = Notification,
-        Device = Device,
-        PluginShare = PluginShare,
-        util = util,
-        logger = logger,
-        T = T,
-        _ = _,
-    }, {
-        binary_path = binary_path,
-        plugin_path = plugin_path,
-    })
+    if lsserver then
+        lsserver.init({
+            UIManager = UIManager,
+            InfoMessage = InfoMessage,
+            Notification = Notification,
+            Device = Device,
+            PluginShare = PluginShare,
+            util = util,
+            logger = logger,
+            T = T,
+            _ = _,
+        }, {
+            binary_path = binary_path,
+            plugin_path = plugin_path,
+        })
+    end
 
     -- Cache for menu rendering (avoids disk I/O on every menu open)
     -- Updated via _updateCache() on state changes
@@ -217,6 +258,26 @@ function LocalSend:init()
 
     self.ui.menu:registerToMainMenu(self)
     self:onDispatcherRegisterActions()
+end
+
+-- Recovery mode initialization - minimal setup for reinstall capability
+function LocalSend:_initRecoveryMode()
+    logger.warn("[LocalSend] Initializing in recovery mode")
+
+    -- Initialize only the update module (critical for recovery)
+    lsupdate.init({
+        UIManager = UIManager,
+        InfoMessage = InfoMessage,
+        NetworkMgr = NetworkMgr,
+        util = util,
+        json = json,
+        logger = logger,
+        T = T,
+        _ = _,
+        G_reader_settings = G_reader_settings,
+    })
+
+    self.ui.menu:registerToMainMenu(self)
 end
 
 -- Clean up orphaned resources from previous crashes (stale PID file, firewall rules)
@@ -508,10 +569,22 @@ end
 -- Start the LocalSend server
 -- @param silent boolean If true, suppress the startup notification (used for resume from sleep)
 function LocalSend:start(silent)
+    -- Block server start if reinstall is required (plugin may be in broken state)
+    if REINSTALL_REQUIRED then
+        if not silent then
+            UIManager:show(InfoMessage:new{
+                icon = "notice-warning",
+                text = _("Cannot start LocalSend: plugin reinstall required.\n\nPlease use 'Check for updates' to reinstall."),
+            })
+        end
+        return
+    end
     lsserver.start(self, silent)
 end
 
 function LocalSend:isRunning()
+    -- In recovery mode, lsserver is nil - server cannot be running
+    if not lsserver then return false end
     return lsserver.isRunning()
 end
 
@@ -552,8 +625,8 @@ function LocalSend:showPinDialog(touchmenu_instance)
     lsdialogs.showPinDialog(self, touchmenu_instance)
 end
 
-function LocalSend:showCustomExtDialog()
-    lsdialogs.showCustomExtDialog(self)
+function LocalSend:showCustomExtDialog(touchmenu_instance)
+    lsdialogs.showCustomExtDialog(self, touchmenu_instance)
 end
 
 function LocalSend:buildExtensionPresetsMenu()
@@ -677,8 +750,54 @@ function LocalSend:checkForUpdates()
 end
 
 function LocalSend:addToMainMenu(menu_items)
+    -- Recovery mode: show minimal menu with only reinstall option
+    if RECOVERY_MODE then
+        menu_items.localsend = {
+            text = _("LocalSend (Recovery Mode)"),
+            sorting_hint = "network",
+            sub_item_table = {
+                {
+                    text = _("Plugin Error - Reinstall Required"),
+                    enabled_func = function() return false end,
+                },
+                {
+                    text = _("Missing modules:"),
+                    enabled_func = function() return false end,
+                },
+                {
+                    text_func = function()
+                        local errors = {}
+                        for _, err in ipairs(module_load_errors) do
+                            -- Extract just the module name
+                            local mod_name = err:match("^([^:]+)")
+                            if mod_name then
+                                table.insert(errors, "  • " .. mod_name)
+                            end
+                        end
+                        return table.concat(errors, "\n")
+                    end,
+                    enabled_func = function() return false end,
+                    separator = true,
+                },
+                {
+                    text_func = function()
+                        return T(_("Reinstall plugin (%1)"), PLUGIN_VERSION)
+                    end,
+                    keep_menu_open = true,
+                    callback = function()
+                        self:checkForUpdates()
+                    end,
+                },
+            },
+        }
+        return
+    end
+
     menu_items.localsend = {
         text_func = function()
+            if REINSTALL_REQUIRED then
+                return _("LocalSend (⚠ Reinstall Required)")
+            end
             if self._cached_running then
                 if self._cached_transfer_count > 0 then
                     return T(_("LocalSend (%1 received)"), self._cached_transfer_count)
@@ -699,250 +818,263 @@ function LocalSend:addToMainMenu(menu_items)
                 end
             end)
         end,
+        sub_item_table = self:_buildMainMenu(),
+    }
+end
+
+-- Build the main menu items (extracted to allow conditional warning item)
+function LocalSend:_buildMainMenu()
+    local menu = {}
+
+    -- Add warning item at top if reinstall is required
+    if REINSTALL_REQUIRED then
+        table.insert(menu, {
+            text = _("⚠ Previous update failed - Reinstall required"),
+            enabled_func = function() return false end,
+            separator = true,
+        })
+    end
+
+    -- Start/Stop server
+    table.insert(menu, {
+        text_func = function()
+            if self._cached_running then
+                return _("Stop server")
+            else
+                return _("Start server")
+            end
+        end,
+        keep_menu_open = true,
+        checked_func = function() return self._cached_running end,
+        enabled_func = function()
+            -- Allow stopping if running, but block starting if reinstall required
+            return self._cached_running or not REINSTALL_REQUIRED
+        end,
+        check_callback_updates_menu = true,
+        callback = function(touchmenu_instance)
+            self:onToggleLocalSend()
+            UIManager:scheduleIn(1, function()
+                if touchmenu_instance then
+                    touchmenu_instance:updateItems()
+                end
+            end)
+        end,
+    })
+
+    -- Recent transfers
+    table.insert(menu, {
+        text_func = function()
+            if self._cached_transfer_count > 0 then
+                return T(_("Recent transfers (%1)"), self._cached_transfer_count)
+            end
+            return _("Recent transfers")
+        end,
+        enabled_func = function() return self._cached_transfer_count > 0 end,
+        callback = function()
+            self:showRecentTransfers()
+        end,
+    })
+
+    -- Save directory
+    table.insert(menu, {
+        text_func = function()
+            return T(_("Save directory (%1)"), self.save_dir)
+        end,
+        keep_menu_open = true,
+        enabled_func = function() return not self._cached_running end,
+        callback = function(touchmenu_instance)
+            self:showSaveDirPicker(touchmenu_instance)
+        end,
+    })
+
+    -- Settings submenu
+    table.insert(menu, {
+        text = _("Settings"),
+        enabled_func = function() return not self._cached_running end,
         sub_item_table = {
             {
                 text_func = function()
-                    if self._cached_running then
-                        return _("Stop server")
+                    if self.device_name ~= "" then
+                        return T(_("Device name (%1)"), self.device_name)
                     else
-                        return _("Start server")
+                        return _("Device name (KOReader)")
                     end
                 end,
                 keep_menu_open = true,
-                checked_func = function() return self._cached_running end,
-                check_callback_updates_menu = true,  -- Hint for menu system to update on check change
                 callback = function(touchmenu_instance)
-                    self:onToggleLocalSend()
-                    UIManager:scheduleIn(1, function()
-                        if touchmenu_instance then
-                            touchmenu_instance:updateItems()
+                    self:showDeviceNameDialog(touchmenu_instance)
+                end,
+            },
+            {
+                text_func = function()
+                    if self.routing_enabled and next(self.ext_dirs) then
+                        return _("Allowed extensions (using routing)")
+                    elseif self.accept_ext ~= "" then
+                        return T(_("Allowed extensions (%1)"), self.accept_ext)
+                    else
+                        return _("Allowed extensions (all)")
+                    end
+                end,
+                enabled_func = function()
+                    return not (self.routing_enabled and next(self.ext_dirs))
+                end,
+                sub_item_table_func = function()
+                    return self:buildExtensionPresetsMenu()
+                end,
+                help_text = _("When file type routing is enabled, allowed extensions are determined by the routing rules."),
+            },
+            {
+                text_func = function()
+                    local count = 0
+                    for _ in pairs(self.ext_dirs) do count = count + 1 end
+                    if count > 0 then
+                        if self.routing_enabled then
+                            return T(_("File type routing (%1 rules)"), count)
+                        else
+                            return T(_("File type routing (disabled, %1 rules)"), count)
                         end
-                    end)
-                end,
-            },
-            {
-                text_func = function()
-                    if self._cached_transfer_count > 0 then
-                        return T(_("Recent transfers (%1)"), self._cached_transfer_count)
+                    else
+                        return _("File type routing")
                     end
-                    return _("Recent transfers")
                 end,
-                enabled_func = function() return self._cached_transfer_count > 0 end,
-                callback = function()
-                    self:showRecentTransfers()
+                sub_item_table_func = function()
+                    return self:buildExtensionRoutingMenu()
                 end,
+                help_text = _("Route different file types to different directories (e.g., EPUBs to Books folder, PDFs to Documents)."),
             },
             {
                 text_func = function()
-                    return T(_("Save directory (%1)"), self.save_dir)
+                    if self.pin ~= "" then
+                        return _("PIN code (enabled)")
+                    else
+                        return _("PIN code (disabled)")
+                    end
                 end,
                 keep_menu_open = true,
-                enabled_func = function() return not self._cached_running end,
                 callback = function(touchmenu_instance)
-                    self:showSaveDirPicker(touchmenu_instance)
+                    self:showPinDialog(touchmenu_instance)
                 end,
+                separator = true,
             },
             {
-                text = _("Settings"),
-                enabled_func = function() return not self._cached_running end,
-                sub_item_table = {
-                    {
-                        text_func = function()
-                            if self.device_name ~= "" then
-                                return T(_("Device name (%1)"), self.device_name)
-                            else
-                                return _("Device name (KOReader)")
-                            end
-                        end,
-                        keep_menu_open = true,
-                        callback = function(touchmenu_instance)
-                            self:showDeviceNameDialog(touchmenu_instance)
-                        end,
-                    },
-                    {
-                        text_func = function()
-                            if self.routing_enabled and next(self.ext_dirs) then
-                                return _("Allowed extensions (using routing)")
-                            elseif self.accept_ext ~= "" then
-                                return T(_("Allowed extensions (%1)"), self.accept_ext)
-                            else
-                                return _("Allowed extensions (all)")
-                            end
-                        end,
-                        enabled_func = function()
-                            return not (self.routing_enabled and next(self.ext_dirs)) -- Disabled when routing is enabled
-                        end,
-                        sub_item_table_func = function()
-                            return self:buildExtensionPresetsMenu()
-                        end,
-                        help_text = _("When file type routing is enabled, allowed extensions are determined by the routing rules."),
-                    },
-                    {
-                        text_func = function()
-                            local count = 0
-                            for _ in pairs(self.ext_dirs) do count = count + 1 end
-                            if count > 0 then
-                                if self.routing_enabled then
-                                    return T(_("File type routing (%1 rules)"), count)
-                                else
-                                    return T(_("File type routing (disabled, %1 rules)"), count)
-                                end
-                            else
-                                return _("File type routing")
-                            end
-                        end,
-                        sub_item_table_func = function()
-                            return self:buildExtensionRoutingMenu()
-                        end,
-                        help_text = _("Route different file types to different directories (e.g., EPUBs to Books folder, PDFs to Documents)."),
-                    },
-                    {
-                        text_func = function()
-                            if self.pin ~= "" then
-                                return _("PIN code (enabled)")
-                            else
-                                return _("PIN code (disabled)")
-                            end
-                        end,
-                        keep_menu_open = true,
-                        callback = function(touchmenu_instance)
-                            self:showPinDialog(touchmenu_instance)
-                        end,
-                    },
-                    {
-                        text = "---",
-                    },
-                    {
-                        text = _("Use HTTPS"),
-                        checked_func = function() return self.use_https end,
-                        callback = function()
-                            self.use_https = not self.use_https
-                            G_reader_settings:flipNilOrTrue("LocalSend_use_https")
-                        end,
-                    },
-                    {
-                        text = _("Start with KOReader"),
-                        checked_func = function() return self.autostart end,
-                        callback = function()
-                            self.autostart = not self.autostart
-                            G_reader_settings:flipNilOrFalse("LocalSend_autostart")
-                        end,
-                    },
-                    {
-                        text = _("Enable WebRTC Support (Experimental)"),
-                        checked_func = function() return self.use_webrtc end,
-                        callback = function()
-                            self.use_webrtc = not self.use_webrtc
-                            G_reader_settings:flipNilOrFalse("LocalSend_use_webrtc")
-                        end,
-                        help_text = _("Connect to public signaling server for WebRTC transfers. Requires internet access."),
-                    },
-                    {
-                        text = _("Rotate certificates"),
-                        keep_menu_open = true,
-                        callback = function()
-                            self:rotateCertificates()
-                        end,
-                    },
-                },
+                text = _("Use HTTPS"),
+                checked_func = function() return self.use_https end,
+                callback = function()
+                    self.use_https = not self.use_https
+                    G_reader_settings:flipNilOrTrue("LocalSend_use_https")
+                end,
+                help_text = _("HTTPS encrypts transfers for security. Disable only if you experience compatibility issues."),
             },
             {
-                text = "---",
+                text = _("Start with KOReader"),
+                checked_func = function() return self.autostart end,
+                callback = function()
+                    self.autostart = not self.autostart
+                    G_reader_settings:flipNilOrFalse("LocalSend_autostart")
+                end,
+                help_text = _("Automatically start the LocalSend server when KOReader launches."),
             },
             {
-                text_func = function()
-                    if self.auto_update_check then
-                        local intervals = { [12] = "12h", [24] = "24h", [72] = "3 days", [168] = "Weekly" }
-                        local label = intervals[self.update_check_interval_hours] or (self.update_check_interval_hours .. "h")
-                        return T(_("Auto-check for updates (%1)"), label)
-                    else
-                        return _("Auto-check for updates")
-                    end
+                text = _("Enable WebRTC Support (Experimental)"),
+                checked_func = function() return self.use_webrtc end,
+                callback = function()
+                    self.use_webrtc = not self.use_webrtc
+                    G_reader_settings:flipNilOrFalse("LocalSend_use_webrtc")
                 end,
-                checked_func = function() return self.auto_update_check end,
-                -- Long-press to quick toggle enable/disable
-                hold_callback = function(touchmenu_instance)
-                    self.auto_update_check = not self.auto_update_check
-                    G_reader_settings:flipNilOrTrue("LocalSend_auto_update_check")
-                    if self.auto_update_check then
-                        self:_scheduleUpdateCheck()
-                    else
-                        self:_unscheduleUpdateCheck()
-                    end
-                    if touchmenu_instance then
-                        touchmenu_instance:updateItems()
-                    end
-                end,
-                -- Tap to open submenu for interval configuration
-                sub_item_table = {
-                    {
-                        text = _("Enable auto-check"),
-                        checked_func = function() return self.auto_update_check end,
-                        callback = function()
-                            self.auto_update_check = not self.auto_update_check
-                            G_reader_settings:flipNilOrTrue("LocalSend_auto_update_check")
-                            if self.auto_update_check then
-                                self:_scheduleUpdateCheck()
-                            else
-                                self:_unscheduleUpdateCheck()
-                            end
-                        end,
-                    },
-                    { text = "---" },
-                    {
-                        text = _("Every 12 hours"),
-                        enabled_func = function() return self.auto_update_check end,
-                        checked_func = function() return self.update_check_interval_hours == 12 end,
-                        callback = function()
-                            self.update_check_interval_hours = 12
-                            G_reader_settings:saveSetting("LocalSend_update_check_interval_hours", 12)
-                        end,
-                    },
-                    {
-                        text = _("Every 24 hours"),
-                        enabled_func = function() return self.auto_update_check end,
-                        checked_func = function() return self.update_check_interval_hours == 24 end,
-                        callback = function()
-                            self.update_check_interval_hours = 24
-                            G_reader_settings:saveSetting("LocalSend_update_check_interval_hours", 24)
-                        end,
-                    },
-                    {
-                        text = _("Every 3 days"),
-                        enabled_func = function() return self.auto_update_check end,
-                        checked_func = function() return self.update_check_interval_hours == 72 end,
-                        callback = function()
-                            self.update_check_interval_hours = 72
-                            G_reader_settings:saveSetting("LocalSend_update_check_interval_hours", 72)
-                        end,
-                    },
-                    {
-                        text = _("Weekly (default)"),
-                        enabled_func = function() return self.auto_update_check end,
-                        checked_func = function() return self.update_check_interval_hours == 168 end,
-                        callback = function()
-                            self.update_check_interval_hours = 168
-                            G_reader_settings:saveSetting("LocalSend_update_check_interval_hours", 168)
-                        end,
-                    },
-                },
+                help_text = _("Connect to public signaling server for WebRTC transfers. Requires internet access."),
             },
             {
-                text_func = function()
-                    return T(_("Check for updates (%1)"), PLUGIN_VERSION)
-                end,
+                text = _("Rotate certificates"),
                 keep_menu_open = true,
                 callback = function()
-                    self:checkForUpdates()
+                    self:rotateCertificates()
                 end,
+                help_text = _("Generate new TLS certificates. Use if you experience connection issues or want to reset trusted device pairings."),
             },
-        }
-    }
+        },
+        separator = true,
+    })
+
+    -- Auto-check for updates
+    table.insert(menu, {
+        text_func = function()
+            if self.auto_update_check then
+                local intervals = { [12] = "12h", [24] = "24h", [72] = "3 days", [168] = "Weekly" }
+                local label = intervals[self.update_check_interval_hours] or (self.update_check_interval_hours .. "h")
+                return T(_("Auto-check for updates (%1)"), label)
+            else
+                return _("Auto-check for updates")
+            end
+        end,
+        checked_func = function() return self.auto_update_check end,
+        hold_callback = function(touchmenu_instance)
+            self.auto_update_check = not self.auto_update_check
+            G_reader_settings:flipNilOrTrue("LocalSend_auto_update_check")
+            if self.auto_update_check then
+                self:_scheduleUpdateCheck()
+            else
+                self:_unscheduleUpdateCheck()
+            end
+            if touchmenu_instance then
+                touchmenu_instance:updateItems()
+            end
+        end,
+        sub_item_table_func = function()
+            local intervals = {
+                { value = 12, text = _("Every 12 hours") },
+                { value = 24, text = _("Every 24 hours") },
+                { value = 72, text = _("Every 3 days") },
+                { value = 168, text = _("Weekly (default)") },
+            }
+            local submenu = {
+                {
+                    text = _("Enable auto-check"),
+                    checked_func = function() return self.auto_update_check end,
+                    callback = function()
+                        self.auto_update_check = not self.auto_update_check
+                        G_reader_settings:flipNilOrTrue("LocalSend_auto_update_check")
+                        if self.auto_update_check then
+                            self:_scheduleUpdateCheck()
+                        else
+                            self:_unscheduleUpdateCheck()
+                        end
+                    end,
+                    separator = true,
+                },
+            }
+            local radio_items = lsutils.buildRadioMenu(
+                intervals,
+                function() return self.update_check_interval_hours end,
+                function(v)
+                    self.update_check_interval_hours = v
+                    G_reader_settings:saveSetting("LocalSend_update_check_interval_hours", v)
+                end,
+                function() return self.auto_update_check end
+            )
+            for _, item in ipairs(radio_items) do
+                table.insert(submenu, item)
+            end
+            return submenu
+        end,
+    })
+
+    -- Check for updates
+    table.insert(menu, {
+        text_func = function()
+            return T(_("Check for updates (%1)"), PLUGIN_VERSION)
+        end,
+        keep_menu_open = true,
+        callback = function()
+            self:checkForUpdates()
+        end,
+    })
+
+    return menu
 end
 
 function LocalSend:onDispatcherRegisterActions()
     Dispatcher:registerAction("toggle_localsend_server",
-        { category = "none", event = "ToggleLocalSend", title = _("Toggle LocalSend server"), general = true })
+        { category = "none", event = "ToggleLocalSend", title = _("Toggle LocalSend server"), general = true, separator = true })
 end
 
 -- Expose ServerState for testing purposes

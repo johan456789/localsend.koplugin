@@ -32,9 +32,7 @@ jobs:
           mkdir -p "$BUILD_DIR/$PLUGIN_NAME"
 
           # Copy plugin source files
-          cp "$PLUGIN_SRC/main.lua" "$BUILD_DIR/$PLUGIN_NAME/"
-          cp "$PLUGIN_SRC/_meta.lua" "$BUILD_DIR/$PLUGIN_NAME/"
-          cp "$PLUGIN_SRC/localsend_utils.lua" "$BUILD_DIR/$PLUGIN_NAME/"
+          cp "$PLUGIN_SRC"/*.lua "$BUILD_DIR/$PLUGIN_NAME/"
 
           # Build for armv5 (soft-float, legacy devices like K3)
           echo "Building for armv5 (legacy)..."

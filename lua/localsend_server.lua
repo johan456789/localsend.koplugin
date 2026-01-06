@@ -1,0 +1,418 @@
+-- localsend_server.lua
+-- Server lifecycle management for LocalSend plugin
+-- Handles starting, stopping, and monitoring the LocalSend CLI process
+
+local state = require("localsend_state")
+
+local M = {}
+
+-- Module constants
+M.pid_file = "/tmp/localsend_koreader.pid"
+M.transfer_log_file = "/tmp/localsend_transfers.log"
+M.transfer_notify_file = "/tmp/localsend_notify"
+M.SENTINEL_POLL_INTERVAL = 2
+
+-- Dependencies container (set via M.init)
+local deps = {}
+
+-- Path configuration (set via M.init)
+local binary_path = nil
+
+-- Initialize module with dependencies
+-- @param d table Dependencies: { UIManager, InfoMessage, Notification, Device, PluginShare, util, logger, T, _ }
+-- @param paths table Paths: { binary_path, plugin_path }
+function M.init(d, paths)
+    deps = d
+    binary_path = paths.binary_path
+end
+
+-- ServerState reference for convenience
+local function getServerState()
+    return state.ServerState
+end
+
+-- Check if the server process is running
+-- @return boolean True if server is running
+function M.isRunning()
+    if not deps.util.pathExists(M.pid_file) then
+        return false
+    end
+
+    local content = deps.util.readFromFile(M.pid_file)
+    if not content then return false end
+    local pid = tonumber(content:match("^(%d+)"))
+    if not pid then return false end
+    return deps.util.pathExists("/proc/" .. pid)
+end
+
+-- Non-blocking server startup wait using UIManager scheduling
+-- @param instance table LocalSend instance
+-- @param attempts_remaining number Remaining attempts
+-- @param silent boolean Suppress notifications
+-- @param on_ready function Callback when server is ready
+-- @param on_failure function Callback when startup fails
+function M.waitForServerReady(instance, attempts_remaining, silent, on_ready, on_failure)
+    if attempts_remaining <= 0 then
+        on_failure()
+        return
+    end
+    if instance:isRunning() then
+        on_ready()
+        return
+    end
+    -- Non-blocking: schedule next check in 100ms
+    deps.UIManager:scheduleIn(0.1, function()
+        M.waitForServerReady(instance, attempts_remaining - 1, silent, on_ready, on_failure)
+    end)
+end
+
+-- Non-blocking process exit wait using UIManager scheduling
+-- @param pid number Process ID to wait for
+-- @param attempts_remaining number Remaining attempts
+-- @param force boolean Force kill with SIGKILL if timeout
+-- @param callback function Callback with success boolean
+function M.waitForProcessExit(pid, attempts_remaining, force, callback)
+    local function isProcAlive(p)
+        return p and deps.util.pathExists("/proc/" .. p)
+    end
+
+    if not isProcAlive(pid) then
+        callback(true)  -- Process exited successfully
+        return
+    end
+
+    if attempts_remaining <= 0 then
+        if force then
+            -- Force kill with SIGKILL
+            os.execute(deps.util.shell_escape({"kill", "-KILL", tostring(pid)}))
+            -- Give one more brief check after SIGKILL
+            deps.UIManager:scheduleIn(0.2, function()
+                callback(not isProcAlive(pid))
+            end)
+        else
+            callback(false)  -- Process did not exit
+        end
+        return
+    end
+
+    -- Schedule next check in 100ms
+    deps.UIManager:scheduleIn(0.1, function()
+        M.waitForProcessExit(pid, attempts_remaining - 1, force, callback)
+    end)
+end
+
+-- Called when server has been confirmed running after startup
+-- @param instance table LocalSend instance
+-- @param silent boolean Suppress notifications
+-- @param effective_name string The device name used
+function M.onServerStarted(instance, silent, effective_name)
+    local ServerState = getServerState()
+
+    -- Update cache now that server is running
+    instance:_updateCache()
+
+    -- Expose running state to other plugins via PluginShare
+    deps.PluginShare.localsend_running = true
+
+    -- Register event handlers now that server is running
+    instance:registerEvents()
+
+    -- Recreate task references if they were nullified by onCloseWidget
+    -- This can happen during suspend/resume cycles when the widget is closed
+    if not instance.check_sentinel_task then
+        instance.check_sentinel_task = function()
+            instance:_checkSentinelFile()
+        end
+    end
+
+    -- Start fast sentinel polling for responsive notifications
+    instance:_unschedulePolling()  -- Ensure no duplicate polling
+    ServerState.last_sentinel_value = nil  -- Reset to pick up current state
+    deps.UIManager:scheduleIn(M.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
+
+    if not silent then
+        -- Build concise startup message for top notification
+        local network_info = deps.Device.retrieveNetworkInfo and deps.Device:retrieveNetworkInfo() or nil
+        local pin_status = instance.pin ~= "" and deps._("PIN") or nil
+
+        local message_parts = { effective_name }
+
+        -- Try to extract IP and show with port for manual connection
+        local ip_addr = network_info and network_info:match("(%d+%.%d+%.%d+%.%d+)")
+        if ip_addr then
+            table.insert(message_parts, ip_addr .. ":" .. instance.port)
+        end
+
+        if pin_status then
+            table.insert(message_parts, pin_status)
+        end
+
+        deps.UIManager:show(deps.Notification:new{
+            text = deps._("LocalSend Ready") .. " - " .. table.concat(message_parts, " | "),
+            timeout = 5,
+        })
+    else
+        deps.logger.dbg("[LocalSend] Server restarted after resume")
+    end
+end
+
+-- Called when server startup has failed
+-- @param instance table LocalSend instance
+-- @param silent boolean Suppress notifications
+function M.onServerStartFailed(instance, silent)
+    instance:closeFirewall()
+    instance:_updateCache()
+
+    if not silent then
+        deps.UIManager:show(deps.InfoMessage:new{
+            icon = "notice-warning",
+            text = deps._("LocalSend process failed to start within 5 seconds. Check if the binary works."),
+        })
+    else
+        deps.logger.warn("[LocalSend] Failed to restart server after resume")
+    end
+end
+
+-- Start the LocalSend server
+-- @param instance table LocalSend instance
+-- @param silent boolean If true, suppress the startup notification
+function M.start(instance, silent)
+    local ServerState = getServerState()
+
+    -- If server is already running, just take over polling responsibility
+    if instance:isRunning() then
+        deps.logger.dbg("[LocalSend] Server already running, taking over polling")
+        -- Sync cache with actual state
+        instance:_updateCache()
+        -- Expose running state to other plugins
+        deps.PluginShare.localsend_running = true
+        -- Start sentinel polling for fast notifications
+        instance:_unschedulePolling()
+        ServerState.last_sentinel_value = nil
+        deps.UIManager:scheduleIn(M.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
+        -- Ensure event handlers are registered
+        instance:registerEvents()
+        return
+    end
+
+    -- Validate save directory
+    local valid, err = instance:validateSaveDir(instance.save_dir)
+    if not valid then
+        if not silent then
+            deps.UIManager:show(deps.InfoMessage:new{
+                icon = "notice-warning",
+                text = deps.T(deps._("Invalid save directory: %1"), err),
+            })
+        end
+        return
+    end
+
+    -- Clear old transfer log and reset count (only on fresh start, not resume)
+    if not silent then
+        instance:clearTransferLog()
+    end
+
+    -- Build command arguments table
+    local args = {binary_path, "recv", "-d", instance.save_dir, "-l", M.transfer_log_file}
+
+    -- Always pass device name (default to "KOReader" if not set)
+    local effective_name = instance.device_name ~= "" and instance.device_name or "KOReader"
+    table.insert(args, "-n")
+    table.insert(args, effective_name)
+
+    if instance.pin ~= "" then
+        table.insert(args, "-p")
+        table.insert(args, instance.pin)
+    end
+
+    -- Determine accept_ext based on routing or manual setting
+    local effective_accept_ext = instance.accept_ext
+    if instance.routing_enabled and next(instance.ext_dirs) then
+        -- Routing is active: accept only routed extensions (unless accept_all is enabled)
+        if not instance.routing_accept_all then
+            local exts = {}
+            for ext, _ in pairs(instance.ext_dirs) do
+                table.insert(exts, ext)
+            end
+            effective_accept_ext = table.concat(exts, ",")
+        else
+            effective_accept_ext = "" -- Accept all
+        end
+    end
+
+    if effective_accept_ext ~= "" then
+        table.insert(args, "-a")
+        table.insert(args, effective_accept_ext)
+    end
+
+    if not instance.use_https then
+        table.insert(args, "--https=false")
+    end
+
+    if not instance.use_webrtc then
+        table.insert(args, "-w=false")
+    end
+
+    -- Export and apply extension routing config if configured
+    local routing_path = instance:exportExtRouting()
+    if routing_path then
+        table.insert(args, "--ext-routing")
+        table.insert(args, routing_path)
+    end
+
+    -- Add on-transfer callback to write unique value to sentinel file for fast notification
+    -- Using date +%s%N gives nanosecond precision to avoid mtime resolution issues
+    table.insert(args, "--on-transfer")
+    table.insert(args, "date +%s%N > " .. M.transfer_notify_file)
+
+    -- Open firewall before starting
+    instance:openFirewall()
+
+    -- Build final command: run in background and save PID
+    local cmd = string.format("(%s) & echo $! > %s", deps.util.shell_escape(args), deps.util.shell_escape({M.pid_file}))
+
+    deps.logger.dbg("[LocalSend] Starting server: ", cmd)
+
+    local result = os.execute(cmd)
+
+    if result == 0 then
+        -- Non-blocking wait for server readiness (max 5 seconds = 50 * 100ms)
+        M.waitForServerReady(instance, 50, silent,
+            -- on_ready callback
+            function()
+                M.onServerStarted(instance, silent, effective_name)
+            end,
+            -- on_failure callback
+            function()
+                M.onServerStartFailed(instance, silent)
+            end
+        )
+    else
+        instance:closeFirewall()
+        instance:_updateCache()
+        if not silent then
+            local info = deps.InfoMessage:new{
+                icon = "notice-warning",
+                text = deps._("Failed to start LocalSend server."),
+            }
+            deps.UIManager:show(info)
+        else
+            deps.logger.warn("[LocalSend] Failed to start server after resume")
+        end
+    end
+end
+
+-- Stop the LocalSend server process
+-- @param instance table LocalSend instance
+-- @return boolean True if server was stopped
+function M.stopServer(instance)
+    -- Unschedule Lua tasks first
+    instance:_unschedulePolling()
+
+    -- Read PID before removing file
+    local pid = nil
+    if deps.util.pathExists(M.pid_file) then
+        local content = deps.util.readFromFile(M.pid_file)
+        if content then
+            pid = tonumber(content:match("^(%d+)"))
+        end
+        -- Remove PID file FIRST to prevent state confusion
+        -- This ensures isRunning() returns false immediately
+        os.remove(M.pid_file)
+    else
+        -- No PID file means server wasn't running
+        M.cleanupServerState(instance)
+        return true
+    end
+
+    -- Kill the process if PID is valid and process exists
+    if pid and deps.util.pathExists("/proc/" .. pid) then
+        -- Use SIGKILL (signal 9) for guaranteed, immediate termination
+        -- SIGKILL cannot be caught, blocked, or ignored - kernel handles it directly
+        -- Using os.execute instead of ffiutil.terminateSubProcess for reliability
+        os.execute("kill -9 " .. tostring(pid) .. " 2>/dev/null")
+    end
+
+    -- Clean up firewall and state
+    instance:closeFirewall()
+    M.cleanupServerState(instance)
+
+    return true
+end
+
+-- Clean up server state after stopping (PluginShare, cache, events)
+-- @param instance table LocalSend instance
+function M.cleanupServerState(instance)
+    -- Clear PluginShare state
+    deps.PluginShare.localsend_running = nil
+
+    -- Update cache
+    instance:_updateCache()
+
+    -- Update event registration (may unregister handlers if server stopped)
+    instance:registerEvents()
+end
+
+-- User-initiated stop with notification
+-- @param instance table LocalSend instance
+function M.stop(instance)
+    local ServerState = getServerState()
+    -- Mark that user explicitly stopped the server this session
+    -- This prevents autostart from restarting it when opening a new document
+    ServerState.user_stopped = true
+    instance:stopServer()
+    deps.UIManager:show(deps.Notification:new{
+        text = deps._("LocalSend stopped"),
+        timeout = 2,
+    })
+end
+
+-- Restart the server
+-- @param instance table LocalSend instance
+function M.restart(instance)
+    if instance:isRunning() then
+        instance:stopServer()
+    end
+    instance:start()
+end
+
+-- Toggle server state (start if stopped, stop if running)
+-- @param instance table LocalSend instance
+function M.toggle(instance)
+    local ServerState = getServerState()
+    if instance:isRunning() then
+        instance:stop()
+    else
+        -- User is explicitly starting the server, clear the stopped flag
+        -- so autostart can work again if they open another document
+        ServerState.user_stopped = false
+        instance:start()
+    end
+end
+
+-- Clean up orphaned resources from previous crashes (stale PID file)
+-- @param instance table LocalSend instance (for closeFirewall callback)
+-- @return boolean True if cleanup was needed
+function M.cleanupOrphanedResources(instance)
+    if deps.util.pathExists(M.pid_file) then
+        local content = deps.util.readFromFile(M.pid_file)
+        if content then
+            local pid = tonumber(content:match("^(%d+)"))
+            if pid and not deps.util.pathExists("/proc/" .. pid) then
+                -- Process is dead but PID file exists - clean up
+                deps.logger.warn("[LocalSend] Found stale PID file, cleaning up")
+                os.remove(M.pid_file)
+                -- Also clean up firewall rules (they may be orphaned)
+                instance:closeFirewall()
+                return true
+            end
+        else
+            -- Empty or unreadable PID file - remove it
+            os.remove(M.pid_file)
+            return true
+        end
+    end
+    return false
+end
+
+return M

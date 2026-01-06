@@ -22,9 +22,7 @@ local lsrouting = require("localsend_routing")
 local lstransfers = require("localsend_transfers")
 local lsdialogs = require("localsend_dialogs")
 local lsfirewall = require("localsend_firewall")
-
--- Polling interval for sentinel file (cheap stat() only)
-local SENTINEL_POLL_INTERVAL = 2
+local lsserver = require("localsend_server")
 
 -- Import utility functions from localsend_utils module
 local isValidPath = lsutils.isValidPath
@@ -53,9 +51,6 @@ end
 local PLUGIN_VERSION = plugin_meta.version or "unknown"
 local binary_path = plugin_path .. "/localsend"
 local certs_path = plugin_path .. "/certs"  -- Certs folder next to binary (managed by Go)
-local pid_file = "/tmp/localsend_koreader.pid"
-local transfer_log_file = "/tmp/localsend_transfers.log"
-local transfer_notify_file = "/tmp/localsend_notify"  -- Sentinel file for fast transfer detection
 
 -- Check if binary exists
 if not util.pathExists(binary_path) then
@@ -149,6 +144,22 @@ function LocalSend:init()
         logger = logger,
     })
 
+    -- Initialize server module with dependencies
+    lsserver.init({
+        UIManager = UIManager,
+        InfoMessage = InfoMessage,
+        Notification = Notification,
+        Device = Device,
+        PluginShare = PluginShare,
+        util = util,
+        logger = logger,
+        T = T,
+        _ = _,
+    }, {
+        binary_path = binary_path,
+        plugin_path = plugin_path,
+    })
+
     -- Cache for menu rendering (avoids disk I/O on every menu open)
     -- Updated via _updateCache() on state changes
     self._cached_running = false
@@ -210,22 +221,7 @@ end
 
 -- Clean up orphaned resources from previous crashes (stale PID file, firewall rules)
 function LocalSend:_cleanupOrphanedResources()
-    if util.pathExists(pid_file) then
-        local content = util.readFromFile(pid_file)
-        if content then
-            local pid = tonumber(content:match("^(%d+)"))
-            if pid and not util.pathExists("/proc/" .. pid) then
-                -- Process is dead but PID file exists - clean up
-                logger.warn("[LocalSend] Found stale PID file, cleaning up")
-                os.remove(pid_file)
-                -- Also clean up firewall rules (they may be orphaned)
-                self:closeFirewall()
-            end
-        else
-            -- Empty or unreadable PID file - remove it
-            os.remove(pid_file)
-        end
-    end
+    lsserver.cleanupOrphanedResources(self)
 end
 
 -- Cleanup when KOReader exits (not when switching documents)
@@ -393,118 +389,21 @@ function LocalSend:_updateCache()
     self._cached_transfer_count = self:getTransferCount()
 end
 
--- Non-blocking server startup wait using UIManager scheduling
--- Replaces busy-wait loop to avoid blocking the UI thread
+-- Server lifecycle functions (delegated to localsend_server module)
 function LocalSend:_waitForServerReady(attempts_remaining, silent, on_ready, on_failure)
-    if attempts_remaining <= 0 then
-        on_failure()
-        return
-    end
-    if self:isRunning() then
-        on_ready()
-        return
-    end
-    -- Non-blocking: schedule next check in 100ms
-    UIManager:scheduleIn(0.1, function()
-        self:_waitForServerReady(attempts_remaining - 1, silent, on_ready, on_failure)
-    end)
+    lsserver.waitForServerReady(self, attempts_remaining, silent, on_ready, on_failure)
 end
 
--- Non-blocking process exit wait using UIManager scheduling
--- Replaces busy-wait loop to avoid blocking the UI thread
 function LocalSend:_waitForProcessExit(pid, attempts_remaining, force, callback)
-    local function isProcAlive(p)
-        return p and util.pathExists("/proc/" .. p)
-    end
-
-    if not isProcAlive(pid) then
-        callback(true)  -- Process exited successfully
-        return
-    end
-
-    if attempts_remaining <= 0 then
-        if force then
-            -- Force kill with SIGKILL
-            os.execute(util.shell_escape({"kill", "-KILL", tostring(pid)}))
-            -- Give one more brief check after SIGKILL
-            UIManager:scheduleIn(0.2, function()
-                callback(not isProcAlive(pid))
-            end)
-        else
-            callback(false)  -- Process did not exit
-        end
-        return
-    end
-
-    -- Schedule next check in 100ms
-    UIManager:scheduleIn(0.1, function()
-        self:_waitForProcessExit(pid, attempts_remaining - 1, force, callback)
-    end)
+    lsserver.waitForProcessExit(pid, attempts_remaining, force, callback)
 end
 
--- Called when server has been confirmed running after startup
 function LocalSend:_onServerStarted(silent, effective_name)
-    -- Update cache now that server is running
-    self:_updateCache()
-
-    -- Expose running state to other plugins via PluginShare
-    PluginShare.localsend_running = true
-
-    -- Register event handlers now that server is running
-    self:registerEvents()
-
-    -- Recreate task references if they were nullified by onCloseWidget
-    -- This can happen during suspend/resume cycles when the widget is closed
-    if not self.check_sentinel_task then
-        self.check_sentinel_task = function()
-            self:_checkSentinelFile()
-        end
-    end
-
-    -- Start fast sentinel polling for responsive notifications
-    self:_unschedulePolling()  -- Ensure no duplicate polling
-    ServerState.last_sentinel_value = nil  -- Reset to pick up current state
-    UIManager:scheduleIn(SENTINEL_POLL_INTERVAL, self.check_sentinel_task)
-
-    if not silent then
-        -- Build concise startup message for top notification
-        local network_info = Device.retrieveNetworkInfo and Device:retrieveNetworkInfo() or nil
-        local pin_status = self.pin ~= "" and _("PIN") or nil
-
-        local message_parts = { effective_name }
-
-        -- Try to extract IP and show with port for manual connection
-        local ip_addr = network_info and network_info:match("(%d+%.%d+%.%d+%.%d+)")
-        if ip_addr then
-            table.insert(message_parts, ip_addr .. ":" .. self.port)
-        end
-
-        if pin_status then
-            table.insert(message_parts, pin_status)
-        end
-
-        UIManager:show(Notification:new{
-            text = _("LocalSend Ready") .. " - " .. table.concat(message_parts, " | "),
-            timeout = 5,
-        })
-    else
-        logger.dbg("[LocalSend] Server restarted after resume")
-    end
+    lsserver.onServerStarted(self, silent, effective_name)
 end
 
--- Called when server startup has failed
 function LocalSend:_onServerStartFailed(silent)
-    self:closeFirewall()
-    self:_updateCache()
-
-    if not silent then
-        UIManager:show(InfoMessage:new{
-            icon = "notice-warning",
-            text = _("LocalSend process failed to start within 5 seconds. Check if the binary works."),
-        })
-    else
-        logger.warn("[LocalSend] Failed to restart server after resume")
-    end
+    lsserver.onServerStartFailed(self, silent)
 end
 
 -- Cleanup scheduled tasks when widget is destroyed (document switch, view change)
@@ -609,215 +508,31 @@ end
 -- Start the LocalSend server
 -- @param silent boolean If true, suppress the startup notification (used for resume from sleep)
 function LocalSend:start(silent)
-    -- If server is already running, just take over polling responsibility
-    if self:isRunning() then
-        logger.dbg("[LocalSend] Server already running, taking over polling")
-        -- Sync cache with actual state
-        self:_updateCache()
-        -- Expose running state to other plugins
-        PluginShare.localsend_running = true
-        -- Start sentinel polling for fast notifications
-        self:_unschedulePolling()
-        ServerState.last_sentinel_value = nil
-        UIManager:scheduleIn(SENTINEL_POLL_INTERVAL, self.check_sentinel_task)
-        -- Ensure event handlers are registered
-        self:registerEvents()
-        return
-    end
-
-    -- Validate save directory
-    local valid, err = self:validateSaveDir(self.save_dir)
-    if not valid then
-        if not silent then
-            UIManager:show(InfoMessage:new{
-                icon = "notice-warning",
-                text = T(_("Invalid save directory: %1"), err),
-            })
-        end
-        return
-    end
-
-    -- Clear old transfer log and reset count (only on fresh start, not resume)
-    if not silent then
-        self:clearTransferLog()
-    end
-
-    -- Build command arguments table
-    local args = {binary_path, "recv", "-d", self.save_dir, "-l", transfer_log_file}
-
-    -- Always pass device name (default to "KOReader" if not set)
-    local effective_name = self.device_name ~= "" and self.device_name or "KOReader"
-    table.insert(args, "-n")
-    table.insert(args, effective_name)
-
-    if self.pin ~= "" then
-        table.insert(args, "-p")
-        table.insert(args, self.pin)
-    end
-
-    -- Determine accept_ext based on routing or manual setting
-    local effective_accept_ext = self.accept_ext
-    if self.routing_enabled and next(self.ext_dirs) then
-        -- Routing is active: accept only routed extensions (unless accept_all is enabled)
-        if not self.routing_accept_all then
-            local exts = {}
-            for ext, _ in pairs(self.ext_dirs) do
-                table.insert(exts, ext)
-            end
-            effective_accept_ext = table.concat(exts, ",")
-        else
-            effective_accept_ext = "" -- Accept all
-        end
-    end
-
-    if effective_accept_ext ~= "" then
-        table.insert(args, "-a")
-        table.insert(args, effective_accept_ext)
-    end
-
-    if not self.use_https then
-        table.insert(args, "--https=false")
-    end
-
-    if not self.use_webrtc then
-        table.insert(args, "-w=false")
-    end
-
-    -- Export and apply extension routing config if configured
-    local routing_path = self:exportExtRouting()
-    if routing_path then
-        table.insert(args, "--ext-routing")
-        table.insert(args, routing_path)
-    end
-
-    -- Add on-transfer callback to write unique value to sentinel file for fast notification
-    -- Using date +%s%N gives nanosecond precision to avoid mtime resolution issues
-    table.insert(args, "--on-transfer")
-    table.insert(args, "date +%s%N > " .. transfer_notify_file)
-
-    -- Open firewall before starting
-    self:openFirewall()
-
-    -- Build final command: run in background and save PID
-    local cmd = string.format("(%s) & echo $! > %s", util.shell_escape(args), util.shell_escape({pid_file}))
-
-    logger.dbg("[LocalSend] Starting server: ", cmd)
-
-    local result = os.execute(cmd)
-
-    if result == 0 then
-        -- Non-blocking wait for server readiness (max 5 seconds = 50 * 100ms)
-        self:_waitForServerReady(50, silent,
-            -- on_ready callback
-            function()
-                self:_onServerStarted(silent, effective_name)
-            end,
-            -- on_failure callback
-            function()
-                self:_onServerStartFailed(silent)
-            end
-        )
-    else
-        self:closeFirewall()
-        self:_updateCache()
-        if not silent then
-            local info = InfoMessage:new{
-                icon = "notice-warning",
-                text = _("Failed to start LocalSend server."),
-            }
-            UIManager:show(info)
-        else
-            logger.warn("[LocalSend] Failed to start server after resume")
-        end
-    end
+    lsserver.start(self, silent)
 end
 
 function LocalSend:isRunning()
-    if not util.pathExists(pid_file) then
-        return false
-    end
-
-    local content = util.readFromFile(pid_file)
-    if not content then return false end
-    local pid = tonumber(content:match("^(%d+)"))
-    if not pid then return false end
-    return util.pathExists("/proc/" .. pid)
+    return lsserver.isRunning()
 end
 
 function LocalSend:stopServer()
-    -- Unschedule Lua tasks first
-    self:_unschedulePolling()
-
-    -- Read PID before removing file
-    local pid = nil
-    if util.pathExists(pid_file) then
-        local content = util.readFromFile(pid_file)
-        if content then
-            pid = tonumber(content:match("^(%d+)"))
-        end
-        -- Remove PID file FIRST to prevent state confusion
-        -- This ensures isRunning() returns false immediately
-        os.remove(pid_file)
-    else
-        -- No PID file means server wasn't running
-        self:_cleanupServerState()
-        return true
-    end
-
-    -- Kill the process if PID is valid and process exists
-    if pid and util.pathExists("/proc/" .. pid) then
-        -- Use SIGKILL (signal 9) for guaranteed, immediate termination
-        -- SIGKILL cannot be caught, blocked, or ignored - kernel handles it directly
-        -- Using os.execute instead of ffiutil.terminateSubProcess for reliability
-        os.execute("kill -9 " .. tostring(pid) .. " 2>/dev/null")
-    end
-
-    -- Clean up firewall and state
-    self:closeFirewall()
-    self:_cleanupServerState()
-
-    return true
+    return lsserver.stopServer(self)
 end
 
--- Clean up server state after stopping (PluginShare, cache, events)
 function LocalSend:_cleanupServerState()
-    -- Clear PluginShare state
-    PluginShare.localsend_running = nil
-
-    -- Update cache
-    self:_updateCache()
-
-    -- Update event registration (may unregister handlers if server stopped)
-    self:registerEvents()
+    lsserver.cleanupServerState(self)
 end
 
 function LocalSend:stop()
-    -- Mark that user explicitly stopped the server this session
-    -- This prevents autostart from restarting it when opening a new document
-    ServerState.user_stopped = true
-    self:stopServer()
-    UIManager:show(Notification:new{
-        text = _("LocalSend stopped"),
-        timeout = 2,
-    })
+    lsserver.stop(self)
 end
 
 function LocalSend:restart()
-    if self:isRunning() then
-        self:stopServer()
-    end
-    self:start()
+    lsserver.restart(self)
 end
 
 function LocalSend:onToggleLocalSend()
-    if self:isRunning() then
-        self:stop()
-    else
-        -- User is explicitly starting the server, clear the stopped flag
-        -- so autostart can work again if they open another document
-        ServerState.user_stopped = false
-        self:start()
-    end
+    lsserver.toggle(self)
 end
 
 -- UI dialog functions (delegated to localsend_dialogs module)

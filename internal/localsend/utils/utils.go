@@ -193,7 +193,7 @@ func GenAndSaveTLScert(privKeyFile, certFile string) (tls.Certificate, error) {
 func LoadOrGenTLScert(privKeyFile, certFile string) (tls.Certificate, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, privKeyFile)
 	if err == nil {
-		return cert, err
+		return cert, nil
 	}
 
 	return GenAndSaveTLScert(privKeyFile, certFile)

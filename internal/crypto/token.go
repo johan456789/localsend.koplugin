@@ -308,11 +308,14 @@ func ParsePublicKeyPEM(pemStr string) (VerifyingKey, error) {
 
 // GenerateSecureToken generates a cryptographically secure random token.
 // This should be used instead of time-based tokens which are predictable.
+// Panics if crypto/rand fails, which indicates a seriously broken system.
 func GenerateSecureToken() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to timestamp if crypto/rand fails (should never happen)
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+		// crypto/rand should never fail on a properly configured system.
+		// If it does, the system's entropy source is broken and we cannot
+		// proceed securely. Panic to make the failure visible.
+		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }

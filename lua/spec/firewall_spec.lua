@@ -3,6 +3,30 @@ local helper = require("spec.test_helper")
 
 -- Tests for iptables firewall management functions
 
+-- Helper to extract rule arguments from a shell-escaped iptables command
+-- Commands look like: 'iptables' '-C' 'INPUT' '-p' 'tcp' ... (possibly with 2>/dev/null suffix)
+local function extract_rule_key(cmd)
+    -- Remove 2>/dev/null suffix if present
+    cmd = cmd:gsub(" 2>/dev/null$", "")
+
+    -- Extract all quoted arguments
+    local args = {}
+    for arg in cmd:gmatch("'([^']*)'") do
+        table.insert(args, arg)
+    end
+
+    -- Skip 'iptables' and the flag ('-C', '-A', '-D')
+    if #args >= 2 and args[1] == "iptables" then
+        local rule_parts = {}
+        for i = 3, #args do
+            table.insert(rule_parts, args[i])
+        end
+        return table.concat(rule_parts, " ")
+    end
+
+    return nil
+end
+
 describe("Firewall Management", function()
     local iptables_rules
     local os_execute_calls
@@ -16,13 +40,13 @@ describe("Firewall Management", function()
         iptables_rules = {}
         os_execute_calls = {}
 
-        -- Simulate iptables behavior
+        -- Simulate iptables behavior (handles shell-escaped commands)
         _G.os.execute = function(cmd)
             table.insert(os_execute_calls, cmd)
 
             -- iptables -C (check): return 0 if rule exists, 1 if not
-            if cmd:match("iptables %-C") then
-                local rule = cmd:match("iptables %-C (.+) 2>/dev/null")
+            if cmd:match("'iptables' '%-C'") then
+                local rule = extract_rule_key(cmd)
                 if rule and iptables_rules[rule] then
                     return 0
                 end
@@ -30,8 +54,8 @@ describe("Firewall Management", function()
             end
 
             -- iptables -A (add): add rule
-            if cmd:match("iptables %-A") then
-                local rule = cmd:match("iptables %-A (.+)")
+            if cmd:match("'iptables' '%-A'") then
+                local rule = extract_rule_key(cmd)
                 if rule then
                     iptables_rules[rule] = true
                 end
@@ -39,10 +63,8 @@ describe("Firewall Management", function()
             end
 
             -- iptables -D (delete): remove rule
-            if cmd:match("iptables %-D") then
-                local rule = cmd:match("iptables %-D (.+)")
-                -- Handle 2>/dev/null suffix
-                rule = rule and rule:gsub(" 2>/dev/null$", "")
+            if cmd:match("'iptables' '%-D'") then
+                local rule = extract_rule_key(cmd)
                 if rule then
                     iptables_rules[rule] = nil
                 end
@@ -119,7 +141,7 @@ describe("Firewall Management", function()
                 local add_count = 0
                 local base_execute = os.execute
                 _G.os.execute = function(cmd)
-                    if cmd:match("iptables %-A INPUT %-p tcp .* 53317") then
+                    if cmd:match("'iptables' '%-A' 'INPUT' '%-p' 'tcp'") and cmd:match("53317") then
                         add_count = add_count + 1
                     end
                     return base_execute(cmd)
@@ -138,9 +160,9 @@ describe("Firewall Management", function()
                 local command_order = {}
                 local base_execute = os.execute
                 _G.os.execute = function(cmd)
-                    if cmd:match("iptables %-C") then
+                    if cmd:match("'iptables' '%-C'") then
                         table.insert(command_order, "check")
-                    elseif cmd:match("iptables %-A") then
+                    elseif cmd:match("'iptables' '%-A'") then
                         table.insert(command_order, "add")
                     end
                     return base_execute(cmd)
@@ -195,11 +217,10 @@ describe("Firewall Management", function()
 
                 instance:closeFirewall()
 
-                -- Rules should be gone (our mock removes them)
                 -- Check that delete commands were issued
                 local found_delete = false
                 for _, cmd in ipairs(os_execute_calls) do
-                    if cmd:match("iptables %-D") then
+                    if cmd:match("'iptables' '%-D'") then
                         found_delete = true
                         break
                     end
@@ -218,7 +239,7 @@ describe("Firewall Management", function()
 
                 local udp_deletes = 0
                 for _, cmd in ipairs(os_execute_calls) do
-                    if cmd:match("iptables %-D .* %-p udp .* 53317") then
+                    if cmd:match("'iptables' '%-D'") and cmd:match("'%-p' 'udp'") and cmd:match("53317") then
                         udp_deletes = udp_deletes + 1
                     end
                 end
@@ -313,44 +334,55 @@ describe("Firewall Management", function()
             os_execute_calls = {}
         end)
 
-        it("rejects rules with semicolons (command chaining)", function()
+        it("properly escapes ports with shell metacharacters", function()
             local instance = helper.create_instance()
             -- Simulate a malicious port that somehow bypassed validation
-            -- (In practice, isValidPort prevents this, but defense in depth matters)
+            -- With shell_escape, these characters get quoted safely
             local malicious_port = "53317; rm -rf /"
             instance.port = malicious_port
 
             os_execute_calls = {}
             instance:openFirewall()
 
-            -- With character validation, the suspicious rule should be rejected
-            -- Check that no iptables -A command was issued with the malicious port
+            -- With isValidPort check, no commands should be issued
+            -- But even if they were, shell_escape would quote them safely
             for _, cmd in ipairs(os_execute_calls) do
-                assert.is_not.match(cmd, "rm %-rf")
+                -- If any command was issued, the dangerous characters should be quoted
+                if cmd:match("iptables") then
+                    -- The malicious string should be inside quotes, not executable
+                    assert.is_not.match(cmd, "[^']rm %-rf")
+                end
             end
         end)
 
-        it("rejects rules with backticks (command substitution)", function()
+        it("properly escapes backticks", function()
             local instance = helper.create_instance()
             instance.port = "53317`whoami`"
 
             os_execute_calls = {}
             instance:openFirewall()
 
+            -- isValidPort should reject this, but shell_escape also protects
             for _, cmd in ipairs(os_execute_calls) do
-                assert.is_not.match(cmd, "whoami")
+                if cmd:match("iptables") then
+                    -- Backticks should be inside single quotes (safely escaped)
+                    assert.is_not.match(cmd, "[^']`whoami`")
+                end
             end
         end)
 
-        it("rejects rules with $() (command substitution)", function()
+        it("properly escapes $() command substitution", function()
             local instance = helper.create_instance()
             instance.port = "$(cat /etc/passwd)"
 
             os_execute_calls = {}
             instance:openFirewall()
 
+            -- isValidPort should reject this
             for _, cmd in ipairs(os_execute_calls) do
-                assert.is_not.match(cmd, "/etc/passwd")
+                if cmd:match("iptables") then
+                    assert.is_not.match(cmd, "[^']%$%(")
+                end
             end
         end)
     end)

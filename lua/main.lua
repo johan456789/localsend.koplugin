@@ -109,30 +109,59 @@ local function validateDeviceName(name)
 end
 
 -- Check if an iptables rule exists (returns true if rule exists)
--- NOTE: The rule parameter should be pre-validated (e.g., port is validated by isValidPort)
--- to prevent command injection. This function uses direct string concat for iptables
--- because shell_escape would quote the entire rule as a single argument.
-local function iptablesRuleExists(rule)
-    -- Validate that rule contains only expected iptables characters
-    -- This is a defense-in-depth check since callers should already validate inputs
-    -- Include newlines (\n, \r) which could be used for command injection
-    if rule:match("[;|&`$\"'\\%z\n\r]") then
-        logger.warn("[LocalSend] Rejecting iptables rule with suspicious characters:", rule)
-        return true  -- Pretend rule exists to prevent adding potentially malicious rule
+-- @param rule_args table Array of iptables arguments (e.g., {"INPUT", "-p", "tcp", "--dport", "53317", "-j", "ACCEPT"})
+-- @return boolean True if rule exists, false otherwise
+local function iptablesRuleExists(rule_args)
+    -- Build command with -C (check) flag
+    local cmd_args = {"iptables", "-C"}
+    for _, arg in ipairs(rule_args) do
+        table.insert(cmd_args, arg)
     end
-    -- iptables -C checks if rule exists, returns 0 if it does
-    local result = os.execute("iptables -C " .. rule .. " 2>/dev/null")
+    -- Use shell_escape for proper argument quoting
+    local cmd = util.shell_escape(cmd_args) .. " 2>/dev/null"
+    local result = os.execute(cmd)
     return result == 0
 end
 
 -- Add iptables rule only if it doesn't already exist
-local function iptablesAddIfMissing(rule)
-    if not iptablesRuleExists(rule) then
-        -- Same character validation is done in iptablesRuleExists
-        os.execute("iptables -A " .. rule)
+-- @param rule_args table Array of iptables arguments (e.g., {"INPUT", "-p", "tcp", "--dport", "53317", "-j", "ACCEPT"})
+-- @return boolean True if rule was added, false if it already existed
+local function iptablesAddIfMissing(rule_args)
+    if not iptablesRuleExists(rule_args) then
+        -- Build command with -A (append) flag
+        local cmd_args = {"iptables", "-A"}
+        for _, arg in ipairs(rule_args) do
+            table.insert(cmd_args, arg)
+        end
+        os.execute(util.shell_escape(cmd_args))
         return true
     end
     return false
+end
+
+-- Delete iptables rule (silently ignores if rule doesn't exist)
+-- @param rule_args table Array of iptables arguments
+local function iptablesDelete(rule_args)
+    local cmd_args = {"iptables", "-D"}
+    for _, arg in ipairs(rule_args) do
+        table.insert(cmd_args, arg)
+    end
+    os.execute(util.shell_escape(cmd_args) .. " 2>/dev/null")
+end
+
+-- Build a curl command for fetching JSON from a URL
+-- @param output_file string Path to write response body
+-- @param url string URL to fetch
+-- @return string Shell-escaped curl command that outputs HTTP status code
+local function buildCurlCommand(output_file, url)
+    return util.shell_escape({
+        "curl", "-s",
+        "-o", output_file,
+        "-w", "%{http_code}",
+        "--connect-timeout", "10",
+        "-H", "Accept: application/vnd.github.v3+json",
+        url
+    })
 end
 
 local data_dir = DataStorage:getFullDataDir()
@@ -595,24 +624,19 @@ function LocalSend:openFirewall()
             logger.err("[LocalSend] Invalid port, cannot configure firewall")
             return
         end
+        local port = tostring(self.port)
         -- TCP for file transfer (idempotent - won't add if already exists)
-        iptablesAddIfMissing(string.format(
-            "INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT",
-            self.port))
-        iptablesAddIfMissing(string.format(
-            "OUTPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT",
-            self.port))
+        iptablesAddIfMissing({"INPUT", "-p", "tcp", "--dport", port,
+            "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED", "-j", "ACCEPT"})
+        iptablesAddIfMissing({"OUTPUT", "-p", "tcp", "--sport", port,
+            "-m", "conntrack", "--ctstate", "ESTABLISHED", "-j", "ACCEPT"})
         -- UDP for device discovery
-        iptablesAddIfMissing(string.format(
-            "INPUT -p udp --dport %s -j ACCEPT",
-            self.port))
-        iptablesAddIfMissing(string.format(
-            "OUTPUT -p udp --sport %s -j ACCEPT",
-            self.port))
+        iptablesAddIfMissing({"INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"})
+        iptablesAddIfMissing({"OUTPUT", "-p", "udp", "--sport", port, "-j", "ACCEPT"})
         -- WebRTC/ICE UDP ports - must match range in peer.go SetEphemeralUDPPortRange
         if self.use_webrtc then
-            iptablesAddIfMissing("INPUT -p udp --dport 50000:50100 -j ACCEPT")
-            iptablesAddIfMissing("OUTPUT -p udp --sport 50000:50100 -j ACCEPT")
+            iptablesAddIfMissing({"INPUT", "-p", "udp", "--dport", "50000:50100", "-j", "ACCEPT"})
+            iptablesAddIfMissing({"OUTPUT", "-p", "udp", "--sport", "50000:50100", "-j", "ACCEPT"})
             logger.dbg("[LocalSend] Firewall opened for WebRTC UDP ports (50000-50100)")
         end
         logger.dbg("[LocalSend] Firewall opened for port " .. self.port)
@@ -625,21 +649,16 @@ function LocalSend:closeFirewall()
             logger.err("[LocalSend] Invalid port, cannot configure firewall")
             return
         end
-        os.execute(string.format(
-            "iptables -D INPUT -p tcp --dport %s -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT",
-            self.port))
-        os.execute(string.format(
-            "iptables -D OUTPUT -p tcp --sport %s -m conntrack --ctstate ESTABLISHED -j ACCEPT",
-            self.port))
-        os.execute(string.format(
-            "iptables -D INPUT -p udp --dport %s -j ACCEPT",
-            self.port))
-        os.execute(string.format(
-            "iptables -D OUTPUT -p udp --sport %s -j ACCEPT",
-            self.port))
+        local port = tostring(self.port)
+        iptablesDelete({"INPUT", "-p", "tcp", "--dport", port,
+            "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED", "-j", "ACCEPT"})
+        iptablesDelete({"OUTPUT", "-p", "tcp", "--sport", port,
+            "-m", "conntrack", "--ctstate", "ESTABLISHED", "-j", "ACCEPT"})
+        iptablesDelete({"INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"})
+        iptablesDelete({"OUTPUT", "-p", "udp", "--sport", port, "-j", "ACCEPT"})
         -- Clean up WebRTC UDP rules (ignore errors if they don't exist)
-        os.execute("iptables -D INPUT -p udp --dport 50000:50100 -j ACCEPT 2>/dev/null")
-        os.execute("iptables -D OUTPUT -p udp --sport 50000:50100 -j ACCEPT 2>/dev/null")
+        iptablesDelete({"INPUT", "-p", "udp", "--dport", "50000:50100", "-j", "ACCEPT"})
+        iptablesDelete({"OUTPUT", "-p", "udp", "--sport", "50000:50100", "-j", "ACCEPT"})
         logger.dbg("[LocalSend] Firewall closed for port " .. self.port)
     end
 end
@@ -810,14 +829,6 @@ function LocalSend:_checkSentinelFile()
     if self:isRunning() then
         UIManager:scheduleIn(SENTINEL_POLL_INTERVAL, self.check_sentinel_task)
     end
-end
-
--- Legacy wrapper for backwards compatibility (still used by some code paths)
--- @param my_generation number|nil Generation counter (deprecated, ignored)
-function LocalSend:checkForNewTransfers(my_generation)
-    -- Generation counter is now deprecated - proper task unscheduling handles stale callbacks
-    -- Just delegate to the internal method
-    self:_checkForNewTransfers()
 end
 
 -- Start the LocalSend server
@@ -1784,9 +1795,7 @@ end
 function LocalSend:_doAutoCheckForUpdates()
     -- Fetch release info silently (similar to doCheckForUpdates)
     local tmp_file = "/tmp/localsend_update_check.json"
-    local cmd = string.format(
-        "curl -s -o '%s' -w '%%{http_code}' --connect-timeout 10 -H 'Accept: application/vnd.github.v3+json' '%s'",
-        tmp_file, GITHUB_RELEASE_URL)
+    local cmd = buildCurlCommand(tmp_file, GITHUB_RELEASE_URL)
 
     local handle = io.popen(cmd)
     if not handle then
@@ -1860,9 +1869,7 @@ function LocalSend:doCheckForUpdates()
 
     -- Use curl to fetch the latest release info
     local tmp_file = "/tmp/localsend_update_check.json"
-    local cmd = string.format(
-        "curl -s -o '%s' -w '%%{http_code}' --connect-timeout 10 -H 'Accept: application/vnd.github.v3+json' '%s'",
-        tmp_file, GITHUB_RELEASE_URL)
+    local cmd = buildCurlCommand(tmp_file, GITHUB_RELEASE_URL)
 
     local handle = io.popen(cmd)
     if not handle then

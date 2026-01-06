@@ -99,8 +99,7 @@ describe("checkForNewTransfers", function()
 
             helper.state.scheduled_tasks = {}
 
-            local gen = LocalSend._ServerState.polling_generation
-            instance:checkForNewTransfers(gen)
+            instance:_checkForNewTransfers()
 
             assert.equal(0, #helper.state.notifications_shown, "Should not show notification")
             assert.equal(0, #helper.state.scheduled_tasks, "Should not schedule next check")
@@ -121,8 +120,7 @@ describe("checkForNewTransfers", function()
             local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
-            local gen = LocalSend._ServerState.polling_generation
-            instance:checkForNewTransfers(gen)
+            instance:_checkForNewTransfers()
 
             assert.equal(1, #helper.state.notifications_shown)
             local text = helper.state.notifications_shown[1].text
@@ -144,8 +142,7 @@ describe("checkForNewTransfers", function()
             local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
-            local gen = LocalSend._ServerState.polling_generation
-            instance:checkForNewTransfers(gen)
+            instance:_checkForNewTransfers()
 
             assert.equal(1, #helper.state.notifications_shown)
             local text = helper.state.notifications_shown[1].text
@@ -167,8 +164,7 @@ describe("checkForNewTransfers", function()
 
             helper.state.notifications_shown = {}
 
-            local gen = LocalSend._ServerState.polling_generation
-            instance:checkForNewTransfers(gen)
+            instance:_checkForNewTransfers()
 
             assert.equal(0, #helper.state.notifications_shown)
         end)
@@ -186,8 +182,7 @@ describe("checkForNewTransfers", function()
             local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
-            local gen = LocalSend._ServerState.polling_generation
-            instance:checkForNewTransfers(gen)
+            instance:_checkForNewTransfers()
 
             assert.is_true(LocalSend._ServerState.last_log_position > 0)
         end)
@@ -203,7 +198,7 @@ describe("checkForNewTransfers", function()
 
             helper.state.scheduled_tasks = {}
 
-            instance:checkForNewTransfers()
+            instance:_checkForNewTransfers()
 
             assert.equal(0, #helper.state.scheduled_tasks, "checkForNewTransfers should not self-schedule")
         end)
@@ -230,8 +225,7 @@ describe("checkForNewTransfers", function()
 
             helper.state.notifications_shown = {}
 
-            local gen = LocalSend._ServerState.polling_generation
-            instance:checkForNewTransfers(gen)
+            instance:_checkForNewTransfers()
 
             assert.equal(1, #helper.state.notifications_shown)
             local text = helper.state.notifications_shown[1].text
@@ -256,8 +250,7 @@ describe("checkForNewTransfers", function()
             helper.state.notifications_shown = {}
             helper.state.dialogs_shown = {}
 
-            local gen = LocalSend._ServerState.polling_generation
-            instance:checkForNewTransfers(gen)
+            instance:_checkForNewTransfers()
 
             -- Should use Notification (toast) not InfoMessage
             assert.equal(1, #helper.state.notifications_shown,
@@ -283,8 +276,7 @@ describe("checkForNewTransfers", function()
 
             helper.state.notifications_shown = {}
 
-            local gen = LocalSend._ServerState.polling_generation
-            instance:checkForNewTransfers(gen)
+            instance:_checkForNewTransfers()
 
             assert.equal(1, #helper.state.notifications_shown)
             local timeout = helper.state.notifications_shown[1].timeout

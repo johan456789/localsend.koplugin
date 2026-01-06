@@ -20,6 +20,7 @@ local lsutils = require("localsend_utils")
 local lsupdate = require("localsend_update")
 local lsrouting = require("localsend_routing")
 local lstransfers = require("localsend_transfers")
+local lsdialogs = require("localsend_dialogs")
 
 -- Polling interval for sentinel file (cheap stat() only)
 local SENTINEL_POLL_INTERVAL = 2
@@ -96,16 +97,6 @@ local pid_file = "/tmp/localsend_koreader.pid"
 local transfer_log_file = "/tmp/localsend_transfers.log"
 local transfer_notify_file = "/tmp/localsend_notify"  -- Sentinel file for fast transfer detection
 
--- Extension presets
-local EXTENSION_PRESETS = {
-    { name = _("All files"), value = "" },
-    { name = _("eBooks (epub, pdf, mobi, azw3)"), value = "epub,pdf,mobi,azw3" },
-    { name = _("eBooks + CBZ (comics)"), value = "epub,pdf,mobi,azw3,cbz,cbr" },
-    { name = _("PDF only"), value = "pdf" },
-    { name = _("EPUB only"), value = "epub" },
-    { name = _("Custom..."), value = nil },
-}
-
 -- Check if binary exists
 if not util.pathExists(binary_path) then
     return { disabled = true, }
@@ -176,6 +167,19 @@ function LocalSend:init()
         logger = logger,
         T = T,
         _ = _,
+    })
+
+    -- Initialize dialogs module with dependencies
+    lsdialogs.init({
+        UIManager = UIManager,
+        InfoMessage = InfoMessage,
+        InputDialog = InputDialog,
+        PathChooser = PathChooser,
+        util = util,
+        logger = logger,
+        T = T,
+        _ = _,
+        G_reader_settings = G_reader_settings,
     })
 
     -- Cache for menu rendering (avoids disk I/O on every menu open)
@@ -877,206 +881,29 @@ function LocalSend:onToggleLocalSend()
     end
 end
 
+-- UI dialog functions (delegated to localsend_dialogs module)
 function LocalSend:getPickerStartPath(path)
-    -- Only apply workaround if home folder lock is enabled
-    if not G_reader_settings:isTrue("lock_home_folder") then
-        return path
-    end
-
-    -- Check if save_dir is at or inside the locked home folder
-    local home_dir = G_reader_settings:readSetting("home_dir")
-    if home_dir then
-        -- Normalize paths (remove trailing slashes for comparison)
-        local norm_path = path:gsub("/$", "")
-        local norm_home = home_dir:gsub("/$", "")
-        -- Escape Lua pattern special characters for matching
-        local escaped_home = norm_home:gsub("([%.%-%+%[%]%(%)%$%^%%%?%*])", "%%%1")
-        -- If save_dir doesn't start with home_dir, no workaround needed
-        if norm_path ~= norm_home and not norm_path:match("^" .. escaped_home .. "/") then
-            return path
-        end
-    end
-
-    -- If already at root, stay there
-    if path == "/" then
-        return path
-    end
-
-    -- Remove trailing slash if present (except for root)
-    path = path:gsub("/$", "")
-
-    -- Get parent directory
-    local parent = path:match("^(.+)/[^/]+$")
-    if not parent or parent == "" then
-        -- Path is like "/foo" so parent would be root
-        parent = "/"
-    end
-
-    -- Check if parent directory exists and is accessible
-    if util.pathExists(parent) then
-        return parent
-    end
-
-    -- Parent doesn't exist or isn't accessible, fall back to original path
-    return path
+    return lsdialogs.getPickerStartPath(path)
 end
 
 function LocalSend:showSaveDirPicker(touchmenu_instance)
-    local start_path = self:getPickerStartPath(self.save_dir)
-    local path_chooser = PathChooser:new{
-        select_directory = true,
-        select_file = false,
-        path = start_path,
-        onConfirm = function(path)
-            local valid, err = self:validateSaveDir(path)
-            if valid then
-                self.save_dir = path
-                G_reader_settings:saveSetting("LocalSend_save_dir", self.save_dir)
-                touchmenu_instance:updateItems()
-            else
-                UIManager:show(InfoMessage:new{
-                    icon = "notice-warning",
-                    text = T(_("Cannot use this directory: %1"), err),
-                })
-            end
-        end,
-    }
-    UIManager:show(path_chooser)
+    lsdialogs.showSaveDirPicker(self, touchmenu_instance)
 end
 
 function LocalSend:showDeviceNameDialog(touchmenu_instance)
-    local dialog  -- Local variable instead of self.dialog
-    dialog = InputDialog:new{
-        title = _("Device name"),
-        description = _("Leave empty for default ('KOReader')"),
-        input = self.device_name,
-        input_hint = "My Kindle",
-        buttons = {
-            {
-                {
-                    text = _("Cancel"),
-                    id = "close",
-                    callback = function()
-                        UIManager:close(dialog)
-                    end,
-                },
-                {
-                    text = _("Save"),
-                    is_enter_default = true,
-                    callback = function()
-                        local new_name = dialog:getInputText()
-                        local valid, err = self:validateDeviceName(new_name)
-                        if not valid then
-                            UIManager:show(InfoMessage:new{
-                                icon = "notice-warning",
-                                text = err,
-                            })
-                            return
-                        end
-                        self.device_name = new_name
-                        G_reader_settings:saveSetting("LocalSend_device_name", self.device_name)
-                        UIManager:close(dialog)
-                        touchmenu_instance:updateItems()
-                    end,
-                },
-            },
-        },
-    }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    lsdialogs.showDeviceNameDialog(self, touchmenu_instance)
 end
 
 function LocalSend:showPinDialog(touchmenu_instance)
-    local dialog
-    dialog = InputDialog:new{
-        title = _("PIN code"),
-        description = _("Leave empty to disable PIN protection"),
-        input = self.pin,
-        input_hint = "1234",
-        buttons = {
-            {
-                {
-                    text = _("Cancel"),
-                    id = "close",
-                    callback = function()
-                        UIManager:close(dialog)
-                    end,
-                },
-                {
-                    text = _("Save"),
-                    is_enter_default = true,
-                    callback = function()
-                        self.pin = dialog:getInputText()
-                        G_reader_settings:saveSetting("LocalSend_pin", self.pin)
-                        UIManager:close(dialog)
-                        touchmenu_instance:updateItems()
-                    end,
-                },
-            },
-        },
-    }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    lsdialogs.showPinDialog(self, touchmenu_instance)
 end
 
 function LocalSend:showCustomExtDialog()
-    local dialog
-    dialog = InputDialog:new{
-        title = _("Custom extensions"),
-        description = _("Comma-separated list (e.g., 'epub,pdf,mobi')"),
-        input = self.accept_ext,
-        input_hint = "epub,pdf,mobi",
-        buttons = {
-            {
-                {
-                    text = _("Cancel"),
-                    id = "close",
-                    callback = function()
-                        UIManager:close(dialog)
-                    end,
-                },
-                {
-                    text = _("Save"),
-                    is_enter_default = true,
-                    callback = function()
-                        self.accept_ext = dialog:getInputText()
-                        G_reader_settings:saveSetting("LocalSend_accept_ext", self.accept_ext)
-                        UIManager:close(dialog)
-                    end,
-                },
-            },
-        },
-    }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    lsdialogs.showCustomExtDialog(self)
 end
 
 function LocalSend:buildExtensionPresetsMenu()
-    local menu = {}
-    for _, preset in ipairs(EXTENSION_PRESETS) do
-        if preset.value == nil then
-            -- Custom option
-            table.insert(menu, {
-                text = preset.name,
-                keep_menu_open = true,
-                callback = function()
-                    self:showCustomExtDialog()
-                end,
-            })
-        else
-            table.insert(menu, {
-                text = preset.name,
-                checked_func = function()
-                    return self.accept_ext == preset.value
-                end,
-                callback = function()
-                    self.accept_ext = preset.value
-                    G_reader_settings:saveSetting("LocalSend_accept_ext", self.accept_ext)
-                end,
-            })
-        end
-    end
-    return menu
+    return lsdialogs.buildExtensionPresetsMenu(self)
 end
 
 -- Extension routing functions (delegated to localsend_routing module)

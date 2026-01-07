@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -920,6 +921,97 @@ func TestSaveFileDirectoryTraversalPrevention(t *testing.T) {
 
 			// Clean up for next test case
 			_ = os.Remove(savedPath)
+		})
+	}
+}
+
+// TestSaveFileWithSubdirectory verifies that files with subdirectory paths are saved
+// correctly with the subdirectory structure preserved.
+func TestSaveFileWithSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	testCases := []struct {
+		name           string
+		filename       string
+		expectedSaved  string
+		expectedSubdir string
+	}{
+		{
+			name:           "single subdirectory",
+			filename:       "Photos/beach.jpg",
+			expectedSaved:  "Photos/beach.jpg",
+			expectedSubdir: "Photos",
+		},
+		{
+			name:           "nested subdirectories",
+			filename:       "Photos/Summer/2024/vacation.jpg",
+			expectedSaved:  "Photos/Summer/2024/vacation.jpg",
+			expectedSubdir: "Photos/Summer/2024",
+		},
+		{
+			name:           "flat file (no subdirectory)",
+			filename:       "document.pdf",
+			expectedSaved:  "document.pdf",
+			expectedSubdir: "",
+		},
+		{
+			name:           "file with spaces in path",
+			filename:       "My Photos/Summer Vacation/beach pic.jpg",
+			expectedSaved:  "My Photos/Summer Vacation/beach pic.jpg",
+			expectedSubdir: "My Photos/Summer Vacation",
+		},
+		{
+			name:           "safe parent traversal within subdirectory",
+			filename:       "Photos/temp/../final/pic.jpg",
+			expectedSaved:  "Photos/final/pic.jpg",
+			expectedSubdir: "Photos/final",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			sess, _ := NewRecvSession("test-session", "192.168.1.1")
+			content := []byte("photo data")
+
+			fileMeta := models.FileMeta{
+				Id:       "file1",
+				Filename: tc.filename,
+				Size:     int64(len(content)),
+			}
+			_ = sess.AcceptFile("file1", fileMeta)
+			sess.Start()
+
+			tokens := sess.FileTokens()
+
+			savedName, err := sess.SaveFile(dir, "file1", tokens["file1"], "192.168.1.1", bytes.NewReader(content))
+			if err != nil {
+				t.Fatalf("SaveFile failed: %v", err)
+			}
+
+			// Verify the saved filename matches expected (with forward slashes)
+			if savedName != tc.expectedSaved {
+				t.Errorf("expected saved name %q, got %q", tc.expectedSaved, savedName)
+			}
+
+			// Verify subdirectory was created
+			if tc.expectedSubdir != "" {
+				subDirPath := filepath.Join(dir, filepath.FromSlash(tc.expectedSubdir))
+				info, err := os.Stat(subDirPath)
+				if err != nil {
+					t.Errorf("subdirectory should exist at %s: %v", subDirPath, err)
+				} else if !info.IsDir() {
+					t.Errorf("expected %s to be a directory", subDirPath)
+				}
+			}
+
+			// Verify file exists at the correct path
+			filePath := filepath.Join(dir, filepath.FromSlash(tc.expectedSaved))
+			if _, err := os.Stat(filePath); err != nil {
+				t.Errorf("file should exist at %s: %v", filePath, err)
+			}
+
+			// Clean up for next test
+			_ = os.RemoveAll(filepath.Join(dir, strings.Split(filepath.FromSlash(tc.expectedSaved), string(filepath.Separator))[0]))
 		})
 	}
 }

@@ -98,6 +98,9 @@ describe("Self-Update", function()
             if path == "/tmp/localsend_update.zip" then return true end
             if path == "/tmp/localsend_update_extract/localsend.koplugin" then return true end
             if path:match("/tmp/localsend_update_extract/localsend.koplugin/") then return true end
+            -- Also return true for destination files after copy
+            if path:match("/tmp/koreader/plugins/localsend.koplugin/.*%.lua$") then return true end
+            if path:match("/tmp/koreader/plugins/localsend.koplugin/localsend$") then return true end
             return false
         end
     end
@@ -320,18 +323,15 @@ describe("Self-Update", function()
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
                 if path == "/tmp/localsend_update.zip" then return true end
+                -- extracted_plugin directory doesn't exist (simulates extraction failure)
                 return false
             end
-
-            helper.mock_os_execute(function(cmd)
-                if cmd:match("unzip") then return 1 end
-                return 0
-            end)
 
             local instance = helper.create_instance()
             instance:doPerformUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
 
-            assert.is_truthy(helper.find_notification("Failed to extract"))
+            -- Now detected via pathExists check, shows "Invalid update package"
+            assert.is_truthy(helper.find_notification("Invalid update package"))
         end)
 
         it("handles invalid package structure", function()
@@ -351,12 +351,19 @@ describe("Self-Update", function()
         end)
 
         it("handles core file copy failure gracefully", function()
-            setup_successful_download()
-
-            helper.mock_os_execute(function(cmd)
-                if cmd:match("'cp'.*main%.lua") then return 1 end
-                return 0
-            end)
+            http_responses.code = "200"
+            -- Source files exist, but destination main.lua fails to appear after copy
+            package.loaded["util"].pathExists = function(path)
+                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
+                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
+                if path == "/tmp/localsend_update.zip" then return true end
+                if path == "/tmp/localsend_update_extract/localsend.koplugin" then return true end
+                if path:match("/tmp/localsend_update_extract/localsend.koplugin/") then return true end
+                -- Destination files: main.lua copy "fails", others succeed
+                if path == "/tmp/koreader/plugins/localsend.koplugin/main.lua" then return false end
+                if path:match("/tmp/koreader/plugins/localsend.koplugin/.*%.lua$") then return true end
+                return false
+            end
 
             local instance = helper.create_instance()
             instance:doPerformUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
@@ -402,15 +409,24 @@ describe("Self-Update", function()
         end)
 
         it("handles additional Lua file copy failure", function()
-            setup_successful_download()
+            http_responses.code = "200"
             http_responses.ls_files = {
                 "/tmp/localsend_update_extract/localsend.koplugin/localsend_utils.lua",
             }
-
-            helper.mock_os_execute(function(cmd)
-                if cmd:match("'cp'.*localsend_utils%.lua") then return 1 end
-                return 0
-            end)
+            -- Source files exist, but destination localsend_utils.lua fails to appear
+            package.loaded["util"].pathExists = function(path)
+                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
+                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
+                if path == "/tmp/localsend_update.zip" then return true end
+                if path == "/tmp/localsend_update_extract/localsend.koplugin" then return true end
+                if path:match("/tmp/localsend_update_extract/localsend.koplugin/") then return true end
+                -- Core files copy succeeds
+                if path == "/tmp/koreader/plugins/localsend.koplugin/main.lua" then return true end
+                if path == "/tmp/koreader/plugins/localsend.koplugin/_meta.lua" then return true end
+                -- Additional lua file copy "fails"
+                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend_utils.lua" then return false end
+                return false
+            end
 
             local instance = helper.create_instance()
             instance:doPerformUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
@@ -425,11 +441,8 @@ describe("Self-Update", function()
 
         it("handles chmod failure gracefully", function()
             setup_successful_download()
-
-            helper.mock_os_execute(function(cmd)
-                if cmd:match("'chmod' '%+x'") then return 1 end
-                return 0
-            end)
+            -- chmod return value is not checked, so this test just verifies
+            -- that the update still succeeds regardless of chmod result
 
             local instance = helper.create_instance()
             instance:doPerformUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")

@@ -293,7 +293,7 @@ func TestRTCReceiver_FilenameIsSanitized(t *testing.T) {
 		{"/etc/shadow", "shadow", false},
 		{"foo/../../../bar.txt", "bar.txt", false},
 		{"normal.txt", "normal.txt", false},
-		{"sub/dir/file.txt", "file.txt", false},
+		{"sub/dir/file.txt", "sub/dir/file.txt", false}, // Subdirectories are now preserved
 	}
 
 	for _, tc := range testCases {
@@ -328,20 +328,236 @@ func TestRTCReceiver_FilenameIsSanitized(t *testing.T) {
 				if f, ok := receiver.fileWriters["test-file"]; ok {
 					_ = f.Close()
 				}
-				defer os.Remove(createdPath)
+				defer func() { _ = os.Remove(createdPath) }()
 
 				// Verify the file is inside saveDir
 				if !strings.HasPrefix(createdPath, saveDir) {
 					t.Errorf("File created outside save directory: %s", createdPath)
 				}
 
-				// Verify the base name matches expected
-				baseName := filepath.Base(createdPath)
-				// Account for possible " (1)" suffix if file already exists
-				if !strings.HasPrefix(baseName, strings.TrimSuffix(tc.expected, filepath.Ext(tc.expected))) {
-					t.Errorf("Base name mismatch: got %q, want prefix %q",
-						baseName, tc.expected)
+				// Verify the relative path matches expected (for subdirectory support)
+				relPath, _ := filepath.Rel(saveDir, createdPath)
+				expectedBase := filepath.Base(tc.expected)
+				// For paths with subdirectories, check the relative path
+				if strings.Contains(tc.expected, "/") {
+					// Subdirectory case: verify relative path structure
+					expectedRelPath := filepath.FromSlash(tc.expected)
+					if relPath != expectedRelPath {
+						// Account for possible " (1)" suffix if file already exists
+						if !strings.HasPrefix(filepath.Base(relPath), strings.TrimSuffix(expectedBase, filepath.Ext(expectedBase))) {
+							t.Errorf("Relative path mismatch: got %q, want %q", relPath, expectedRelPath)
+						}
+					}
+				} else {
+					// Flat file: just check base name
+					baseName := filepath.Base(createdPath)
+					if !strings.HasPrefix(baseName, strings.TrimSuffix(expectedBase, filepath.Ext(expectedBase))) {
+						t.Errorf("Base name mismatch: got %q, want prefix %q", baseName, expectedBase)
+					}
 				}
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Subdirectory Preservation Tests
+// =============================================================================
+
+// TestRTCReceiver_SubdirectoryPreservation verifies that files with subdirectory
+// paths are saved correctly with the subdirectory structure preserved.
+func TestRTCReceiver_SubdirectoryPreservation(t *testing.T) {
+	tmpDir := t.TempDir()
+	saveDir := filepath.Join(tmpDir, "downloads")
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		t.Fatalf("Failed to create save dir: %v", err)
+	}
+
+	testCases := []struct {
+		name           string
+		filename       string
+		expectedSubdir string // Expected subdirectory relative to saveDir
+		expectedBase   string // Expected base filename
+	}{
+		{
+			name:           "single subdirectory",
+			filename:       "Photos/beach.jpg",
+			expectedSubdir: "Photos",
+			expectedBase:   "beach.jpg",
+		},
+		{
+			name:           "nested subdirectories",
+			filename:       "Photos/Summer/2024/vacation.jpg",
+			expectedSubdir: "Photos/Summer/2024",
+			expectedBase:   "vacation.jpg",
+		},
+		{
+			name:           "flat file (no subdirectory)",
+			filename:       "document.pdf",
+			expectedSubdir: "",
+			expectedBase:   "document.pdf",
+		},
+		{
+			name:           "file with spaces in path",
+			filename:       "My Photos/Summer Vacation/beach pic.jpg",
+			expectedSubdir: "My Photos/Summer Vacation",
+			expectedBase:   "beach pic.jpg",
+		},
+		{
+			name:           "safe parent traversal within subdirectory",
+			filename:       "Photos/temp/../final/pic.jpg",
+			expectedSubdir: "Photos/final",
+			expectedBase:   "pic.jpg",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			receiver := &RTCReceiver{
+				saveDir:     saveDir,
+				fileTokens:  make(map[string]string),
+				fileWriters: make(map[string]*os.File),
+				filePaths:   make(map[string]string),
+				fileHashers: makeHasherMap(),
+				files: []RTCFileDto{
+					{
+						ID:       "test-file",
+						FileName: tc.filename,
+						Size:     100,
+						FileType: "application/octet-stream",
+					},
+				},
+			}
+
+			tokens := receiver.prepareFilesForReceive([]string{"test-file"})
+
+			if len(tokens) == 0 {
+				t.Fatalf("prepareFilesForReceive returned no tokens")
+			}
+
+			createdPath := receiver.filePaths["test-file"]
+
+			// Clean up
+			if f, ok := receiver.fileWriters["test-file"]; ok {
+				_ = f.Close()
+			}
+			defer func() {
+				_ = os.RemoveAll(filepath.Join(saveDir, strings.Split(tc.expectedSubdir, "/")[0]))
+				_ = os.Remove(createdPath)
+			}()
+
+			// Verify file is inside saveDir
+			relPath, err := filepath.Rel(saveDir, createdPath)
+			if err != nil {
+				t.Fatalf("Failed to compute relative path: %v", err)
+			}
+			if strings.HasPrefix(relPath, "..") {
+				t.Errorf("File created outside save directory: %s", createdPath)
+			}
+
+			// Verify base filename
+			baseName := filepath.Base(createdPath)
+			if baseName != tc.expectedBase {
+				t.Errorf("Base name mismatch: got %q, want %q", baseName, tc.expectedBase)
+			}
+
+			// Verify subdirectory was created
+			if tc.expectedSubdir != "" {
+				subDirPath := filepath.Join(saveDir, filepath.FromSlash(tc.expectedSubdir))
+				info, err := os.Stat(subDirPath)
+				if err != nil {
+					t.Errorf("Subdirectory should exist at %s: %v", subDirPath, err)
+				} else if !info.IsDir() {
+					t.Errorf("Expected %s to be a directory", subDirPath)
+				}
+
+				// Verify the file is in the correct subdirectory
+				expectedDir := filepath.Join(saveDir, filepath.FromSlash(tc.expectedSubdir))
+				actualDir := filepath.Dir(createdPath)
+				if actualDir != expectedDir {
+					t.Errorf("File in wrong directory: got %q, want %q", actualDir, expectedDir)
+				}
+			}
+		})
+	}
+}
+
+// TestRTCReceiver_SubdirectoryTraversalRejected verifies that path traversal
+// attempts that try to escape via subdirectories are still blocked.
+func TestRTCReceiver_SubdirectoryTraversalRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	saveDir := filepath.Join(tmpDir, "downloads")
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		t.Fatalf("Failed to create save dir: %v", err)
+	}
+
+	// Create a sensitive file that should NOT be overwritten
+	sensitiveDir := filepath.Join(tmpDir, "sensitive")
+	if err := os.MkdirAll(sensitiveDir, 0755); err != nil {
+		t.Fatalf("Failed to create sensitive dir: %v", err)
+	}
+	sensitiveFile := filepath.Join(sensitiveDir, "secret.txt")
+	if err := os.WriteFile(sensitiveFile, []byte("ORIGINAL_SECRET"), 0644); err != nil {
+		t.Fatalf("Failed to create sensitive file: %v", err)
+	}
+
+	maliciousPaths := []string{
+		"../sensitive/secret.txt",
+		"Photos/../../sensitive/secret.txt",
+		"a/b/c/../../../sensitive/secret.txt",
+		"../../../etc/passwd",
+	}
+
+	for _, maliciousName := range maliciousPaths {
+		t.Run(maliciousName, func(t *testing.T) {
+			receiver := &RTCReceiver{
+				saveDir:     saveDir,
+				fileTokens:  make(map[string]string),
+				fileWriters: make(map[string]*os.File),
+				filePaths:   make(map[string]string),
+				fileHashers: makeHasherMap(),
+				files: []RTCFileDto{
+					{
+						ID:       "malicious-file",
+						FileName: maliciousName,
+						Size:     100,
+						FileType: "text/plain",
+					},
+				},
+			}
+
+			tokens := receiver.prepareFilesForReceive([]string{"malicious-file"})
+
+			if len(tokens) > 0 {
+				createdPath := receiver.filePaths["malicious-file"]
+
+				// Clean up
+				if f, ok := receiver.fileWriters["malicious-file"]; ok {
+					_ = f.Close()
+				}
+				defer func() { _ = os.Remove(createdPath) }()
+
+				// The file MUST be inside saveDir
+				absSaveDir, _ := filepath.Abs(saveDir)
+				absCreatedPath, _ := filepath.Abs(createdPath)
+				absSaveDir = filepath.Clean(absSaveDir) + string(filepath.Separator)
+				absCreatedPath = filepath.Clean(absCreatedPath)
+
+				if !strings.HasPrefix(absCreatedPath, absSaveDir) {
+					t.Errorf("PATH TRAVERSAL: File created outside save directory!\n"+
+						"  Malicious filename: %q\n"+
+						"  Created at: %q\n"+
+						"  Save directory: %q",
+						maliciousName, createdPath, saveDir)
+				}
+			}
+
+			// Verify the sensitive file was NOT modified
+			content, err := os.ReadFile(sensitiveFile)
+			if err != nil {
+				t.Errorf("Sensitive file was deleted: %v", err)
+			} else if string(content) != "ORIGINAL_SECRET" {
+				t.Errorf("SECURITY BREACH: Sensitive file was modified!")
 			}
 		})
 	}
@@ -430,7 +646,7 @@ func TestRTCReceiver_handleFileList_NoDeadlock(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer func() {
-			recover() // Ignore panic from nil peer in later code paths
+			_ = recover() // Ignore panic from nil peer in later code paths
 			close(done)
 		}()
 		data := []byte(`{"status":"OK","files":[{"id":"test-1","fileName":"test.txt","size":100}]}`)
@@ -483,7 +699,7 @@ func TestRTCReceiver_CallbackCanAccessMethods(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer func() {
-			recover() // Ignore panic from nil peer in later code paths
+			_ = recover() // Ignore panic from nil peer in later code paths
 			close(done)
 		}()
 		data := []byte(`{"status":"OK","files":[{"id":"test-1","fileName":"test.txt","size":100}]}`)

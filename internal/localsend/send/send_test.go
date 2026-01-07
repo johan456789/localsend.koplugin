@@ -186,6 +186,129 @@ func TestBaseSender_AddDir(t *testing.T) {
 	})
 }
 
+func TestBaseSender_AddDirWithStructure(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create directory structure: Photos/Summer/beach.jpg
+	photosDir := filepath.Join(tmpDir, "Photos")
+	summerDir := filepath.Join(photosDir, "Summer")
+	if err := os.MkdirAll(summerDir, 0755); err != nil {
+		t.Fatalf("failed to create dir structure: %v", err)
+	}
+
+	// Create files
+	files := map[string]string{
+		filepath.Join(photosDir, "selfie.jpg"):   "selfie data",
+		filepath.Join(summerDir, "beach.jpg"):    "beach data",
+		filepath.Join(summerDir, "vacation.png"): "vacation data",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to create file %s: %v", path, err)
+		}
+	}
+
+	t.Run("preserves directory structure in filenames", func(t *testing.T) {
+		sender := &baseSender{files: make(map[string]models.FileMeta)}
+
+		err := sender.AddDirWithStructure(photosDir)
+		if err != nil {
+			t.Fatalf("AddDirWithStructure failed: %v", err)
+		}
+
+		if len(sender.files) != 3 {
+			t.Errorf("expected 3 files, got %d", len(sender.files))
+		}
+
+		// Collect filenames
+		filenames := make(map[string]bool)
+		for _, meta := range sender.files {
+			filenames[meta.Filename] = true
+		}
+
+		// Expected filenames should include the directory structure with forward slashes
+		expectedNames := []string{
+			"Photos/selfie.jpg",
+			"Photos/Summer/beach.jpg",
+			"Photos/Summer/vacation.png",
+		}
+		for _, name := range expectedNames {
+			if !filenames[name] {
+				t.Errorf("expected file '%s' not found in %v", name, filenames)
+			}
+		}
+	})
+
+	t.Run("uses forward slashes for protocol compatibility", func(t *testing.T) {
+		sender := &baseSender{files: make(map[string]models.FileMeta)}
+
+		err := sender.AddDirWithStructure(photosDir)
+		if err != nil {
+			t.Fatalf("AddDirWithStructure failed: %v", err)
+		}
+
+		// All filenames should use forward slashes, not backslashes
+		for _, meta := range sender.files {
+			if strings.Contains(meta.Filename, "\\") {
+				t.Errorf("filename contains backslash (not protocol compatible): %s", meta.Filename)
+			}
+		}
+	})
+
+	t.Run("handles single file in directory", func(t *testing.T) {
+		singleDir := filepath.Join(tmpDir, "SingleFile")
+		if err := os.Mkdir(singleDir, 0755); err != nil {
+			t.Fatalf("failed to create dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(singleDir, "only.txt"), []byte("only"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+
+		sender := &baseSender{files: make(map[string]models.FileMeta)}
+		err := sender.AddDirWithStructure(singleDir)
+		if err != nil {
+			t.Fatalf("AddDirWithStructure failed: %v", err)
+		}
+
+		if len(sender.files) != 1 {
+			t.Errorf("expected 1 file, got %d", len(sender.files))
+		}
+
+		for _, meta := range sender.files {
+			if meta.Filename != "SingleFile/only.txt" {
+				t.Errorf("expected 'SingleFile/only.txt', got '%s'", meta.Filename)
+			}
+		}
+	})
+
+	t.Run("fails for non-existent directory", func(t *testing.T) {
+		sender := &baseSender{files: make(map[string]models.FileMeta)}
+
+		err := sender.AddDirWithStructure("/nonexistent/directory")
+		if err == nil {
+			t.Error("expected error for non-existent directory")
+		}
+	})
+
+	t.Run("handles empty directory", func(t *testing.T) {
+		emptyDir := filepath.Join(tmpDir, "EmptyStructured")
+		if err := os.Mkdir(emptyDir, 0755); err != nil {
+			t.Fatalf("failed to create empty dir: %v", err)
+		}
+
+		sender := &baseSender{files: make(map[string]models.FileMeta)}
+
+		err := sender.AddDirWithStructure(emptyDir)
+		if err != nil {
+			t.Fatalf("AddDirWithStructure failed: %v", err)
+		}
+
+		if len(sender.files) != 0 {
+			t.Errorf("expected 0 files for empty dir, got %d", len(sender.files))
+		}
+	})
+}
+
 func TestBaseSender_Reset(t *testing.T) {
 	sender := &baseSender{
 		tokens: map[string]string{"id1": "token1", "id2": "token2"},
@@ -621,7 +744,7 @@ func TestForwardSender_Start_PropagatesFileErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	go func() { _ = app.Listener(ln) }()
 	defer func() { _ = app.Shutdown() }()
@@ -695,7 +818,7 @@ func TestForwardSender_Start_ReturnsNilOnSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	go func() { _ = app.Listener(ln) }()
 	defer func() { _ = app.Shutdown() }()

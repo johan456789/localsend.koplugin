@@ -15,6 +15,7 @@ import (
 
 	lserrors "localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
+	"localsend-cli/internal/utils"
 
 	"github.com/google/uuid"
 )
@@ -168,21 +169,38 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		return "", lserrors.ErrRejected
 	}
 
-	// Sanitize filename to prevent directory traversal attacks.
+	// Sanitize filename to allow subdirectories but prevent directory traversal attacks.
 	// A malicious client could send "../../../etc/passwd" to write outside saveToDir.
-	safeFilename := filepath.Base(expectedMeta.Filename)
-	if safeFilename == "." || safeFilename == "/" {
+	sanitizedPath, sanitizeErr := utils.SanitizeRelativePath(expectedMeta.Filename)
+	if sanitizeErr != nil {
+		// Fall back to base filename only if path is unsafe
+		slog.Warn("Unsafe path in filename, falling back to base",
+			"filename", expectedMeta.Filename, "error", sanitizeErr)
+		sanitizedPath = filepath.Base(expectedMeta.Filename)
+	}
+
+	if sanitizedPath == "." || sanitizedPath == "/" || sanitizedPath == "" {
 		return "", lserrors.ErrInvalidBody
 	}
 
-	// Ensure the directory exists (for extension routing to new directories)
-	if err := os.MkdirAll(saveToDir, 0755); err != nil {
-		slog.Error("Failed to create save directory", "dir", saveToDir, "error", err)
+	// Split into directory and filename components
+	subDir := filepath.Dir(sanitizedPath)
+	baseName := filepath.Base(sanitizedPath)
+
+	// Determine full save directory (includes any subdirectories from the path)
+	fullSaveDir := saveToDir
+	if subDir != "." && subDir != "" {
+		fullSaveDir = filepath.Join(saveToDir, subDir)
+	}
+
+	// Ensure the directory exists (including any subdirectories)
+	if err := os.MkdirAll(fullSaveDir, 0755); err != nil {
+		slog.Error("Failed to create save directory", "dir", fullSaveDir, "error", err)
 		return "", lserrors.ErrFileIO
 	}
 
 	// Atomically create a file with a unique name (prevents race conditions)
-	file, saveAs, err := CreateUniqueFile(saveToDir, safeFilename)
+	file, saveAs, err := CreateUniqueFile(fullSaveDir, baseName)
 	if err != nil {
 		slog.Error("Failed to create unique file", "error", err)
 		return "", lserrors.ErrFileIO
@@ -234,8 +252,15 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		sess.End()
 	}
 
-	// Return the actual saved filename (may differ from original if renamed due to conflict)
-	return filepath.Base(saveAs), nil
+	// Return the actual saved filename (may differ from original if renamed due to conflict).
+	// Include the subdirectory path if present.
+	savedFilename := filepath.Base(saveAs)
+	if subDir != "." && subDir != "" {
+		savedFilename = filepath.Join(subDir, savedFilename)
+		// Convert to forward slashes for consistency with protocol
+		savedFilename = filepath.ToSlash(savedFilename)
+	}
+	return savedFilename, nil
 }
 
 func (sess *RecvSession) FileTokens() models.FileTokens {

@@ -142,18 +142,8 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     -- Create extraction directory
     deps.util.makePath(tmp_extract)
 
-    -- Extract the zip
-    local result = os.execute(deps.util.shell_escape({"unzip", "-o", tmp_zip, "-d", tmp_extract}))
-
-    if result ~= 0 then
-        deps.UIManager:show(deps.InfoMessage:new{
-            icon = "notice-warning",
-            text = deps._("Failed to extract update."),
-        })
-        os.remove(tmp_zip)
-        os.execute(deps.util.shell_escape({"rm", "-rf", tmp_extract}))
-        return
-    end
+    -- Extract the zip (don't check return value - Lua 5.1 vs 5.2 incompatibility)
+    os.execute(deps.util.shell_escape({"unzip", "-o", tmp_zip, "-d", tmp_extract}))
 
     -- The zip contains localsend.koplugin/ folder
     local extracted_plugin = tmp_extract .. "/localsend.koplugin"
@@ -191,8 +181,11 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
         local dst = plugin_path .. "/" .. file
 
         if deps.util.pathExists(src) then
-            local cp_result = os.execute(deps.util.shell_escape({"cp", src, dst}))
-            if cp_result ~= 0 then
+            -- Delete destination first so we can verify copy actually worked
+            os.remove(dst)
+            os.execute(deps.util.shell_escape({"cp", src, dst}))
+            -- Verify copy succeeded by checking destination exists
+            if not deps.util.pathExists(dst) then
                 copy_failed = true
                 deps.logger.err("[LocalSend] Failed to copy:", file)
             end
@@ -210,8 +203,11 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
                 -- Skip files we already copied
                 if filename and filename ~= "main.lua" and filename ~= "_meta.lua" then
                     local dst = plugin_path .. "/" .. filename
-                    local cp_result = os.execute(deps.util.shell_escape({"cp", lua_file, dst}))
-                    if cp_result ~= 0 then
+                    -- Delete destination first so we can verify copy actually worked
+                    os.remove(dst)
+                    os.execute(deps.util.shell_escape({"cp", lua_file, dst}))
+                    -- Verify copy succeeded
+                    if not deps.util.pathExists(dst) then
                         deps.logger.warn("[LocalSend] Failed to copy additional lua file:", filename)
                     else
                         deps.logger.dbg("[LocalSend] Copied additional lua file:", filename)

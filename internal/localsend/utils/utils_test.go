@@ -3,6 +3,7 @@ package utils
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -235,7 +236,7 @@ func TestGetCertDir(t *testing.T) {
 		}
 		exePath, _ = filepath.EvalSymlinks(exePath)
 		tmpDir := os.TempDir()
-		if filepath.HasPrefix(exePath, tmpDir) || filepath.HasPrefix(exePath, "/tmp") {
+		if strings.HasPrefix(exePath, tmpDir) || strings.HasPrefix(exePath, "/tmp") {
 			t.Skip("skipping: test binary is in temp directory (go test environment)")
 		}
 
@@ -245,12 +246,12 @@ func TestGetCertDir(t *testing.T) {
 		}
 
 		// Should NOT be in /tmp or os.TempDir()
-		if filepath.HasPrefix(dir, tmpDir) {
+		if strings.HasPrefix(dir, tmpDir) {
 			t.Errorf("cert directory should NOT be in temp dir, got %q", dir)
 		}
 
 		// Also check for common tmp patterns
-		if filepath.HasPrefix(dir, "/tmp") || filepath.HasPrefix(dir, "/var/tmp") {
+		if strings.HasPrefix(dir, "/tmp") || strings.HasPrefix(dir, "/var/tmp") {
 			t.Errorf("cert directory should NOT be in /tmp or /var/tmp, got %q", dir)
 		}
 	})
@@ -343,7 +344,7 @@ func TestGetCertPaths(t *testing.T) {
 		}
 		exePath, _ = filepath.EvalSymlinks(exePath)
 		tmpDir := os.TempDir()
-		if filepath.HasPrefix(exePath, tmpDir) || filepath.HasPrefix(exePath, "/tmp") {
+		if strings.HasPrefix(exePath, tmpDir) || strings.HasPrefix(exePath, "/tmp") {
 			t.Skip("skipping: test binary is in temp directory (go test environment)")
 		}
 
@@ -352,11 +353,11 @@ func TestGetCertPaths(t *testing.T) {
 			t.Fatalf("GetCertPaths failed: %v", err)
 		}
 
-		if filepath.HasPrefix(privKey, tmpDir) || filepath.HasPrefix(privKey, "/tmp") {
+		if strings.HasPrefix(privKey, tmpDir) || strings.HasPrefix(privKey, "/tmp") {
 			t.Errorf("private key should NOT be in temp dir, got %q", privKey)
 		}
 
-		if filepath.HasPrefix(cert, tmpDir) || filepath.HasPrefix(cert, "/tmp") {
+		if strings.HasPrefix(cert, tmpDir) || strings.HasPrefix(cert, "/tmp") {
 			t.Errorf("cert should NOT be in temp dir, got %q", cert)
 		}
 	})

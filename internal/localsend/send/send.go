@@ -12,6 +12,7 @@ type FileSender interface {
 	Init(target *models.DeviceInfo, https bool) error
 	AddFile(filePath string) error
 	AddDir(dirPath string) error
+	AddDirWithStructure(dirPath string) error
 	Start() error
 	Cancel() error
 }
@@ -52,6 +53,43 @@ func (fsp *baseSender) AddDir(dirPath string) error {
 		}
 
 		return fsp.AddFile(path)
+	})
+}
+
+// addFileWithBase adds a file with its filename set to the relative path from baseDir.
+func (fsp *baseSender) addFileWithBase(filePath string, baseDir string) error {
+	if fsp.files == nil {
+		fsp.files = make(map[string]models.FileMeta)
+	}
+
+	fileMeta, err := models.GenFileMetaWithBase(filePath, baseDir)
+	if err != nil {
+		return err
+	}
+
+	fsp.files[fileMeta.Id] = fileMeta
+	return nil
+}
+
+// AddDirWithStructure adds all files in a directory while preserving the
+// subdirectory structure. The directory name becomes the root of the structure.
+//
+// Example: AddDirWithStructure("/tmp/Photos") sends files as:
+//   - "Photos/beach.jpg"
+//   - "Photos/Summer/vacation.jpg"
+func (fsp *baseSender) AddDirWithStructure(dirPath string) error {
+	// Use parent of dirPath as base, so dirPath name is included in the relative path
+	baseDir := filepath.Dir(dirPath)
+	return filepath.Walk(dirPath, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		return fsp.addFileWithBase(path, baseDir)
 	})
 }
 

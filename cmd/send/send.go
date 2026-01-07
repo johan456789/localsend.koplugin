@@ -20,13 +20,14 @@ import (
 )
 
 var (
-	ip             string
-	files          []string
-	supportHttps   bool
-	pin            string
-	useDownloadAPI bool
-	useWebRTC      bool
-	targetID       string
+	ip                string
+	files             []string
+	supportHttps      bool
+	pin               string
+	useDownloadAPI    bool
+	useWebRTC         bool
+	targetID          string
+	preserveStructure bool
 )
 
 var Cmd = &cobra.Command{
@@ -78,7 +79,11 @@ var Cmd = &cobra.Command{
 				continue
 			}
 			if finfo.IsDir() {
-				err = sender.AddDir(file)
+				if preserveStructure {
+					err = sender.AddDirWithStructure(file)
+				} else {
+					err = sender.AddDir(file)
+				}
 				if err != nil {
 					slog.Error("Fail to add dir, skipping...", "dir", file, "error", err)
 					continue
@@ -153,12 +158,17 @@ func sendViaWebRTC() error {
 			continue
 		}
 		if finfo.IsDir() {
-			// Walk directory
+			// Walk directory - use parent dir as base to include directory name in path
+			baseDir := filepath.Dir(file)
 			_ = filepath.Walk(file, func(path string, info os.FileInfo, err error) error {
 				if err != nil || info.IsDir() {
 					return nil
 				}
-				fileMetas = append(fileMetas, makeFileMeta(path, info))
+				if preserveStructure {
+					fileMetas = append(fileMetas, makeFileMetaWithBase(path, info, baseDir))
+				} else {
+					fileMetas = append(fileMetas, makeFileMeta(path, info))
+				}
 				return nil
 			})
 		} else {
@@ -212,6 +222,33 @@ func makeFileMeta(path string, info os.FileInfo) transfer.FileMeta {
 	}
 }
 
+// makeFileMetaWithBase creates FileMeta with relative path from baseDir for subdirectory preservation.
+func makeFileMetaWithBase(path string, info os.FileInfo, baseDir string) transfer.FileMeta {
+	fileType := mime.TypeByExtension(filepath.Ext(path))
+	if fileType == "" {
+		fileType = "application/octet-stream"
+	}
+
+	// Calculate relative path from baseDir
+	relPath, err := filepath.Rel(baseDir, path)
+	if err != nil {
+		// Fall back to base name if relative path calculation fails
+		relPath = info.Name()
+	} else {
+		// Normalize to forward slashes for protocol compatibility
+		relPath = filepath.ToSlash(relPath)
+	}
+
+	return transfer.FileMeta{
+		ID:       uuid.New().String(),
+		FileName: relPath,
+		FilePath: path,
+		Size:     info.Size(),
+		FileType: fileType,
+		Modified: info.ModTime(),
+	}
+}
+
 func init() {
 	Cmd.PersistentFlags().StringVar(&ip, "ip", "", "IP address of remote localsend instance")
 	Cmd.PersistentFlags().StringSliceVarP(&files, "file", "f", []string{}, "File/Directory to be sent")
@@ -220,4 +257,5 @@ func init() {
 	Cmd.PersistentFlags().StringVarP(&pin, "pin", "p", "", "PIN code")
 	Cmd.PersistentFlags().BoolVarP(&useWebRTC, "webrtc", "w", false, "Send via WebRTC signaling server")
 	Cmd.PersistentFlags().StringVarP(&targetID, "target", "t", "", "Target peer ID (from scan --webrtc)")
+	Cmd.PersistentFlags().BoolVar(&preserveStructure, "preserve-structure", true, "Preserve subdirectory structure when sending directories")
 }

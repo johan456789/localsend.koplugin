@@ -17,6 +17,7 @@ import (
 
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/localsend/session"
+	"localsend-cli/internal/utils"
 	"localsend-cli/internal/webrtc/signaling"
 )
 
@@ -145,23 +146,39 @@ func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]st
 			continue
 		}
 
-		// Determine save directory and create it
+		// Sanitize filename to allow subdirectories but prevent path traversal attacks.
+		// A malicious sender could send "../../../etc/passwd" to write outside saveDir.
+		sanitizedPath, sanitizeErr := utils.SanitizeRelativePath(targetFile.FileName)
+		if sanitizeErr != nil {
+			// Fall back to base filename only if path is unsafe
+			slog.Warn("Unsafe path in filename, falling back to base",
+				"filename", targetFile.FileName, "error", sanitizeErr)
+			sanitizedPath = filepath.Base(targetFile.FileName)
+		}
+
+		if sanitizedPath == "." || sanitizedPath == "/" || sanitizedPath == "" {
+			slog.Warn("Invalid filename rejected", "filename", targetFile.FileName, "id", id)
+			continue
+		}
+
+		// Split into directory and filename components
+		subDir := filepath.Dir(sanitizedPath)
+		baseName := filepath.Base(sanitizedPath)
+
+		// Determine save directory (with extension routing) and add any subdirectories
 		saveDir := r.getSaveDir(targetFile.FileName)
+		if subDir != "." && subDir != "" {
+			saveDir = filepath.Join(saveDir, subDir)
+		}
+
+		// Create save directory (including any subdirectories)
 		if err := os.MkdirAll(saveDir, 0755); err != nil {
 			slog.Error("Failed to create save directory", "dir", saveDir, "error", err)
 			continue
 		}
 
-		// Sanitize filename to prevent path traversal attacks.
-		// A malicious sender could send "../../../etc/passwd" to write outside saveDir.
-		safeFilename := filepath.Base(targetFile.FileName)
-		if safeFilename == "." || safeFilename == "/" || safeFilename == "" {
-			slog.Warn("Invalid filename rejected", "filename", targetFile.FileName, "id", id)
-			continue
-		}
-
 		// Atomically create file with unique name (prevents race conditions)
-		file, path, err := session.CreateUniqueFile(saveDir, safeFilename)
+		file, path, err := session.CreateUniqueFile(saveDir, baseName)
 		if err != nil {
 			slog.Error("Failed to create unique file", "error", err)
 			continue

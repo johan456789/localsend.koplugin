@@ -198,7 +198,7 @@ func (c *SignalingClient) writeLoop() {
 			if err := c.conn.WriteJSON(msg); err != nil {
 				slog.Warn("Failed to send message", "error", err)
 				// Close connection on write failure so subsequent operations fail properly
-				c.Close()
+				_ = c.Close()
 				return
 			}
 		case <-c.done:

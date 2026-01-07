@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1136,5 +1137,199 @@ func TestCreateUniqueFileConcurrent(t *testing.T) {
 	expectedFirst := filepath.Join(dir, filename)
 	if !seenPaths[expectedFirst] {
 		t.Errorf("expected %s to be created", expectedFirst)
+	}
+}
+
+// TestFindUniqueFolderName tests the folder uniqueness function.
+func TestFindUniqueFolderName(t *testing.T) {
+	t.Run("returns original name when folder doesn't exist", func(t *testing.T) {
+		dir := t.TempDir()
+		result, err := findUniqueFolderName(dir, "Photos")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "Photos" {
+			t.Errorf("expected 'Photos', got '%s'", result)
+		}
+	})
+
+	t.Run("appends counter when folder exists", func(t *testing.T) {
+		dir := t.TempDir()
+		// Create existing folder
+		if err := os.Mkdir(filepath.Join(dir, "Photos"), 0755); err != nil {
+			t.Fatalf("failed to create folder: %v", err)
+		}
+
+		result, err := findUniqueFolderName(dir, "Photos")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "Photos (1)" {
+			t.Errorf("expected 'Photos (1)', got '%s'", result)
+		}
+	})
+
+	t.Run("increments counter until unique", func(t *testing.T) {
+		dir := t.TempDir()
+		// Create existing folders
+		for i := 0; i <= 3; i++ {
+			name := "Photos"
+			if i > 0 {
+				name = fmt.Sprintf("Photos (%d)", i)
+			}
+			if err := os.Mkdir(filepath.Join(dir, name), 0755); err != nil {
+				t.Fatalf("failed to create folder: %v", err)
+			}
+		}
+
+		result, err := findUniqueFolderName(dir, "Photos")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "Photos (4)" {
+			t.Errorf("expected 'Photos (4)', got '%s'", result)
+		}
+	})
+}
+
+// TestSaveFileWithFolderRemap tests that when a folder already exists,
+// all files in the transfer get saved to a uniquely named folder.
+func TestSaveFileWithFolderRemap(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create an existing "Photos" folder with a file
+	existingFolder := filepath.Join(dir, "Photos")
+	if err := os.Mkdir(existingFolder, 0755); err != nil {
+		t.Fatalf("failed to create folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(existingFolder, "existing.jpg"), []byte("existing"), 0644); err != nil {
+		t.Fatalf("failed to create existing file: %v", err)
+	}
+
+	// Create session with files that have subdirectory structure
+	sess, _ := NewRecvSession("test-session", "192.168.1.1")
+
+	file1Content := []byte("beach photo")
+	file2Content := []byte("sunset photo")
+
+	fileMeta1 := models.FileMeta{
+		Id:       "file1",
+		Filename: "Photos/beach.jpg",
+		Size:     int64(len(file1Content)),
+	}
+	fileMeta2 := models.FileMeta{
+		Id:       "file2",
+		Filename: "Photos/sunset.jpg",
+		Size:     int64(len(file2Content)),
+	}
+
+	_ = sess.AcceptFile("file1", fileMeta1)
+	_ = sess.AcceptFile("file2", fileMeta2)
+	sess.Start()
+
+	tokens := sess.FileTokens()
+
+	// Save both files - they should go to "Photos (1)/" not "Photos/"
+	saved1, err := sess.SaveFile(dir, "file1", tokens["file1"], "192.168.1.1", bytes.NewReader(file1Content))
+	if err != nil {
+		t.Fatalf("SaveFile failed for file1: %v", err)
+	}
+
+	saved2, err := sess.SaveFile(dir, "file2", tokens["file2"], "192.168.1.1", bytes.NewReader(file2Content))
+	if err != nil {
+		t.Fatalf("SaveFile failed for file2: %v", err)
+	}
+
+	// Verify files were saved to "Photos (1)/" folder
+	if saved1 != "Photos (1)/beach.jpg" {
+		t.Errorf("expected 'Photos (1)/beach.jpg', got '%s'", saved1)
+	}
+	if saved2 != "Photos (1)/sunset.jpg" {
+		t.Errorf("expected 'Photos (1)/sunset.jpg', got '%s'", saved2)
+	}
+
+	// Verify the files actually exist in the new folder
+	if _, err := os.Stat(filepath.Join(dir, "Photos (1)", "beach.jpg")); err != nil {
+		t.Errorf("beach.jpg should exist in Photos (1)/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Photos (1)", "sunset.jpg")); err != nil {
+		t.Errorf("sunset.jpg should exist in Photos (1)/: %v", err)
+	}
+
+	// Verify the original Photos folder is untouched
+	if _, err := os.Stat(filepath.Join(dir, "Photos", "existing.jpg")); err != nil {
+		t.Errorf("existing.jpg should still be in Photos/: %v", err)
+	}
+}
+
+// TestSaveFileWithNestedFolderRemap tests folder remap with nested subdirectories.
+func TestSaveFileWithNestedFolderRemap(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create an existing "Photos" folder
+	if err := os.Mkdir(filepath.Join(dir, "Photos"), 0755); err != nil {
+		t.Fatalf("failed to create folder: %v", err)
+	}
+
+	sess, _ := NewRecvSession("test-session", "192.168.1.1")
+
+	content := []byte("vacation photo")
+	fileMeta := models.FileMeta{
+		Id:       "file1",
+		Filename: "Photos/Summer/vacation.jpg",
+		Size:     int64(len(content)),
+	}
+	_ = sess.AcceptFile("file1", fileMeta)
+	sess.Start()
+
+	tokens := sess.FileTokens()
+
+	saved, err := sess.SaveFile(dir, "file1", tokens["file1"], "192.168.1.1", bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("SaveFile failed: %v", err)
+	}
+
+	// The entire Photos folder should be remapped to Photos (1)
+	if saved != "Photos (1)/Summer/vacation.jpg" {
+		t.Errorf("expected 'Photos (1)/Summer/vacation.jpg', got '%s'", saved)
+	}
+
+	// Verify nested structure was created
+	if _, err := os.Stat(filepath.Join(dir, "Photos (1)", "Summer", "vacation.jpg")); err != nil {
+		t.Errorf("vacation.jpg should exist in Photos (1)/Summer/: %v", err)
+	}
+}
+
+// TestSaveFileFolderRemapOnlyAffectsSubdirs tests that flat files (no subdirectory)
+// don't trigger folder remapping - they use file-level uniqueness instead.
+func TestSaveFileFolderRemapOnlyAffectsSubdirs(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create an existing file at root level
+	if err := os.WriteFile(filepath.Join(dir, "photo.jpg"), []byte("existing"), 0644); err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+
+	sess, _ := NewRecvSession("test-session", "192.168.1.1")
+
+	content := []byte("new photo")
+	fileMeta := models.FileMeta{
+		Id:       "file1",
+		Filename: "photo.jpg", // Flat file, no subdirectory
+		Size:     int64(len(content)),
+	}
+	_ = sess.AcceptFile("file1", fileMeta)
+	sess.Start()
+
+	tokens := sess.FileTokens()
+
+	saved, err := sess.SaveFile(dir, "file1", tokens["file1"], "192.168.1.1", bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("SaveFile failed: %v", err)
+	}
+
+	// Flat files should use file-level uniqueness, not folder remap
+	if saved != "photo (1).jpg" {
+		t.Errorf("expected 'photo (1).jpg', got '%s'", saved)
 	}
 }

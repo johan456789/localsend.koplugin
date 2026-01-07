@@ -51,6 +51,9 @@ type RTCReceiver struct {
 	// Extension routing
 	extRoutes map[string]string // lowercase ext -> directory
 
+	// Folder remapping for unique folder names
+	folderRemap map[string]string // original root folder -> unique root folder
+
 	// Handshake state
 	state       int
 	remoteNonce []byte
@@ -128,9 +131,61 @@ func (r *RTCReceiver) SetExtensionRoutes(routes map[string]string) {
 	r.extRoutes = routes
 }
 
+// prepareFolderRemap computes folder remapping for unique folder names.
+// This finds unique names for root folders that already exist in saveDir.
+func (r *RTCReceiver) prepareFolderRemap() {
+	r.folderRemap = make(map[string]string)
+
+	// Extract all unique root folders from files
+	rootFolders := make(map[string]bool)
+	for _, f := range r.files {
+		sanitizedPath, err := utils.SanitizeRelativePath(f.FileName)
+		if err != nil {
+			continue
+		}
+		// Get the first path component (root folder)
+		parts := strings.SplitN(filepath.ToSlash(sanitizedPath), "/", 2)
+		if len(parts) > 1 {
+			// Has subdirectory structure - track root folder
+			rootFolders[parts[0]] = true
+		}
+	}
+
+	// For each root folder, find a unique name if needed
+	for root := range rootFolders {
+		uniqueRoot, err := session.FindUniqueFolderName(r.saveDir, root)
+		if err != nil {
+			slog.Warn("Failed to find unique folder name", "root", root, "error", err)
+			continue
+		}
+		if uniqueRoot != root {
+			r.folderRemap[root] = uniqueRoot
+			slog.Info("Remapping folder for uniqueness", "original", root, "unique", uniqueRoot)
+		}
+	}
+}
+
+// applyFolderRemap applies the folder remap to a sanitized path.
+func (r *RTCReceiver) applyFolderRemap(sanitizedPath string) string {
+	if len(r.folderRemap) == 0 {
+		return sanitizedPath
+	}
+
+	parts := strings.SplitN(filepath.ToSlash(sanitizedPath), "/", 2)
+	if len(parts) > 1 {
+		if newRoot, ok := r.folderRemap[parts[0]]; ok {
+			return newRoot + "/" + parts[1]
+		}
+	}
+	return sanitizedPath
+}
+
 // prepareFilesForReceive creates files and generates tokens for accepted file IDs.
 // Returns a map of fileId -> token for successfully prepared files.
 func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]string {
+	// Prepare folder remap for unique folder names (computed once)
+	r.prepareFolderRemap()
+
 	fileTokens := make(map[string]string)
 	for _, id := range acceptedIDs {
 		// Find the file metadata first
@@ -160,6 +215,9 @@ func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]st
 			slog.Warn("Invalid filename rejected", "filename", targetFile.FileName, "id", id)
 			continue
 		}
+
+		// Apply folder remap if the root folder was renamed for uniqueness
+		sanitizedPath = r.applyFolderRemap(sanitizedPath)
 
 		// Split into directory and filename components
 		subDir := filepath.Dir(sanitizedPath)

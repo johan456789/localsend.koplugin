@@ -57,6 +57,12 @@ type RecvSession struct {
 	id           string
 	clientIP     string // IP address of the client that initiated the session (per protocol spec Section 4.2)
 	started      atomic.Bool
+
+	// Folder remapping for unique folder creation (computed once on first SaveFile)
+	folderRemapOnce sync.Once
+	folderRemap     map[string]string // maps original root folder -> unique root folder
+	folderRemapErr  error
+	folderRemapDir  string // the saveDir used for remap computation
 }
 
 func NewRecvSession(sessionId string, clientIP string) (*RecvSession, error) {
@@ -102,8 +108,90 @@ func (sess *RecvSession) Start() {
 	sess.started.Store(true)
 }
 
-// maxUniquePathAttempts is the maximum number of attempts to find a unique filename
+// maxUniquePathAttempts is the maximum number of attempts to find a unique filename/folder
 const maxUniquePathAttempts = 10000
+
+// FindUniqueFolderName finds a unique folder name in saveDir, appending a counter if needed.
+// For example: "Photos" -> "Photos (1)" -> "Photos (2)" if folders already exist.
+// Exported for use by WebRTC receiver.
+func FindUniqueFolderName(saveDir, folderName string) (string, error) {
+	return findUniqueFolderName(saveDir, folderName)
+}
+
+// findUniqueFolderName is the internal implementation.
+func findUniqueFolderName(saveDir, folderName string) (string, error) {
+	path := filepath.Join(saveDir, folderName)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return folderName, nil // doesn't exist, use as-is
+	}
+
+	// Folder exists, find unique name
+	for i := 1; i <= maxUniquePathAttempts; i++ {
+		newName := fmt.Sprintf("%s (%d)", folderName, i)
+		path = filepath.Join(saveDir, newName)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return newName, nil
+		}
+	}
+	return "", fmt.Errorf("could not find unique folder name after %d attempts for %s", maxUniquePathAttempts, folderName)
+}
+
+// prepareFolderRemap computes folder remapping for the session.
+// This finds unique names for root folders that already exist in saveDir.
+// Called once on first SaveFile via sync.Once.
+func (sess *RecvSession) prepareFolderRemap(saveDir string) error {
+	sess.folderRemapOnce.Do(func() {
+		sess.folderRemap = make(map[string]string)
+		sess.folderRemapDir = saveDir
+
+		// Extract all unique root folders from fileMetas
+		rootFolders := make(map[string]bool)
+		sess.mu.RLock()
+		for _, meta := range sess.fileMetas {
+			sanitizedPath, err := utils.SanitizeRelativePath(meta.Filename)
+			if err != nil {
+				continue
+			}
+			// Get the first path component (root folder)
+			parts := strings.SplitN(filepath.ToSlash(sanitizedPath), "/", 2)
+			if len(parts) > 1 {
+				// Has subdirectory structure - track root folder
+				rootFolders[parts[0]] = true
+			}
+		}
+		sess.mu.RUnlock()
+
+		// For each root folder, find a unique name if needed
+		for root := range rootFolders {
+			uniqueRoot, err := findUniqueFolderName(saveDir, root)
+			if err != nil {
+				sess.folderRemapErr = err
+				return
+			}
+			if uniqueRoot != root {
+				sess.folderRemap[root] = uniqueRoot
+				slog.Info("Remapping folder for uniqueness", "original", root, "unique", uniqueRoot)
+			}
+		}
+	})
+	return sess.folderRemapErr
+}
+
+// applyFolderRemap applies the folder remap to a sanitized path.
+// If the path's root folder has been remapped, returns the remapped path.
+func (sess *RecvSession) applyFolderRemap(sanitizedPath string) string {
+	if len(sess.folderRemap) == 0 {
+		return sanitizedPath
+	}
+
+	parts := strings.SplitN(filepath.ToSlash(sanitizedPath), "/", 2)
+	if len(parts) > 1 {
+		if newRoot, ok := sess.folderRemap[parts[0]]; ok {
+			return newRoot + "/" + parts[1]
+		}
+	}
+	return sanitizedPath
+}
 
 // CreateUniqueFile atomically creates a file with a unique name, appending a counter if needed.
 // For example: "file.txt" -> "file (1).txt" -> "file (2).txt"
@@ -182,6 +270,15 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	if sanitizedPath == "." || sanitizedPath == "/" || sanitizedPath == "" {
 		return "", lserrors.ErrInvalidBody
 	}
+
+	// Prepare folder remap on first SaveFile (for unique folder names)
+	if err := sess.prepareFolderRemap(saveToDir); err != nil {
+		slog.Error("Failed to prepare folder remap", "error", err)
+		return "", lserrors.ErrFileIO
+	}
+
+	// Apply folder remap if the root folder was renamed for uniqueness
+	sanitizedPath = sess.applyFolderRemap(sanitizedPath)
 
 	// Split into directory and filename components
 	subDir := filepath.Dir(sanitizedPath)

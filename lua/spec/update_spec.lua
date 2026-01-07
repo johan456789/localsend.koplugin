@@ -450,7 +450,49 @@ describe("Self-Update", function()
             assert.is_truthy(helper.find_notification("successfully"))
         end)
 
-        it("handles file not in update package", function()
+        it("skips orphan cleanup when file tracking fails", function()
+            -- This test simulates the case where the ls command to track new_lua_files
+            -- returns empty (e.g., io.popen fails). Orphan cleanup should be skipped
+            -- to avoid incorrectly removing valid files.
+            http_responses.code = "200"
+            http_responses.ls_files = {}  -- Empty - simulates tracking failure
+
+            local removed_files = {}
+            local original_remove = os.remove
+            os.remove = function(path)
+                table.insert(removed_files, path)
+                return original_remove(path)
+            end
+
+            package.loaded["util"].pathExists = function(path)
+                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
+                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
+                if path == "/tmp/localsend_update.zip" then return true end
+                if path == "/tmp/localsend_update_extract/localsend.koplugin" then return true end
+                if path:match("/tmp/localsend_update_extract/localsend.koplugin/") then return true end
+                if path:match("/tmp/koreader/plugins/localsend.koplugin/.*%.lua$") then return true end
+                return false
+            end
+
+            local instance = helper.create_instance()
+            instance:doPerformUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
+
+            -- Should not remove any orphaned files when tracking is empty
+            local orphan_removal_attempted = false
+            for _, path in ipairs(removed_files) do
+                -- Check if any .lua files in plugin_path were removed during orphan cleanup
+                -- (excluding temp files and core files deleted before copy)
+                if path:match("/tmp/koreader/plugins/localsend.koplugin/localsend_.*%.lua$") then
+                    orphan_removal_attempted = true
+                    break
+                end
+            end
+            assert.is_false(orphan_removal_attempted, "Should not attempt orphan cleanup with empty tracking")
+
+            os.remove = original_remove
+        end)
+
+        it("handles core file missing from update package", function()
             http_responses.code = "200"
             package.loaded["util"].pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
@@ -459,19 +501,23 @@ describe("Self-Update", function()
                 if path == "/tmp/localsend_update_extract/localsend.koplugin" then return true end
                 if path == "/tmp/localsend_update_extract/localsend.koplugin/main.lua" then return true end
                 if path == "/tmp/localsend_update_extract/localsend.koplugin/localsend" then return true end
+                -- _meta.lua is missing from update package
                 return false
             end
 
             local instance = helper.create_instance()
             instance:doPerformUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
 
-            local found_warn = false
-            for _, msg in ipairs(logger.calls.warn) do
-                if msg:match("File not in update package") and msg:match("_meta%.lua") then
-                    found_warn = true; break
+            -- Core file missing should now be an error, not a warning
+            local found_err = false
+            for _, msg in ipairs(logger.calls.err) do
+                if msg:match("Core file missing from update package") and msg:match("_meta%.lua") then
+                    found_err = true; break
                 end
             end
-            assert.is_true(found_warn)
+            assert.is_true(found_err)
+            -- Should show partial failure since core file is missing
+            assert.is_truthy(helper.find_notification("partially failed"))
         end)
     end)
 

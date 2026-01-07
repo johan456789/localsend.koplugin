@@ -190,7 +190,9 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
                 deps.logger.err("[LocalSend] Failed to copy:", file)
             end
         else
-            deps.logger.warn("[LocalSend] File not in update package:", file)
+            -- Core files are required - missing ones indicate a broken update package
+            copy_failed = true
+            deps.logger.err("[LocalSend] Core file missing from update package:", file)
         end
     end
 
@@ -226,9 +228,11 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
 
     -- Remove orphaned lua files (files that exist locally but not in the update)
     -- Only do this if copy succeeded to avoid leaving plugin in broken state
-    -- Never remove critical files needed for recovery
-    local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true }
-    if not copy_failed then
+    -- Never remove critical files needed for recovery and versioning
+    local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true, ["_meta.lua"] = true }
+    -- Safety check: don't cleanup if tracking failed (new_lua_files is empty)
+    local has_tracked_files = next(new_lua_files) ~= nil
+    if not copy_failed and has_tracked_files then
         local old_ls_handle = io.popen("ls " .. deps.util.shell_escape({plugin_path}) .. "/*.lua 2>/dev/null")
         if old_ls_handle then
             for old_file in old_ls_handle:lines() do

@@ -20,6 +20,7 @@ M.state = {
     scheduled_tasks = {},
     unscheduled_tasks = {},
     removed_files = {},
+    purged_dirs = {},
     close_calls = {},
 }
 
@@ -32,6 +33,7 @@ function M.reset_state()
     M.state.scheduled_tasks = {}
     M.state.unscheduled_tasks = {}
     M.state.removed_files = {}
+    M.state.purged_dirs = {}
     M.state.close_calls = {}
 end
 
@@ -50,6 +52,10 @@ function M.mock_ffi_util()
         sleep = function() end,
         isSubProcessDone = function() return true end,
         terminateSubProcess = function() end,
+        purgeDir = function(dir)
+            table.insert(M.state.purged_dirs, dir)
+            return true
+        end,
     }
 end
 
@@ -237,6 +243,17 @@ function M.mock_util(opts)
         makePath = opts.makePath or function(path) return true end,
 
         readFromFile = opts.readFromFile or function(path) return nil end,
+
+        removeFile = opts.removeFile or function(path)
+            table.insert(M.state.removed_files, path)
+            return true
+        end,
+
+        directoryExists = opts.directoryExists or function(path)
+            -- Default: cache directory exists
+            if path:match("/cache/localsend") then return true end
+            return false
+        end,
 
         splitFilePathName = function(file)
             if file == nil or file == "" then return "", "" end

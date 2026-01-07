@@ -55,6 +55,9 @@ describe("start() function", function()
             local instance = helper.create_instance()
             instance.isRunning = function() return true end
 
+            -- Clear any commands from init (telemetry cleanup runs on startup)
+            helper.state.os_execute_calls = {}
+
             instance:start()
 
             assert.equal(0, #helper.state.os_execute_calls,

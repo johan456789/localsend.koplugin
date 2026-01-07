@@ -56,6 +56,7 @@ local isValidPort = lsutils.isValidPort
 local validateDeviceName = lsutils.validateDeviceName
 
 local data_dir = DataStorage:getFullDataDir()
+local cache_dir = data_dir .. "/cache"
 local plugin_path = data_dir .. "/plugins/localsend.koplugin"
 
 -- ServerState is now in localsend_state.lua module (nil in recovery mode)
@@ -127,12 +128,18 @@ function LocalSend:init()
         InfoMessage = InfoMessage,
         NetworkMgr = NetworkMgr,
         util = util,
+        ffiutil = ffiutil,
         json = json,
         logger = logger,
         T = T,
         _ = _,
         G_reader_settings = G_reader_settings,
+        cache_dir = cache_dir,
     })
+
+    -- Clear Kindle telemetry files on startup (no-op on non-Kindle)
+    -- These fm-out-* files accumulate in /tmp and can fill the 64MB tmpfs
+    lsupdate.clearTmpTelemetryFiles()
 
     -- Initialize optional modules with dependencies (guarded for recovery mode)
     if lsrouting then
@@ -270,12 +277,18 @@ function LocalSend:_initRecoveryMode()
         InfoMessage = InfoMessage,
         NetworkMgr = NetworkMgr,
         util = util,
+        ffiutil = ffiutil,
         json = json,
         logger = logger,
         T = T,
         _ = _,
         G_reader_settings = G_reader_settings,
+        cache_dir = cache_dir,
     })
+
+    -- Clear Kindle telemetry files even in recovery mode
+    -- /tmp filling up affects device stability regardless of plugin state
+    lsupdate.clearTmpTelemetryFiles()
 
     self.ui.menu:registerToMainMenu(self)
 end

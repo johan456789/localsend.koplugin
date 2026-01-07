@@ -9,14 +9,36 @@ local M = {}
 -- Constants
 M.GITHUB_RELEASE_URL = "https://api.github.com/repos/kaikozlov/localsend.koplugin/releases/latest"
 M.REINSTALL_MARKER_FILE = ".reinstall_required"
+M.TMP_TELEMETRY_PATTERN = "fm-out-*"
+M.CACHE_SUBDIR = "localsend"
 
 -- Dependencies container (set via M.init)
 local deps = {}
 
+-- Path configuration (set via M.init)
+local cache_dir = nil
+
 -- Initialize module with dependencies
--- @param d table Dependencies: { UIManager, InfoMessage, NetworkMgr, util, json, logger, T, _ }
+-- @param d table Dependencies: { UIManager, InfoMessage, NetworkMgr, util, ffiutil, json, logger, T, _, cache_dir }
 function M.init(d)
     deps = d
+    cache_dir = d.cache_dir
+end
+
+-- Get the cache directory for update temp files, creating if needed
+-- @return string Path to cache directory
+local function getUpdateCacheDir()
+    local dir = cache_dir .. "/" .. M.CACHE_SUBDIR
+    deps.util.makePath(dir)
+    return dir
+end
+
+-- Clean up all files in the update cache directory
+function M.cleanupCache()
+    local dir = cache_dir .. "/" .. M.CACHE_SUBDIR
+    if deps.util.directoryExists(dir) then
+        deps.ffiutil.purgeDir(dir)
+    end
 end
 
 -- Check if reinstall marker file exists
@@ -47,7 +69,31 @@ end
 -- @param plugin_path string Path to plugin directory
 function M.clearReinstallRequired(plugin_path)
     local marker_path = plugin_path .. "/" .. M.REINSTALL_MARKER_FILE
-    os.remove(marker_path)
+    deps.util.removeFile(marker_path)
+end
+
+-- Clear Kindle framework telemetry files that fill up /tmp
+-- These are Amazon telemetry upload queue files (fm-out-*) that accumulate
+-- when telemetry uploads fail. They're safe to remove: meant to be uploaded
+-- and deleted, cleared on reboot anyway. On non-Kindle devices, this is a no-op.
+function M.clearTmpTelemetryFiles()
+    -- Use ls + Lua pattern matching instead of find (busybox find may lack -delete)
+    local handle = io.popen("ls -1 /tmp/ 2>/dev/null")
+    if not handle then return end
+
+    local ok, err = pcall(function()
+        for filename in handle:lines() do
+            -- Match fm-out-* pattern
+            if filename:match("^fm%-out%-") then
+                os.remove("/tmp/" .. filename)
+            end
+        end
+    end)
+    handle:close()
+
+    if not ok then
+        deps.logger.dbg("[LocalSend] Error clearing telemetry files:", err)
+    end
 end
 
 -- Build a curl command for fetching JSON from a URL
@@ -93,18 +139,23 @@ function M.getDeviceArch()
 end
 
 -- Perform the actual update download and installation
--- @param instance table LocalSend instance
+-- @param instance table LocalSend instance (unused, kept for API compatibility)
 -- @param download_url string URL to download
--- @param asset_name string Name of the asset
+-- @param asset_name string Name of the asset (unused, kept for API compatibility)
 -- @param new_version string Version string
 -- @param plugin_path string Path to plugin directory
 function M.doPerformUpdate(instance, download_url, asset_name, new_version, plugin_path)
-    local tmp_zip = "/tmp/localsend_update.zip"
-    local tmp_extract = "/tmp/localsend_update_extract"
+    -- Clear Kindle telemetry files that may fill up /tmp (no-op on non-Kindle)
+    -- Still useful if any system operations use /tmp
+    M.clearTmpTelemetryFiles()
 
-    -- Clean up any previous update attempt
-    os.remove(tmp_zip)
-    os.execute(deps.util.shell_escape({"rm", "-rf", tmp_extract}))
+    -- Clean up entire cache directory from any previous attempts (including orphaned files)
+    M.cleanupCache()
+
+    -- Now create fresh cache directory
+    local update_cache = getUpdateCacheDir()
+    local tmp_zip = update_cache .. "/localsend_update.zip"
+    local tmp_extract = update_cache .. "/extract"
 
     -- Download the zip
     local cmd = deps.util.shell_escape({"curl", "-L", "-s", "-o", tmp_zip, "-w", "%{http_code}",
@@ -126,7 +177,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
             icon = "notice-warning",
             text = deps.T(deps._("Download failed.\nHTTP status: %1"), http_code),
         })
-        os.remove(tmp_zip)
+        deps.util.removeFile(tmp_zip)
         return
     end
 
@@ -153,8 +204,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
             icon = "notice-warning",
             text = deps._("Invalid update package structure."),
         })
-        os.remove(tmp_zip)
-        os.execute(deps.util.shell_escape({"rm", "-rf", tmp_extract}))
+        M.cleanupCache()
         return
     end
 
@@ -182,7 +232,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
 
         if deps.util.pathExists(src) then
             -- Delete destination first so we can verify copy actually worked
-            os.remove(dst)
+            deps.util.removeFile(dst)
             os.execute(deps.util.shell_escape({"cp", src, dst}))
             -- Verify copy succeeded by checking destination exists
             if not deps.util.pathExists(dst) then
@@ -206,7 +256,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
                 if filename and filename ~= "main.lua" and filename ~= "_meta.lua" then
                     local dst = plugin_path .. "/" .. filename
                     -- Delete destination first so we can verify copy actually worked
-                    os.remove(dst)
+                    deps.util.removeFile(dst)
                     os.execute(deps.util.shell_escape({"cp", lua_file, dst}))
                     -- Verify copy succeeded
                     if not deps.util.pathExists(dst) then
@@ -238,7 +288,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
             for old_file in old_ls_handle:lines() do
                 local _, filename = deps.util.splitFilePathName(old_file)
                 if filename and not new_lua_files[filename] and not protected_files[filename] then
-                    local rm_ok = os.remove(plugin_path .. "/" .. filename)
+                    local rm_ok = deps.util.removeFile(plugin_path .. "/" .. filename)
                     if rm_ok then
                         deps.logger.dbg("[LocalSend] Removed orphaned file:", filename)
                     else
@@ -250,9 +300,8 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
         end
     end
 
-    -- Cleanup
-    os.remove(tmp_zip)
-    os.execute(deps.util.shell_escape({"rm", "-rf", tmp_extract}))
+    -- Cleanup cache directory
+    M.cleanupCache()
 
     if copy_failed then
         -- Mark that reinstall is required so user sees warning on restart
@@ -315,7 +364,8 @@ end
 -- @param plugin_version string Current plugin version
 -- @param schedule_next function Callback to schedule next check
 function M.doAutoCheckForUpdates(instance, plugin_version, schedule_next)
-    local tmp_file = "/tmp/localsend_update_check.json"
+    local update_cache = getUpdateCacheDir()
+    local tmp_file = update_cache .. "/update_check.json"
     local cmd = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL)
 
     local handle = io.popen(cmd)
@@ -338,13 +388,13 @@ function M.doAutoCheckForUpdates(instance, plugin_version, schedule_next)
 
     if http_code ~= "200" then
         deps.logger.dbg("[LocalSend] Auto update check failed, HTTP:", http_code)
-        os.remove(tmp_file)
+        deps.util.removeFile(tmp_file)
         schedule_next()
         return
     end
 
     local content = deps.util.readFromFile(tmp_file)
-    os.remove(tmp_file)
+    deps.util.removeFile(tmp_file)
 
     if not content then
         schedule_next()
@@ -382,7 +432,8 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
         timeout = 2,
     })
 
-    local tmp_file = "/tmp/localsend_update_check.json"
+    local update_cache = getUpdateCacheDir()
+    local tmp_file = update_cache .. "/update_check.json"
     local cmd = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL)
 
     local handle = io.popen(cmd)
@@ -408,12 +459,12 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
             icon = "notice-warning",
             text = deps.T(deps._("Failed to check for updates.\nHTTP status: %1\n\nPlease check your internet connection."), http_code),
         })
-        os.remove(tmp_file)
+        deps.util.removeFile(tmp_file)
         return
     end
 
     local content = deps.util.readFromFile(tmp_file)
-    os.remove(tmp_file)
+    deps.util.removeFile(tmp_file)
 
     if not content then
         deps.UIManager:show(deps.InfoMessage:new{

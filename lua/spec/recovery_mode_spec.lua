@@ -533,6 +533,16 @@ describe("Reinstall marker file", function()
             return original_os_remove(path)
         end
 
+        -- Override util.removeFile to handle marker file removal
+        package.loaded["util"].removeFile = function(path)
+            if path:match("%.reinstall_required$") then
+                marker_file_exists = false
+                marker_file_content = nil
+                return true
+            end
+            return true
+        end
+
         -- Load the update module fresh
         package.loaded["localsend_update"] = nil
         lsupdate = require("localsend_update")
@@ -543,11 +553,13 @@ describe("Reinstall marker file", function()
             InfoMessage = package.loaded["ui/widget/infomessage"],
             NetworkMgr = package.loaded["ui/network/manager"],
             util = package.loaded["util"],
+            ffiutil = package.loaded["ffi/util"],
             json = package.loaded["json"],
             logger = package.loaded["logger"],
             T = function(s, ...) return s end,
             _ = function(s) return s end,
             G_reader_settings = package.loaded["G_reader_settings"],
+            cache_dir = "/tmp/koreader/cache",
         })
     end)
 

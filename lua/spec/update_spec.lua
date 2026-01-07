@@ -95,9 +95,10 @@ describe("Self-Update", function()
         package.loaded["util"].pathExists = function(path)
             if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
             if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-            if path == "/tmp/localsend_update.zip" then return true end
-            if path == "/tmp/localsend_update_extract/localsend.koplugin" then return true end
-            if path:match("/tmp/localsend_update_extract/localsend.koplugin/") then return true end
+            -- Cache-based update paths
+            if path == "/tmp/koreader/cache/localsend/localsend_update.zip" then return true end
+            if path == "/tmp/koreader/cache/localsend/extract/localsend.koplugin" then return true end
+            if path:match("/tmp/koreader/cache/localsend/extract/localsend.koplugin/") then return true end
             -- Also return true for destination files after copy
             if path:match("/tmp/koreader/plugins/localsend.koplugin/.*%.lua$") then return true end
             if path:match("/tmp/koreader/plugins/localsend.koplugin/localsend$") then return true end
@@ -116,7 +117,7 @@ describe("Self-Update", function()
 
         for _, tc in ipairs(up_to_date_cases) do
             it("shows 'up to date' when remote is " .. tc[2], function()
-                file_contents["/tmp/localsend_update_check.json"] = string.format(
+                file_contents["/tmp/koreader/cache/localsend/update_check.json"] = string.format(
                     '{"tag_name":"%s","body":"Release notes"}', tc[1])
 
                 local instance = helper.create_instance()
@@ -146,7 +147,7 @@ describe("Self-Update", function()
         end
 
         it("shows update available with matching asset", function()
-            file_contents["/tmp/localsend_update_check.json"] = [[
+            file_contents["/tmp/koreader/cache/localsend/update_check.json"] = [[
                 {"tag_name":"v2.0.0","body":"New features","assets":[
                     {"name":"localsend-koplugin-armv7.zip","browser_download_url":"https://example.com/armv7.zip"}
                 ]}
@@ -168,7 +169,7 @@ describe("Self-Update", function()
         end)
 
         it("shows info when no matching asset for architecture", function()
-            file_contents["/tmp/localsend_update_check.json"] = [[
+            file_contents["/tmp/koreader/cache/localsend/update_check.json"] = [[
                 {"tag_name":"v2.0.0","body":"New features","assets":[
                     {"name":"localsend-koplugin-arm64.zip","browser_download_url":"https://example.com/arm64.zip"}
                 ]}
@@ -187,7 +188,7 @@ describe("Self-Update", function()
         it("handles status file read failure", function()
             local original_io_open = _G.io.open
             _G.io.open = function(path, mode)
-                if path == "/tmp/localsend_update_check.json" and mode == "r" then
+                if path == "/tmp/koreader/cache/localsend/update_check.json" and mode == "r" then
                     return nil
                 end
                 return original_io_open(path, mode)
@@ -200,7 +201,7 @@ describe("Self-Update", function()
         end)
 
         it("handles malformed JSON response", function()
-            file_contents["/tmp/localsend_update_check.json"] = "not valid json {{{{"
+            file_contents["/tmp/koreader/cache/localsend/update_check.json"] = "not valid json {{{{"
             package.loaded["json"].decode = function(s) error("JSON parse error") end
 
             local instance = helper.create_instance()
@@ -210,7 +211,7 @@ describe("Self-Update", function()
         end)
 
         it("handles JSON without tag_name field", function()
-            file_contents["/tmp/localsend_update_check.json"] = '{"message":"Not Found"}'
+            file_contents["/tmp/koreader/cache/localsend/update_check.json"] = '{"message":"Not Found"}'
             package.loaded["json"].decode = function(s) return { message = "Not Found" } end
 
             local instance = helper.create_instance()
@@ -227,7 +228,7 @@ describe("Self-Update", function()
 
             local cleaned = false
             for _, path in ipairs(helper.state.removed_files) do
-                if path == "/tmp/localsend_update_check.json" then cleaned = true; break end
+                if path == "/tmp/koreader/cache/localsend/update_check.json" then cleaned = true; break end
             end
             assert.is_true(cleaned, "Should clean up temp file")
         end)
@@ -292,7 +293,7 @@ describe("Self-Update", function()
 
             local cleaned = false
             for _, path in ipairs(helper.state.removed_files) do
-                if path == "/tmp/localsend_update.zip" then cleaned = true; break end
+                if path == "/tmp/koreader/cache/localsend/localsend_update.zip" then cleaned = true; break end
             end
             assert.is_true(cleaned, "Should clean up temp zip")
         end)
@@ -322,7 +323,7 @@ describe("Self-Update", function()
             package.loaded["util"].pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                if path == "/tmp/localsend_update.zip" then return true end
+                if path == "/tmp/koreader/cache/localsend/localsend_update.zip" then return true end
                 -- extracted_plugin directory doesn't exist (simulates extraction failure)
                 return false
             end
@@ -339,8 +340,8 @@ describe("Self-Update", function()
             package.loaded["util"].pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                if path == "/tmp/localsend_update.zip" then return true end
-                if path == "/tmp/localsend_update_extract/localsend.koplugin" then return false end
+                if path == "/tmp/koreader/cache/localsend/localsend_update.zip" then return true end
+                if path == "/tmp/koreader/cache/localsend/extract/localsend.koplugin" then return false end
                 return false
             end
 
@@ -356,9 +357,9 @@ describe("Self-Update", function()
             package.loaded["util"].pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                if path == "/tmp/localsend_update.zip" then return true end
-                if path == "/tmp/localsend_update_extract/localsend.koplugin" then return true end
-                if path:match("/tmp/localsend_update_extract/localsend.koplugin/") then return true end
+                if path == "/tmp/koreader/cache/localsend/localsend_update.zip" then return true end
+                if path == "/tmp/koreader/cache/localsend/extract/localsend.koplugin" then return true end
+                if path:match("/tmp/koreader/cache/localsend/extract/localsend.koplugin/") then return true end
                 -- Destination files: main.lua copy "fails", others succeed
                 if path == "/tmp/koreader/plugins/localsend.koplugin/main.lua" then return false end
                 if path:match("/tmp/koreader/plugins/localsend.koplugin/.*%.lua$") then return true end
@@ -399,7 +400,7 @@ describe("Self-Update", function()
         it("handles additional Lua file copying", function()
             setup_successful_download()
             http_responses.ls_files = {
-                "/tmp/localsend_update_extract/localsend.koplugin/localsend_utils.lua",
+                "/tmp/koreader/cache/localsend/extract/localsend.koplugin/localsend_utils.lua",
             }
 
             local instance = helper.create_instance()
@@ -411,15 +412,15 @@ describe("Self-Update", function()
         it("handles additional Lua file copy failure", function()
             http_responses.code = "200"
             http_responses.ls_files = {
-                "/tmp/localsend_update_extract/localsend.koplugin/localsend_utils.lua",
+                "/tmp/koreader/cache/localsend/extract/localsend.koplugin/localsend_utils.lua",
             }
             -- Source files exist, but destination localsend_utils.lua fails to appear
             package.loaded["util"].pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                if path == "/tmp/localsend_update.zip" then return true end
-                if path == "/tmp/localsend_update_extract/localsend.koplugin" then return true end
-                if path:match("/tmp/localsend_update_extract/localsend.koplugin/") then return true end
+                if path == "/tmp/koreader/cache/localsend/localsend_update.zip" then return true end
+                if path == "/tmp/koreader/cache/localsend/extract/localsend.koplugin" then return true end
+                if path:match("/tmp/koreader/cache/localsend/extract/localsend.koplugin/") then return true end
                 -- Core files copy succeeds
                 if path == "/tmp/koreader/plugins/localsend.koplugin/main.lua" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/_meta.lua" then return true end
@@ -467,9 +468,9 @@ describe("Self-Update", function()
             package.loaded["util"].pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                if path == "/tmp/localsend_update.zip" then return true end
-                if path == "/tmp/localsend_update_extract/localsend.koplugin" then return true end
-                if path:match("/tmp/localsend_update_extract/localsend.koplugin/") then return true end
+                if path == "/tmp/koreader/cache/localsend/localsend_update.zip" then return true end
+                if path == "/tmp/koreader/cache/localsend/extract/localsend.koplugin" then return true end
+                if path:match("/tmp/koreader/cache/localsend/extract/localsend.koplugin/") then return true end
                 if path:match("/tmp/koreader/plugins/localsend.koplugin/.*%.lua$") then return true end
                 return false
             end
@@ -497,10 +498,10 @@ describe("Self-Update", function()
             package.loaded["util"].pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
                 if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                if path == "/tmp/localsend_update.zip" then return true end
-                if path == "/tmp/localsend_update_extract/localsend.koplugin" then return true end
-                if path == "/tmp/localsend_update_extract/localsend.koplugin/main.lua" then return true end
-                if path == "/tmp/localsend_update_extract/localsend.koplugin/localsend" then return true end
+                if path == "/tmp/koreader/cache/localsend/localsend_update.zip" then return true end
+                if path == "/tmp/koreader/cache/localsend/extract/localsend.koplugin" then return true end
+                if path == "/tmp/koreader/cache/localsend/extract/localsend.koplugin/main.lua" then return true end
+                if path == "/tmp/koreader/cache/localsend/extract/localsend.koplugin/localsend" then return true end
                 -- _meta.lua is missing from update package
                 return false
             end
@@ -530,7 +531,7 @@ describe("Self-Update", function()
                 if path:match("_meta%.lua$") then return { version = "v1.0.0" } end
             end
 
-            file_contents["/tmp/localsend_update_check.json"] = [[
+            file_contents["/tmp/koreader/cache/localsend/update_check.json"] = [[
                 {"tag_name":"v1.1.0","body":"Bug fixes","assets":[
                     {"name":"localsend-koplugin-armv7.zip","browser_download_url":"https://example.com/armv7.zip"}
                 ]}
@@ -620,6 +621,69 @@ describe("Self-Update", function()
 
             assert.is_nil(instance.check_update_task,
                 "check_update_task should be nil after onCloseWidget")
+        end)
+    end)
+
+    -- =======================================================================
+    -- clearTmpTelemetryFiles
+    -- =======================================================================
+    describe("clearTmpTelemetryFiles", function()
+        it("removes fm-out-* files from /tmp", function()
+            -- Mock io.popen to return fake telemetry files
+            local original_io_popen = io.popen
+            _G.io.popen = function(cmd)
+                if cmd:match("^ls %-1 /tmp/") then
+                    local files = { "fm-out-123", "fm-out-456", "other-file.txt" }
+                    local i = 0
+                    return {
+                        lines = function()
+                            return function()
+                                i = i + 1
+                                return files[i]
+                            end
+                        end,
+                        close = function() end,
+                    }
+                end
+                return original_io_popen(cmd)
+            end
+
+            -- Track os.remove calls
+            local removed = {}
+            local original_os_remove = os.remove
+            _G.os.remove = function(path)
+                table.insert(removed, path)
+                return true
+            end
+
+            local lsupdate = package.loaded["localsend_update"]
+            lsupdate.clearTmpTelemetryFiles()
+
+            -- Should have removed exactly the fm-out-* files
+            assert.equals(2, #removed)
+            assert.truthy(removed[1]:match("fm%-out%-123"))
+            assert.truthy(removed[2]:match("fm%-out%-456"))
+
+            _G.io.popen = original_io_popen
+            _G.os.remove = original_os_remove
+        end)
+
+        it("handles io.popen failure gracefully", function()
+            local original_io_popen = io.popen
+            _G.io.popen = function() return nil end
+
+            local lsupdate = package.loaded["localsend_update"]
+            -- Should not error
+            assert.has_no.errors(function()
+                lsupdate.clearTmpTelemetryFiles()
+            end)
+
+            _G.io.popen = original_io_popen
+        end)
+
+        it("exposes TMP_TELEMETRY_PATTERN constant", function()
+            local lsupdate = package.loaded["localsend_update"]
+            assert.equals("fm-out-*", lsupdate.TMP_TELEMETRY_PATTERN)
         end)
     end)
 end)

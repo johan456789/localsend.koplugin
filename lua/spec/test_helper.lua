@@ -397,6 +397,11 @@ function M.load_localsend_utils()
     package.loaded["localsend_utils"] = require("localsend_utils")
 end
 
+-- Load localsend_constants (real module, not mocked)
+function M.load_localsend_constants()
+    package.loaded["localsend_constants"] = require("localsend_constants")
+end
+
 -- Load localsend_update (real module, not mocked)
 function M.load_localsend_update()
     package.loaded["localsend_update"] = require("localsend_update")
@@ -430,6 +435,7 @@ end
 -- Clear cached main module to get fresh instance
 function M.reset_main()
     package.loaded["main"] = nil
+    package.loaded["localsend_constants"] = nil  -- Also reset constants module
     package.loaded["localsend_update"] = nil  -- Also reset update module
     package.loaded["localsend_routing"] = nil  -- Also reset routing module
     package.loaded["localsend_transfers"] = nil  -- Also reset transfers module
@@ -442,6 +448,10 @@ end
 -- This replaces the 80+ lines of setup() in most test files
 function M.setup_complete(opts)
     opts = opts or {}
+
+    -- Clear any broken module state from previous test blocks
+    -- This ensures fresh module loading even if prior tests broke the cache
+    M.reset_main()
 
     M.mock_ffi_util()
     M.mock_datastorage(opts.data_dir)
@@ -460,6 +470,7 @@ function M.setup_complete(opts)
     M.mock_pluginshare()
     M.mock_localsend_state()
     M.load_localsend_utils()
+    M.load_localsend_constants()
     M.load_localsend_update()
     M.load_localsend_routing()
     M.load_localsend_transfers()

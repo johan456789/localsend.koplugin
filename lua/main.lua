@@ -19,6 +19,7 @@ local PluginShare = require("pluginshare")
 -- Critical modules (required for recovery mode)
 local lsutils = require("localsend_utils")
 local lsupdate = require("localsend_update")
+local constants = require("localsend_constants")
 
 -- Optional modules - load with pcall for graceful degradation
 local RECOVERY_MODE = false
@@ -62,6 +63,11 @@ local plugin_path = data_dir .. "/plugins/localsend.koplugin"
 -- ServerState is now in localsend_state.lua module (nil in recovery mode)
 local ServerState = state and state.ServerState or nil
 
+-- Log the ServerState table address to verify it persists across widget instances
+if ServerState then
+    logger.warn("[LocalSend] Module loaded, ServerState table:", tostring(ServerState))
+end
+
 -- Load plugin metadata safely (wrap dofile in pcall)
 local plugin_meta
 local meta_path = plugin_path .. "/_meta.lua"
@@ -87,42 +93,8 @@ if not util.pathExists(binary_path) then
     return { disabled = true, }
 end
 
-local LocalSend = WidgetContainer:extend{
-    name = "LocalSend",
-    is_doc_only = false,
-}
-
-function LocalSend:init()
-    -- In recovery mode, only initialize update functionality
-    if RECOVERY_MODE then
-        self:_initRecoveryMode()
-        return
-    end
-
-    local loaded_port = G_reader_settings:readSetting("LocalSend_port") or "53317"
-    if not isValidPort(loaded_port) then
-        logger.warn("[LocalSend] Invalid port in settings, using default 53317")
-        loaded_port = "53317"
-    end
-    self.port = loaded_port
-    self.save_dir = G_reader_settings:readSetting("LocalSend_save_dir") or "/mnt/us/documents"
-    self.device_name = G_reader_settings:readSetting("LocalSend_device_name") or ""
-    self.use_https = G_reader_settings:nilOrTrue("LocalSend_use_https")
-    self.autostart = G_reader_settings:isTrue("LocalSend_autostart")
-    self.pin = G_reader_settings:readSetting("LocalSend_pin") or ""
-    self.accept_ext = G_reader_settings:readSetting("LocalSend_accept_ext") or ""
-    self.use_webrtc = G_reader_settings:isTrue("LocalSend_use_webrtc") -- Experimental, off by default
-    self.ext_dirs = G_reader_settings:readSetting("LocalSend_ext_dirs") or {} -- Extension routing: ext -> dir
-    self.routing_accept_all = G_reader_settings:isTrue("LocalSend_routing_accept_all") -- Accept unrouted files to default dir
-    self.routing_enabled = G_reader_settings:isTrue("LocalSend_routing_enabled") -- Whether routing is active
-    self.last_transfer_count = 0
-
-    -- Auto update check settings
-    self.auto_update_check = G_reader_settings:nilOrTrue("LocalSend_auto_update_check")
-    self.update_check_interval_hours = G_reader_settings:readSetting("LocalSend_update_check_interval_hours") or 168  -- Weekly default
-    self.last_update_check = G_reader_settings:readSetting("LocalSend_last_update_check") or 0
-
-    -- Initialize update module with dependencies
+-- Helper function to initialize the update module (used in both normal and recovery mode)
+local function initUpdateModule()
     lsupdate.init({
         UIManager = UIManager,
         InfoMessage = InfoMessage,
@@ -136,6 +108,60 @@ function LocalSend:init()
         G_reader_settings = G_reader_settings,
         cache_dir = cache_dir,
     })
+end
+
+local LocalSend = WidgetContainer:extend{
+    name = "LocalSend",
+    is_doc_only = false,
+}
+
+-- =============================================================================
+-- WIDGET LIFECYCLE WARNING
+-- =============================================================================
+-- This init() function runs on EVERY widget recreation, including:
+--   - Opening a different book
+--   - Switching between file manager and reader views
+--   - Some suspend/resume scenarios
+--
+-- DO NOT add code with side effects (network prompts, UI dialogs, notifications)
+-- without proper guards. Use ServerState flags to ensure once-per-session behavior.
+-- =============================================================================
+
+function LocalSend:init()
+    logger.dbg("[LocalSend] init() starting")
+
+    -- In recovery mode, only initialize update functionality
+    if RECOVERY_MODE then
+        self:_initRecoveryMode()
+        return
+    end
+
+    local loaded_port = G_reader_settings:readSetting("LocalSend_port") or constants.DEFAULT_PORT
+    if not isValidPort(loaded_port) then
+        logger.warn("[LocalSend] Invalid port in settings, using default " .. constants.DEFAULT_PORT)
+        loaded_port = constants.DEFAULT_PORT
+    end
+    self.port = loaded_port
+    self.save_dir = G_reader_settings:readSetting("LocalSend_save_dir") or constants.DEFAULT_SAVE_DIR
+    self.device_name = G_reader_settings:readSetting("LocalSend_device_name") or ""
+    self.use_https = G_reader_settings:nilOrTrue("LocalSend_use_https")
+    self.autostart = G_reader_settings:isTrue("LocalSend_autostart")
+    self.pin = G_reader_settings:readSetting("LocalSend_pin") or ""
+    self.accept_ext = G_reader_settings:readSetting("LocalSend_accept_ext") or ""
+    self.use_webrtc = G_reader_settings:isTrue("LocalSend_use_webrtc") -- Experimental, off by default
+    self.ext_dirs = G_reader_settings:readSetting("LocalSend_ext_dirs") or {} -- Extension routing: ext -> dir
+    self.routing_accept_all = G_reader_settings:isTrue("LocalSend_routing_accept_all") -- Accept unrouted files to default dir
+    self.routing_enabled = G_reader_settings:isTrue("LocalSend_routing_enabled") -- Whether routing is active
+    self.last_transfer_count = 0
+
+    -- Auto update check settings
+    self.auto_update_check = G_reader_settings:nilOrTrue("LocalSend_auto_update_check")
+    self.update_check_interval_hours = G_reader_settings:readSetting("LocalSend_update_check_interval_hours")
+        or constants.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS
+    self.last_update_check = G_reader_settings:readSetting("LocalSend_last_update_check") or 0
+
+    -- Initialize update module with dependencies
+    initUpdateModule()
 
     -- Clear Kindle telemetry files on startup (no-op on non-Kindle)
     -- These fm-out-* files accumulate in /tmp and can fill the 64MB tmpfs
@@ -228,28 +254,20 @@ function LocalSend:init()
     -- Clean up orphaned resources from previous crashes
     self:_cleanupOrphanedResources()
 
-    -- Handle missed resume event: if was_running_before_suspend is true, a previous
-    -- widget instance was destroyed during suspend/resume and this new instance
-    -- needs to restart the server. This takes priority over autostart.
+    -- Automatic server startup logic:
+    -- 1. Resume after suspend (widget was destroyed) - silent restart
+    -- 2. Autostart on fresh KOReader launch - silent (no WiFi prompts on startup)
+    -- Both paths silently skip if offline - no WiFi prompts during widget recreation.
+    -- Users can manually start the server from the menu if they want WiFi prompted.
+    logger.dbg("[LocalSend] init() autostart check:",
+               "autostart=", tostring(self.autostart),
+               "user_stopped=", tostring(ServerState.user_stopped),
+               "was_running_before_suspend=", tostring(ServerState.was_running_before_suspend))
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
-        ServerState.was_running_before_suspend = false  -- Clear flag before starting
-        NetworkMgr:runWhenConnected(function()
-            if not ServerState.user_stopped then
-                self:start(true)  -- silent=true like normal resume
-            end
-        end)
-    -- Only autostart if:
-    -- 1. autostart setting is enabled
-    -- 2. user hasn't explicitly stopped the server this session
-    -- (ServerState resets on KOReader restart, so autostart works on fresh launch)
+        ServerState.was_running_before_suspend = false
+        self:_startWhenConnected(true)  -- silent - no notification, no WiFi prompt
     elseif self.autostart and not ServerState.user_stopped then
-        -- Use NetworkMgr:runWhenConnected for reliable startup after WiFi is ready
-        NetworkMgr:runWhenConnected(function()
-            -- Re-check user_stopped in case they toggled it while waiting for network
-            if not ServerState.user_stopped then
-                self:start()
-            end
-        end)
+        self:_startWhenConnected(true)  -- silent - no WiFi prompt (will start silently if connected)
     end
 
     -- Sync cache with actual state (server may be running from previous widget instance)
@@ -272,19 +290,7 @@ function LocalSend:_initRecoveryMode()
     logger.warn("[LocalSend] Initializing in recovery mode")
 
     -- Initialize only the update module (critical for recovery)
-    lsupdate.init({
-        UIManager = UIManager,
-        InfoMessage = InfoMessage,
-        NetworkMgr = NetworkMgr,
-        util = util,
-        ffiutil = ffiutil,
-        json = json,
-        logger = logger,
-        T = T,
-        _ = _,
-        G_reader_settings = G_reader_settings,
-        cache_dir = cache_dir,
-    })
+    initUpdateModule()
 
     -- Clear Kindle telemetry files even in recovery mode
     -- /tmp filling up affects device stability regardless of plugin state
@@ -593,6 +599,29 @@ function LocalSend:start(silent)
         return
     end
     lsserver.start(self, silent)
+end
+
+-- Start server when network is available.
+-- For autostart: silently skip if offline (no WiFi prompts during widget recreation)
+-- For manual start: use runWhenConnected to prompt for WiFi if needed
+-- @param silent boolean If true, suppress notifications and don't prompt for WiFi
+function LocalSend:_startWhenConnected(silent)
+    logger.dbg("[LocalSend] _startWhenConnected: silent=", tostring(silent), ", isConnected=", tostring(NetworkMgr:isConnected()))
+    if NetworkMgr:isConnected() then
+        -- Network ready, start immediately
+        self:start(silent)
+    elseif silent then
+        -- Silent mode (autostart/resume): don't prompt for WiFi, just skip
+        -- This prevents WiFi prompts during widget recreation (book opens, view switches)
+        logger.dbg("[LocalSend] Offline, silent mode - skipping start")
+    else
+        -- Non-silent (manual start): prompt for WiFi
+        NetworkMgr:runWhenConnected(function()
+            if not ServerState.user_stopped then
+                self:start(silent)
+            end
+        end)
+    end
 end
 
 function LocalSend:isRunning()

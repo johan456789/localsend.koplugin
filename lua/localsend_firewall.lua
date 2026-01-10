@@ -2,6 +2,8 @@
 -- Kindle firewall management for LocalSend plugin
 -- Handles iptables rules for TCP/UDP ports
 
+local constants = require("localsend_constants")
+
 local M = {}
 
 -- Dependencies container (set via M.init)
@@ -73,8 +75,8 @@ function M.openFirewall(port, use_webrtc)
     iptablesAddIfMissing({"OUTPUT", "-p", "udp", "--sport", port, "-j", "ACCEPT"})
     -- WebRTC/ICE UDP ports - must match range in peer.go SetEphemeralUDPPortRange
     if use_webrtc then
-        iptablesAddIfMissing({"INPUT", "-p", "udp", "--dport", "50000:50100", "-j", "ACCEPT"})
-        iptablesAddIfMissing({"OUTPUT", "-p", "udp", "--sport", "50000:50100", "-j", "ACCEPT"})
+        iptablesAddIfMissing({"INPUT", "-p", "udp", "--dport", constants.WEBRTC_PORT_RANGE, "-j", "ACCEPT"})
+        iptablesAddIfMissing({"OUTPUT", "-p", "udp", "--sport", constants.WEBRTC_PORT_RANGE, "-j", "ACCEPT"})
         deps.logger.dbg("[LocalSend] Firewall opened for WebRTC UDP ports (50000-50100)")
     end
     deps.logger.dbg("[LocalSend] Firewall opened for port " .. port)
@@ -95,8 +97,8 @@ function M.closeFirewall(port)
     iptablesDelete({"INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"})
     iptablesDelete({"OUTPUT", "-p", "udp", "--sport", port, "-j", "ACCEPT"})
     -- Clean up WebRTC UDP rules (ignore errors if they don't exist)
-    iptablesDelete({"INPUT", "-p", "udp", "--dport", "50000:50100", "-j", "ACCEPT"})
-    iptablesDelete({"OUTPUT", "-p", "udp", "--sport", "50000:50100", "-j", "ACCEPT"})
+    iptablesDelete({"INPUT", "-p", "udp", "--dport", constants.WEBRTC_PORT_RANGE, "-j", "ACCEPT"})
+    iptablesDelete({"OUTPUT", "-p", "udp", "--sport", constants.WEBRTC_PORT_RANGE, "-j", "ACCEPT"})
     deps.logger.dbg("[LocalSend] Firewall closed for port " .. port)
 end
 

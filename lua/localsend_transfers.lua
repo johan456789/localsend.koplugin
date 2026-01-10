@@ -3,13 +3,9 @@
 -- Handles reading transfer logs, checking for new transfers, and showing notifications
 
 local state = require("localsend_state")
+local constants = require("localsend_constants")
 
 local M = {}
-
--- Module constants
-M.transfer_log_file = "/tmp/localsend_transfers.log"
-M.transfer_notify_file = "/tmp/localsend_notify"
-M.SENTINEL_POLL_INTERVAL = 2
 
 -- Dependencies container (set via M.init)
 local deps = {}
@@ -20,20 +16,15 @@ function M.init(d)
     deps = d
 end
 
--- ServerState reference for convenience
-local function getServerState()
-    return state.ServerState
-end
-
 -- Read full transfer log from disk
 -- @return table Array of transfer entries
 function M.getTransferLog()
     local transfers = {}
-    if not deps.util.pathExists(M.transfer_log_file) then
+    if not deps.util.pathExists(constants.TRANSFER_LOG_FILE) then
         return transfers
     end
 
-    local f = io.open(M.transfer_log_file, "r")
+    local f = io.open(constants.TRANSFER_LOG_FILE, "r")
     if not f then return transfers end
 
     for line in f:lines() do
@@ -52,14 +43,14 @@ end
 -- Uses ServerState.last_log_position to persist across widget instances
 -- @return table Array of new transfer entries
 function M.getNewTransfers()
-    local ServerState = getServerState()
+    local ServerState = state.ServerState
     local transfers = {}
-    if not deps.util.pathExists(M.transfer_log_file) then
+    if not deps.util.pathExists(constants.TRANSFER_LOG_FILE) then
         ServerState.last_log_position = 0
         return transfers
     end
 
-    local f = io.open(M.transfer_log_file, "r")
+    local f = io.open(constants.TRANSFER_LOG_FILE, "r")
     if not f then
         ServerState.last_log_position = 0
         return transfers
@@ -93,14 +84,14 @@ end
 -- Count is updated by getNewTransfers() and cleared by clearTransferLog()
 -- @return number Transfer count
 function M.getTransferCount()
-    return getServerState().transfer_count
+    return state.ServerState.transfer_count
 end
 
 -- Clear transfer log and reset all tracking state
 function M.clearTransferLog()
-    local ServerState = getServerState()
-    os.remove(M.transfer_log_file)
-    os.remove(M.transfer_notify_file)  -- Also remove sentinel file
+    local ServerState = state.ServerState
+    os.remove(constants.TRANSFER_LOG_FILE)
+    os.remove(constants.TRANSFER_NOTIFY_FILE)  -- Also remove sentinel file
     ServerState.last_log_position = 0  -- Reset position tracking when log is cleared
     ServerState.transfer_count = 0  -- Reset cached count
     ServerState.last_sentinel_value = nil  -- Reset sentinel tracking
@@ -139,7 +130,7 @@ end
 -- When content changes, triggers an immediate full log check
 -- @param instance table LocalSend instance
 function M.checkSentinelFile(instance)
-    local ServerState = getServerState()
+    local ServerState = state.ServerState
 
     if not instance:isRunning() then
         -- Server died unexpectedly - clean up state so UI reflects reality
@@ -149,7 +140,7 @@ function M.checkSentinelFile(instance)
     end
 
     -- Read sentinel file content (tiny file with just a timestamp)
-    local content = deps.util.readFromFile(M.transfer_notify_file)
+    local content = deps.util.readFromFile(constants.TRANSFER_NOTIFY_FILE)
     if content then
         content = content:gsub("%s+", "")  -- Trim whitespace
         -- Trigger check if:
@@ -164,7 +155,7 @@ function M.checkSentinelFile(instance)
 
     -- Schedule next sentinel check
     if instance:isRunning() then
-        deps.UIManager:scheduleIn(M.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
+        deps.UIManager:scheduleIn(constants.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
     end
 end
 

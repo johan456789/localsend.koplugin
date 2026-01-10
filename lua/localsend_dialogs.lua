@@ -6,15 +6,8 @@ local lsutils = require("localsend_utils")
 
 local M = {}
 
--- Extension presets for allowed extensions menu
-M.EXTENSION_PRESETS = {
-    { text = "All files", value = "" },
-    { text = "eBooks (epub, pdf, mobi, azw3)", value = "epub,pdf,mobi,azw3" },
-    { text = "eBooks + CBZ (comics)", value = "epub,pdf,mobi,azw3,cbz,cbr" },
-    { text = "PDF only", value = "pdf" },
-    { text = "EPUB only", value = "epub" },
-    { text = "Custom...", value = nil },
-}
+-- Extension presets will be initialized in init() after gettext is available
+M.EXTENSION_PRESETS = nil
 
 -- Dependencies container (set via M.init)
 local deps = {}
@@ -23,7 +16,7 @@ local deps = {}
 -- @param d table Dependencies: { UIManager, InfoMessage, InputDialog, PathChooser, util, logger, T, _, G_reader_settings }
 function M.init(d)
     deps = d
-    -- Translate preset names after gettext is available
+    -- Initialize extension presets with translated strings
     M.EXTENSION_PRESETS = {
         { text = deps._("All files"), value = "" },
         { text = deps._("eBooks (epub, pdf, mobi, azw3)"), value = "epub,pdf,mobi,azw3" },

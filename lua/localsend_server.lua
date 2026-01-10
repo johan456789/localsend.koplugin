@@ -3,14 +3,9 @@
 -- Handles starting, stopping, and monitoring the LocalSend CLI process
 
 local state = require("localsend_state")
+local constants = require("localsend_constants")
 
 local M = {}
-
--- Module constants
-M.pid_file = "/tmp/localsend_koreader.pid"
-M.transfer_log_file = "/tmp/localsend_transfers.log"
-M.transfer_notify_file = "/tmp/localsend_notify"
-M.SENTINEL_POLL_INTERVAL = 2
 
 -- Dependencies container (set via M.init)
 local deps = {}
@@ -26,19 +21,14 @@ function M.init(d, paths)
     binary_path = paths.binary_path
 end
 
--- ServerState reference for convenience
-local function getServerState()
-    return state.ServerState
-end
-
 -- Check if the server process is running
 -- @return boolean True if server is running
 function M.isRunning()
-    if not deps.util.pathExists(M.pid_file) then
+    if not deps.util.pathExists(constants.PID_FILE) then
         return false
     end
 
-    local content = deps.util.readFromFile(M.pid_file)
+    local content = deps.util.readFromFile(constants.PID_FILE)
     if not content then return false end
     local pid = tonumber(content:match("^(%d+)"))
     if not pid then return false end
@@ -106,7 +96,7 @@ end
 -- @param silent boolean Suppress notifications
 -- @param effective_name string The device name used
 function M.onServerStarted(instance, silent, effective_name)
-    local ServerState = getServerState()
+    local ServerState = state.ServerState
 
     -- Update cache now that server is running
     instance:_updateCache()
@@ -128,7 +118,7 @@ function M.onServerStarted(instance, silent, effective_name)
     -- Start fast sentinel polling for responsive notifications
     instance:_unschedulePolling()  -- Ensure no duplicate polling
     ServerState.last_sentinel_value = nil  -- Reset to pick up current state
-    deps.UIManager:scheduleIn(M.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
+    deps.UIManager:scheduleIn(constants.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
 
     if not silent then
         -- Build concise startup message for top notification
@@ -177,7 +167,7 @@ end
 -- @param instance table LocalSend instance
 -- @param silent boolean If true, suppress the startup notification
 function M.start(instance, silent)
-    local ServerState = getServerState()
+    local ServerState = state.ServerState
 
     -- If server is already running, just take over polling responsibility
     if instance:isRunning() then
@@ -189,7 +179,7 @@ function M.start(instance, silent)
         -- Start sentinel polling for fast notifications
         instance:_unschedulePolling()
         ServerState.last_sentinel_value = nil
-        deps.UIManager:scheduleIn(M.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
+        deps.UIManager:scheduleIn(constants.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
         -- Ensure event handlers are registered
         instance:registerEvents()
         return
@@ -213,7 +203,7 @@ function M.start(instance, silent)
     end
 
     -- Build command arguments table
-    local args = {binary_path, "recv", "-d", instance.save_dir, "-l", M.transfer_log_file}
+    local args = {binary_path, "recv", "-d", instance.save_dir, "-l", constants.TRANSFER_LOG_FILE}
 
     -- Always pass device name (default to "KOReader" if not set)
     local effective_name = instance.device_name ~= "" and instance.device_name or "KOReader"
@@ -263,13 +253,13 @@ function M.start(instance, silent)
     -- Add on-transfer callback to write unique value to sentinel file for fast notification
     -- Using date +%s%N gives nanosecond precision to avoid mtime resolution issues
     table.insert(args, "--on-transfer")
-    table.insert(args, "date +%s%N > " .. M.transfer_notify_file)
+    table.insert(args, "date +%s%N > " .. constants.TRANSFER_NOTIFY_FILE)
 
     -- Open firewall before starting
     instance:openFirewall()
 
     -- Build final command: run in background and save PID
-    local cmd = string.format("(%s) & echo $! > %s", deps.util.shell_escape(args), deps.util.shell_escape({M.pid_file}))
+    local cmd = string.format("(%s) & echo $! > %s", deps.util.shell_escape(args), deps.util.shell_escape({constants.PID_FILE}))
 
     deps.logger.dbg("[LocalSend] Starting server: ", cmd)
 
@@ -311,14 +301,14 @@ function M.stopServer(instance)
 
     -- Read PID before removing file
     local pid = nil
-    if deps.util.pathExists(M.pid_file) then
-        local content = deps.util.readFromFile(M.pid_file)
+    if deps.util.pathExists(constants.PID_FILE) then
+        local content = deps.util.readFromFile(constants.PID_FILE)
         if content then
             pid = tonumber(content:match("^(%d+)"))
         end
         -- Remove PID file FIRST to prevent state confusion
         -- This ensures isRunning() returns false immediately
-        os.remove(M.pid_file)
+        os.remove(constants.PID_FILE)
     else
         -- No PID file means server wasn't running
         M.cleanupServerState(instance)
@@ -356,7 +346,7 @@ end
 -- User-initiated stop with notification
 -- @param instance table LocalSend instance
 function M.stop(instance)
-    local ServerState = getServerState()
+    local ServerState = state.ServerState
     -- Mark that user explicitly stopped the server this session
     -- This prevents autostart from restarting it when opening a new document
     ServerState.user_stopped = true
@@ -379,14 +369,15 @@ end
 -- Toggle server state (start if stopped, stop if running)
 -- @param instance table LocalSend instance
 function M.toggle(instance)
-    local ServerState = getServerState()
+    local ServerState = state.ServerState
     if instance:isRunning() then
         instance:stop()
     else
         -- User is explicitly starting the server, clear the stopped flag
         -- so autostart can work again if they open another document
         ServerState.user_stopped = false
-        instance:start()
+        -- Use _startWhenConnected(false) to prompt for WiFi if offline
+        instance:_startWhenConnected(false)
     end
 end
 
@@ -394,21 +385,21 @@ end
 -- @param instance table LocalSend instance (for closeFirewall callback)
 -- @return boolean True if cleanup was needed
 function M.cleanupOrphanedResources(instance)
-    if deps.util.pathExists(M.pid_file) then
-        local content = deps.util.readFromFile(M.pid_file)
+    if deps.util.pathExists(constants.PID_FILE) then
+        local content = deps.util.readFromFile(constants.PID_FILE)
         if content then
             local pid = tonumber(content:match("^(%d+)"))
             if pid and not deps.util.pathExists("/proc/" .. pid) then
                 -- Process is dead but PID file exists - clean up
                 deps.logger.warn("[LocalSend] Found stale PID file, cleaning up")
-                os.remove(M.pid_file)
+                os.remove(constants.PID_FILE)
                 -- Also clean up firewall rules (they may be orphaned)
                 instance:closeFirewall()
                 return true
             end
         else
             -- Empty or unreadable PID file - remove it
-            os.remove(M.pid_file)
+            os.remove(constants.PID_FILE)
             return true
         end
     end

@@ -236,6 +236,50 @@ describe("LocalSend Lifecycle", function()
             -- Cleanup
             LocalSend._ServerState.user_stopped = false
         end)
+
+        it("should NOT prompt for WiFi when autostart is enabled and WiFi is off", function()
+            -- This test verifies the fix for the bug where autostart would
+            -- trigger NetworkMgr:runWhenConnected(), causing WiFi prompts
+            -- when WiFi is disabled. Autostart now silently skips when offline.
+            helper.state.settings["LocalSend_autostart"] = true
+
+            -- Simulate WiFi being OFF
+            package.loaded["ui/network/manager"] = {
+                isOnline = function() return false end,
+                isConnected = function() return false end,  -- WiFi OFF
+                runWhenOnline = function(self, callback) end,
+                runWhenConnected = function(self, callback) end,
+            }
+
+            -- Force reload main.lua with new NetworkMgr mock
+            package.loaded["main"] = nil
+            LocalSend = require("main")
+            LocalSend._ServerState.user_stopped = false
+
+            local runWhenConnected_count = 0
+            package.loaded["ui/network/manager"].runWhenConnected = function(self, callback)
+                runWhenConnected_count = runWhenConnected_count + 1
+            end
+
+            -- Create widget instances - none should call runWhenConnected
+            -- because autostart is now silent (skips when offline)
+            local instance1 = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            assert.equal(0, runWhenConnected_count,
+                "Autostart should NOT call runWhenConnected when WiFi is off (silent skip)")
+
+            -- Simulate opening more books - still no calls
+            local instance2 = LocalSend:new{
+                ui = { menu = { registerToMainMenu = function() end } }
+            }
+            assert.equal(0, runWhenConnected_count,
+                "Second init should also NOT call runWhenConnected")
+
+            -- Cleanup
+            LocalSend._ServerState.user_stopped = false
+            helper.mock_network_manager()
+        end)
     end)
 
     describe("suspend/resume behavior", function()

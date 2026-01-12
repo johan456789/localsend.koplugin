@@ -192,7 +192,8 @@ describe("Server Control", function()
             local original_execute = os.execute
             os.execute = function(cmd)
                 if cmd:match("kill") then
-                    if cmd:match("kill %-9") then kill_signal_used = 9 end
+                    -- Match shell_escape format: 'kill' '-9' or unescaped: kill -9
+                    if cmd:match("'kill'") and cmd:match("'%-9'") then kill_signal_used = 9 end
                 end
                 return 0
             end

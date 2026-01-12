@@ -154,7 +154,8 @@ describe("Process Management", function()
             local kill_9_called = false
             _G.os.execute = function(cmd)
                 table.insert(kill_calls, cmd)
-                if cmd:match("kill %-9") then
+                -- Match shell_escape format: 'kill' '-9' or unescaped: kill -9
+                if cmd:match("'kill'") and cmd:match("'%-9'") then
                     kill_9_called = true
                     proc_exists_map[12345] = false
                 end
@@ -180,7 +181,8 @@ describe("Process Management", function()
 
             _G.os.execute = function(cmd)
                 table.insert(kill_calls, cmd)
-                if cmd:match("kill %-9") then
+                -- Match shell_escape format: 'kill' '-9' or unescaped: kill -9
+                if cmd:match("'kill'") and cmd:match("'%-9'") then
                     pid_removed_before_kill = not pid_file_exists
                     kill_called = true
                 end

@@ -320,7 +320,7 @@ function M.stopServer(instance)
         -- Use SIGKILL (signal 9) for guaranteed, immediate termination
         -- SIGKILL cannot be caught, blocked, or ignored - kernel handles it directly
         -- Using os.execute instead of ffiutil.terminateSubProcess for reliability
-        os.execute("kill -9 " .. tostring(pid) .. " 2>/dev/null")
+        os.execute(deps.util.shell_escape({"kill", "-9", tostring(pid)}) .. " 2>/dev/null")
     end
 
     -- Clean up firewall and state

@@ -32,18 +32,19 @@ var multicastDiscoveryAddr = &net.UDPAddr{
 	Port: constants.DefaultPort,
 }
 
-type Discoverier struct {
+type Discoverer struct {
 	mcastConn   *net.UDPConn
 	selfAnno    *models.Announcement
-	discoveried map[string]models.Announcement
+	discovered  map[string]models.Announcement
 	mu          *sync.RWMutex
 	stop        chan struct{}
+	stopOnce    sync.Once
 	cachedIPs   []net.IP
 	ipCacheTime time.Time
 	ipCacheMu   sync.RWMutex // protects cachedIPs and ipCacheTime
 }
 
-func NewDiscoverier(devInfo models.DeviceInfo, supportHttps bool) (*Discoverier, error) {
+func NewDiscoverer(devInfo models.DeviceInfo, supportHttps bool) (*Discoverer, error) {
 	conn, err := net.ListenMulticastUDP("udp", nil, multicastDiscoveryAddr)
 	if err != nil {
 		return nil, err
@@ -56,7 +57,7 @@ func NewDiscoverier(devInfo models.DeviceInfo, supportHttps bool) (*Discoverier,
 
 	_ = conn.SetReadBuffer(512)
 
-	return &Discoverier{
+	return &Discoverer{
 		mcastConn: conn,
 		selfAnno: &models.Announcement{
 			DeviceInfo: devInfo,
@@ -64,13 +65,13 @@ func NewDiscoverier(devInfo models.DeviceInfo, supportHttps bool) (*Discoverier,
 			Protocol:   protocol,
 			Announce:   true,
 		},
-		stop:        make(chan struct{}, 1),
-		discoveried: make(map[string]models.Announcement),
-		mu:          &sync.RWMutex{},
+		stop:       make(chan struct{}, 1),
+		discovered: make(map[string]models.Announcement),
+		mu:         &sync.RWMutex{},
 	}, nil
 }
 
-func (ma *Discoverier) Listen() error {
+func (ma *Discoverer) Listen() error {
 	ticker := time.NewTicker(advInterval)
 	defer ticker.Stop()
 
@@ -94,7 +95,7 @@ func (ma *Discoverier) Listen() error {
 	}
 }
 
-func (ma *Discoverier) advertise() error {
+func (ma *Discoverer) advertise() error {
 	b, err := json.Marshal(ma.selfAnno)
 	if err != nil {
 		return err
@@ -108,15 +109,17 @@ func (ma *Discoverier) advertise() error {
 	return nil
 }
 
-func (ma *Discoverier) Shutdown() error {
-	// Close connection first to unblock any pending reads in readAndRegister(),
-	// allowing Listen() to return to the select and receive the stop signal
-	_ = ma.mcastConn.Close()
-	ma.stop <- struct{}{}
+func (ma *Discoverer) Shutdown() error {
+	ma.stopOnce.Do(func() {
+		// Close connection first to unblock any pending reads in readAndRegister(),
+		// allowing Listen() to return to the select and receive the stop signal
+		_ = ma.mcastConn.Close()
+		ma.stop <- struct{}{}
+	})
 	return nil
 }
 
-func (mcs *Discoverier) getCachedIPs() ([]net.IP, error) {
+func (mcs *Discoverer) getCachedIPs() ([]net.IP, error) {
 	// Use double-checked locking for thread-safe cache access
 	mcs.ipCacheMu.RLock()
 	if time.Since(mcs.ipCacheTime) <= ipCacheTTL && mcs.cachedIPs != nil {
@@ -144,7 +147,7 @@ func (mcs *Discoverier) getCachedIPs() ([]net.IP, error) {
 	return ips, nil
 }
 
-func (mcs *Discoverier) readAndRegister() error {
+func (mcs *Discoverer) readAndRegister() error {
 	_ = mcs.mcastConn.SetReadDeadline(time.Now().Add(1 * time.Second))
 
 	buf := make([]byte, 512)
@@ -185,7 +188,7 @@ func (mcs *Discoverier) readAndRegister() error {
 
 // sendHTTPResponse sends our device info via HTTP POST to /api/localsend/v2/register
 // per protocol spec Section 3.1: "First, an HTTP/TCP request is sent to the origin"
-func (mcs *Discoverier) sendHTTPResponse(ip string, anno models.Announcement) {
+func (mcs *Discoverer) sendHTTPResponse(ip string, anno models.Announcement) {
 	// Build the registration request body (same fields as announcement, without announce)
 	regBody := models.Announcement{
 		DeviceInfo: mcs.selfAnno.DeviceInfo,
@@ -241,7 +244,7 @@ func (mcs *Discoverier) sendHTTPResponse(ip string, anno models.Announcement) {
 // sendUDPResponse sends our device info via UDP as a fallback response
 // per protocol spec Section 3.1: "As fallback, members can also respond
 // with a Multicast/UDP message" with announce:false
-func (mcs *Discoverier) sendUDPResponse(remoteAddr *net.UDPAddr) {
+func (mcs *Discoverer) sendUDPResponse(remoteAddr *net.UDPAddr) {
 	response := *mcs.selfAnno
 	response.Announce = false
 
@@ -258,27 +261,27 @@ func (mcs *Discoverier) sendUDPResponse(remoteAddr *net.UDPAddr) {
 	}
 }
 
-func (mcs *Discoverier) GetAllDiscovered() map[string]models.Announcement {
+func (mcs *Discoverer) GetAllDiscovered() map[string]models.Announcement {
 	mcs.mu.RLock()
 	defer mcs.mu.RUnlock()
 
-	result := make(map[string]models.Announcement, len(mcs.discoveried))
-	for k, v := range mcs.discoveried {
+	result := make(map[string]models.Announcement, len(mcs.discovered))
+	for k, v := range mcs.discovered {
 		result[k] = v
 	}
 	return result
 }
 
-func (mcs *Discoverier) PutDiscovered(ip string, anno models.Announcement) {
+func (mcs *Discoverer) PutDiscovered(ip string, anno models.Announcement) {
 	mcs.mu.Lock()
 	defer mcs.mu.Unlock()
 
 	// Normalize deviceType per protocol spec Section 7.1
 	anno.DeviceType = normalizeDeviceType(anno.DeviceType)
-	mcs.discoveried[ip] = anno
+	mcs.discovered[ip] = anno
 }
 
-func (mcs *Discoverier) RegisterDevice(anno models.Announcement) {
+func (mcs *Discoverer) RegisterDevice(anno models.Announcement) {
 	if anno.IP != "" {
 		mcs.PutDiscovered(anno.IP, anno)
 	}
@@ -286,7 +289,7 @@ func (mcs *Discoverier) RegisterDevice(anno models.Announcement) {
 
 // ScanSubnet performs legacy HTTP discovery by scanning the subnet of all private IPv4 interfaces
 // per protocol spec Section 3.2.
-func (mcs *Discoverier) ScanSubnet(ctx context.Context) {
+func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 	ips, err := mcs.getCachedIPs()
 	if err != nil {
 		slog.Error("Failed to get local IPs for subnet scan", "error", err)
@@ -352,7 +355,7 @@ var httpClientForScan = &http.Client{
 
 // tryScanIP attempts to discover a device at the given IP using the specified protocol.
 // Returns true if a device was found and registered.
-func (mcs *Discoverier) tryScanIP(ip, scheme string, bodyBytes []byte) bool {
+func (mcs *Discoverer) tryScanIP(ip, scheme string, bodyBytes []byte) bool {
 	remoteAddr := net.JoinHostPort(ip, constants.DefaultPortStr)
 	url := fmt.Sprintf("%s://%s%s", scheme, remoteAddr, constants.RegisterPath)
 
@@ -387,7 +390,7 @@ func (mcs *Discoverier) tryScanIP(ip, scheme string, bodyBytes []byte) bool {
 	return true
 }
 
-func (mcs *Discoverier) scanIP(ip string) {
+func (mcs *Discoverer) scanIP(ip string) {
 	regBody := models.Announcement{
 		DeviceInfo: mcs.selfAnno.DeviceInfo,
 		Protocol:   mcs.selfAnno.Protocol,

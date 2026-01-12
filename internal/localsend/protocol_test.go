@@ -10,9 +10,9 @@ import (
 
 func TestFingerprintSelfDiscovery(t *testing.T) {
 	devInfo := models.NewDeviceInfo("TestDevice", "test-fingerprint")
-	disc, err := NewDiscoverier(devInfo, false)
+	disc, err := NewDiscoverer(devInfo, false)
 	if err != nil {
-		t.Fatalf("Failed to create Discoverier: %v", err)
+		t.Fatalf("Failed to create Discoverer: %v", err)
 	}
 
 	// Mock an announcement from ourselves
@@ -59,9 +59,9 @@ func TestDeviceTypeNormalization(t *testing.T) {
 
 func TestScanSubnetContext(t *testing.T) {
 	devInfo := models.NewDeviceInfo("TestDevice", "test-fingerprint")
-	disc, err := NewDiscoverier(devInfo, false)
+	disc, err := NewDiscoverer(devInfo, false)
 	if err != nil {
-		t.Fatalf("Failed to create Discoverier: %v", err)
+		t.Fatalf("Failed to create Discoverer: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

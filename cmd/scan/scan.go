@@ -30,7 +30,7 @@ var Cmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		slog.Info("Start Scanning")
 
-		scanner, err := localsend.NewDiscoverier(
+		scanner, err := localsend.NewDiscoverer(
 			models.NewDeviceInfo(utils.GenAlias(), utils.GenFingerprint()),
 			false)
 		if err != nil {

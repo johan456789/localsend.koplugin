@@ -18,9 +18,9 @@ import (
 //
 // After fix: This test should PASS because IPv6 addresses are now skipped.
 func TestReadAndRegister_IPv6Address_CorruptedKey(t *testing.T) {
-	mcs := &Discoverier{
-		discoveried: make(map[string]models.Announcement),
-		mu:          &sync.RWMutex{},
+	mcs := &Discoverer{
+		discovered: make(map[string]models.Announcement),
+		mu:         &sync.RWMutex{},
 	}
 
 	// Simulate what readAndRegister does at line 150 for an IPv6 address
@@ -49,7 +49,7 @@ func TestReadAndRegister_IPv6Address_CorruptedKey(t *testing.T) {
 	mcs.PutDiscovered(ip4.String(), anno)
 
 	// Verify no "<nil>" key exists
-	if _, exists := mcs.discoveried["<nil>"]; exists {
+	if _, exists := mcs.discovered["<nil>"]; exists {
 		t.Error("BUG: Found '<nil>' key in discovered map - IPv6 handling is broken")
 	}
 }
@@ -57,9 +57,9 @@ func TestReadAndRegister_IPv6Address_CorruptedKey(t *testing.T) {
 // TestReadAndRegister_IPv6_ShouldBeSkipped tests that the discoverer should
 // skip IPv6 addresses since LocalSend only supports IPv4 discovery.
 func TestReadAndRegister_IPv6_ShouldBeSkipped(t *testing.T) {
-	mcs := &Discoverier{
-		discoveried: make(map[string]models.Announcement),
-		mu:          &sync.RWMutex{},
+	mcs := &Discoverer{
+		discovered: make(map[string]models.Announcement),
+		mu:         &sync.RWMutex{},
 	}
 
 	anno := models.Announcement{
@@ -84,7 +84,7 @@ func TestReadAndRegister_IPv6_ShouldBeSkipped(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Clear the map
-			mcs.discoveried = make(map[string]models.Announcement)
+			mcs.discovered = make(map[string]models.Announcement)
 
 			ip := net.ParseIP(tc.ip)
 			if ip == nil {
@@ -104,7 +104,7 @@ func TestReadAndRegister_IPv6_ShouldBeSkipped(t *testing.T) {
 			mcs.PutDiscovered(ip4.String(), anno)
 
 			if tc.shouldStore {
-				stored, ok := mcs.discoveried[tc.expectedKey]
+				stored, ok := mcs.discovered[tc.expectedKey]
 				if !ok {
 					t.Errorf("Device should be stored under key %q", tc.expectedKey)
 				}
@@ -124,9 +124,9 @@ func TestReadAndRegister_IPv6_ShouldBeSkipped(t *testing.T) {
 // BUG: getCachedIPs() reads and writes cachedIPs/ipCacheTime without synchronization.
 // This test should FAIL with the race detector before the fix is applied.
 func TestGetCachedIPs_ConcurrentAccess_RaceCondition(t *testing.T) {
-	mcs := &Discoverier{
-		discoveried: make(map[string]models.Announcement),
-		mu:          &sync.RWMutex{},
+	mcs := &Discoverer{
+		discovered: make(map[string]models.Announcement),
+		mu:         &sync.RWMutex{},
 		// Note: cachedIPs and ipCacheTime start as nil/zero - first access will populate
 	}
 
@@ -160,9 +160,9 @@ func TestGetCachedIPs_ConcurrentAccess_RaceCondition(t *testing.T) {
 
 // TestGetCachedIPs_CacheExpiry verifies the 30-second cache TTL.
 func TestGetCachedIPs_CacheExpiry(t *testing.T) {
-	mcs := &Discoverier{
-		discoveried: make(map[string]models.Announcement),
-		mu:          &sync.RWMutex{},
+	mcs := &Discoverer{
+		discovered: make(map[string]models.Announcement),
+		mu:         &sync.RWMutex{},
 	}
 
 	// First call - should populate cache

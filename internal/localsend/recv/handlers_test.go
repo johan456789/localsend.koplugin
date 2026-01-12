@@ -673,3 +673,213 @@ func TestPreUploadV3Handler_PINRateLimiting(t *testing.T) {
 		t.Errorf("4th attempt: Status = %d; want 429 (rate limited)", resp.StatusCode)
 	}
 }
+
+// =============================================================================
+// Folder Transfer Detection Tests
+// =============================================================================
+
+func TestIsFolderTransfer_WithSubdirectory(t *testing.T) {
+	files := models.FileMetas{
+		"file1": {Id: "file1", Filename: "Photos/beach.jpg", Size: 100},
+		"file2": {Id: "file2", Filename: "Photos/sunset.jpg", Size: 200},
+	}
+
+	if !isFolderTransfer(files) {
+		t.Error("Files with subdirectory paths should be detected as folder transfer")
+	}
+}
+
+func TestIsFolderTransfer_FlatFiles(t *testing.T) {
+	files := models.FileMetas{
+		"file1": {Id: "file1", Filename: "beach.jpg", Size: 100},
+		"file2": {Id: "file2", Filename: "sunset.jpg", Size: 200},
+	}
+
+	if isFolderTransfer(files) {
+		t.Error("Flat files (no subdirectory) should not be detected as folder transfer")
+	}
+}
+
+func TestIsFolderTransfer_MixedFiles(t *testing.T) {
+	// If ANY file has a subdirectory, it's considered a folder transfer
+	files := models.FileMetas{
+		"file1": {Id: "file1", Filename: "readme.txt", Size: 100},
+		"file2": {Id: "file2", Filename: "docs/manual.pdf", Size: 200},
+	}
+
+	if !isFolderTransfer(files) {
+		t.Error("Mixed files with at least one subdirectory should be detected as folder transfer")
+	}
+}
+
+func TestIsFolderTransfer_EmptyFiles(t *testing.T) {
+	files := models.FileMetas{}
+
+	if isFolderTransfer(files) {
+		t.Error("Empty file list should not be detected as folder transfer")
+	}
+}
+
+// =============================================================================
+// Folder Transfer + Extension Routing/Filtering Tests
+// =============================================================================
+
+func TestFilterFilesByExtension_FolderTransferStrictModeRejects(t *testing.T) {
+	fr := newTestReceiver()
+	fr.saveToDir = t.TempDir()
+
+	// Enable both extension routing AND extension filtering (strict mode)
+	router := NewExtensionRouter(fr.saveToDir)
+	router.routes["epub"] = t.TempDir()
+	fr.SetExtensionRouter(router)
+	fr.SetAllowedExtensions([]string{"epub", "pdf"})
+
+	// Folder transfer should be rejected in strict mode
+	files := models.FileMetas{
+		"file1": {Id: "file1", Filename: "Books/novel.epub", Size: 100},
+		"file2": {Id: "file2", Filename: "Books/manual.pdf", Size: 200},
+	}
+
+	filtered, errStatus := fr.filterFilesByExtension(files, "127.0.0.1")
+
+	if errStatus != 403 {
+		t.Errorf("Status = %d; want 403 for folder transfer in strict mode", errStatus)
+	}
+	if filtered != nil {
+		t.Error("Filtered files should be nil when rejected")
+	}
+}
+
+func TestFilterFilesByExtension_FolderTransferWithRoutingOnlyAllowed(t *testing.T) {
+	fr := newTestReceiver()
+	fr.saveToDir = t.TempDir()
+
+	// Enable extension routing WITHOUT extension filtering (permissive mode)
+	router := NewExtensionRouter(fr.saveToDir)
+	router.routes["epub"] = t.TempDir()
+	fr.SetExtensionRouter(router)
+	// No extension filter set
+
+	// Folder transfer should be allowed when only routing is enabled
+	files := models.FileMetas{
+		"file1": {Id: "file1", Filename: "Books/novel.epub", Size: 100},
+		"file2": {Id: "file2", Filename: "Books/readme.txt", Size: 50},
+	}
+
+	filtered, errStatus := fr.filterFilesByExtension(files, "127.0.0.1")
+
+	if errStatus != 0 {
+		t.Errorf("Status = %d; want 0 (success) for folder transfer with routing only", errStatus)
+	}
+	if len(filtered) != 2 {
+		t.Errorf("All files should be accepted; got %d, want 2", len(filtered))
+	}
+}
+
+func TestFilterFilesByExtension_FolderTransferWithFilterOnlyFiltersFiles(t *testing.T) {
+	fr := newTestReceiver()
+	fr.saveToDir = t.TempDir()
+
+	// Enable extension filtering WITHOUT routing
+	fr.SetAllowedExtensions([]string{"epub", "pdf"})
+	// No router set
+
+	// Folder transfer should be allowed, but individual files should be filtered
+	files := models.FileMetas{
+		"file1": {Id: "file1", Filename: "Books/novel.epub", Size: 100},
+		"file2": {Id: "file2", Filename: "Books/image.jpg", Size: 50}, // Should be filtered out
+		"file3": {Id: "file3", Filename: "Books/manual.pdf", Size: 200},
+	}
+
+	filtered, errStatus := fr.filterFilesByExtension(files, "127.0.0.1")
+
+	if errStatus != 0 {
+		t.Errorf("Status = %d; want 0 (success)", errStatus)
+	}
+	if len(filtered) != 2 {
+		t.Errorf("Expected 2 files after filtering; got %d", len(filtered))
+	}
+	if _, ok := filtered["file2"]; ok {
+		t.Error("image.jpg should have been filtered out")
+	}
+}
+
+func TestFilterFilesByExtension_IndividualFilesStillRouted(t *testing.T) {
+	fr := newTestReceiver()
+	fr.saveToDir = t.TempDir()
+
+	// Enable both routing and filtering
+	router := NewExtensionRouter(fr.saveToDir)
+	router.routes["epub"] = t.TempDir()
+	fr.SetExtensionRouter(router)
+	fr.SetAllowedExtensions([]string{"epub", "pdf"})
+
+	// Individual files (not folder transfer) should still work normally
+	files := models.FileMetas{
+		"file1": {Id: "file1", Filename: "novel.epub", Size: 100},
+		"file2": {Id: "file2", Filename: "manual.pdf", Size: 200},
+	}
+
+	filtered, errStatus := fr.filterFilesByExtension(files, "127.0.0.1")
+
+	if errStatus != 0 {
+		t.Errorf("Status = %d; want 0 for individual files", errStatus)
+	}
+	if len(filtered) != 2 {
+		t.Errorf("Expected 2 files; got %d", len(filtered))
+	}
+}
+
+// =============================================================================
+// GetSaveDirForSession Tests
+// =============================================================================
+
+func TestGetSaveDirForSession_FolderTransferBypassesRouting(t *testing.T) {
+	fr := newTestReceiver()
+	fr.saveToDir = "/main/save/dir"
+
+	// Enable extension routing
+	epubDir := "/epub/dir"
+	router := NewExtensionRouter(fr.saveToDir)
+	router.routes["epub"] = epubDir
+	fr.SetExtensionRouter(router)
+
+	// Create a session with folder transfer files
+	testFiles := models.FileMetas{
+		"file1": {Id: "file1", Filename: "Books/novel.epub", Size: 100},
+	}
+	sessionId, _ := fr.sessman.NewSession(testFiles, "127.0.0.1")
+	session, _ := fr.sessman.GetSession(sessionId)
+
+	// Folder transfer should bypass routing and use main save dir
+	saveDir := fr.GetSaveDirForSession(session, "Books/novel.epub")
+
+	if saveDir != "/main/save/dir" {
+		t.Errorf("SaveDir = %q; want %q (folder transfers bypass routing)", saveDir, "/main/save/dir")
+	}
+}
+
+func TestGetSaveDirForSession_IndividualFilesUseRouting(t *testing.T) {
+	fr := newTestReceiver()
+	fr.saveToDir = "/main/save/dir"
+
+	// Enable extension routing
+	epubDir := "/epub/dir"
+	router := NewExtensionRouter(fr.saveToDir)
+	router.routes["epub"] = epubDir
+	fr.SetExtensionRouter(router)
+
+	// Create a session with individual files (no subdirectory)
+	testFiles := models.FileMetas{
+		"file1": {Id: "file1", Filename: "novel.epub", Size: 100},
+	}
+	sessionId, _ := fr.sessman.NewSession(testFiles, "127.0.0.1")
+	session, _ := fr.sessman.GetSession(sessionId)
+
+	// Individual files should use routing
+	saveDir := fr.GetSaveDirForSession(session, "novel.epub")
+
+	if saveDir != epubDir {
+		t.Errorf("SaveDir = %q; want %q (individual files use routing)", saveDir, epubDir)
+	}
+}

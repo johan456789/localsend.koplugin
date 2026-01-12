@@ -63,6 +63,10 @@ type RecvSession struct {
 	folderRemap     map[string]string // maps original root folder -> unique root folder
 	folderRemapErr  error
 	folderRemapDir  string // the saveDir used for remap computation
+
+	// Cached folder transfer detection (computed once)
+	isFolderTransferOnce   sync.Once
+	isFolderTransferCached bool
 }
 
 func NewRecvSession(sessionId string, clientIP string) (*RecvSession, error) {
@@ -378,6 +382,25 @@ func (sess *RecvSession) GetFileMeta(fileId string) (models.FileMeta, bool) {
 
 	meta, ok := sess.fileMetas[fileId]
 	return meta, ok
+}
+
+// IsFolderTransfer returns true if this session contains folder transfers
+// (any file with subdirectory structure in its path).
+// The result is cached for efficiency.
+func (sess *RecvSession) IsFolderTransfer() bool {
+	sess.isFolderTransferOnce.Do(func() {
+		sess.mu.RLock()
+		defer sess.mu.RUnlock()
+
+		for _, meta := range sess.fileMetas {
+			if strings.Contains(meta.Filename, "/") {
+				sess.isFolderTransferCached = true
+				return
+			}
+		}
+		sess.isFolderTransferCached = false
+	})
+	return sess.isFolderTransferCached
 }
 
 // End ends the session if it's still active.

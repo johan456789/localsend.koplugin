@@ -270,7 +270,14 @@ func (r *RTCReceiver) sendError(message string) {
 }
 
 // getSaveDir returns the appropriate save directory for a filename.
+// For folder transfers, returns the main save dir to keep folders together.
+// For individual files, applies extension routing if configured.
 func (r *RTCReceiver) getSaveDir(filename string) string {
+	// Folder transfers bypass extension routing to keep folder contents together
+	if r.isFolderTransfer() {
+		return r.saveDir
+	}
+
 	if r.extRoutes == nil {
 		return r.saveDir
 	}
@@ -293,6 +300,16 @@ func (r *RTCReceiver) getSaveDir(filename string) string {
 	}
 
 	return r.saveDir
+}
+
+// isFolderTransfer checks if any file in the current transfer has subdirectory structure.
+func (r *RTCReceiver) isFolderTransfer() bool {
+	for _, f := range r.files {
+		if strings.Contains(f.FileName, "/") {
+			return true
+		}
+	}
+	return false
 }
 
 // AcceptOffer accepts an incoming WebRTC offer.

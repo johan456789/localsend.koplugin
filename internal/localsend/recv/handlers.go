@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"localsend-cli/internal/crypto"
@@ -12,9 +13,32 @@ import (
 	"localsend-cli/internal/models"
 )
 
+// isFolderTransfer checks if the file set contains folder transfers
+// (any file with subdirectory structure in its path).
+func isFolderTransfer(files models.FileMetas) bool {
+	for _, meta := range files {
+		if strings.Contains(meta.Filename, "/") {
+			return true
+		}
+	}
+	return false
+}
+
 // filterFilesByExtension filters files based on allowed extensions.
 // Returns the filtered files, or an error status code if all files were rejected.
+// Folder transfers are rejected entirely when in strict routing mode
+// (extension routing + extension filter both enabled).
 func (fr *FileReceiver) filterFilesByExtension(files models.FileMetas, remoteIP string) (models.FileMetas, int) {
+	isFolderXfer := isFolderTransfer(files)
+
+	// Strict mode: routing enabled + extension filter enabled
+	// In this mode, reject folder transfers entirely because the user has
+	// explicitly configured specific file types and routing destinations.
+	if isFolderXfer && fr.hasExtensionRouter() && fr.hasExtensionFilter() {
+		slog.Warn("Folder transfer rejected: strict routing mode active", "remote", remoteIP)
+		return nil, 403
+	}
+
 	if !fr.hasExtensionFilter() {
 		return files, 0
 	}
@@ -126,8 +150,8 @@ func (fr *FileReceiver) uploadHandler(c *fiber.Ctx) error {
 		return c.SendStatus(400)
 	}
 
-	// Determine save directory (may be routed based on extension)
-	saveDir := fr.GetSaveDir(fileMeta.Filename)
+	// Determine save directory (may be routed based on extension, unless folder transfer)
+	saveDir := fr.GetSaveDirForSession(session, fileMeta.Filename)
 
 	// Use streaming to avoid loading entire file into memory (prevents OOM on large files).
 	// Note: RequestBodyStream() may return nil for small requests that were already buffered,

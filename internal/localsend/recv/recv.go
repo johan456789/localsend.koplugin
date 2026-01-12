@@ -29,7 +29,7 @@ type FileReceiver struct {
 	supportHttps      bool
 	sessman           *sess.RecvSessManager
 	saveToDir         string
-	discoverier       *localsend.Discoverier
+	discoverier       *localsend.Discoverer
 	expectedPin       string
 	allowedExtensions []string         // New field for extension filtering
 	transferLogPath   string           // Path to transfer log file
@@ -154,7 +154,9 @@ func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) 
 	cmd := fr.onTransferCmd
 	if cmd != "" {
 		go func() {
-			if err := exec.Command("sh", "-c", cmd).Run(); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := exec.CommandContext(ctx, "sh", "-c", cmd).Run(); err != nil {
 				slog.Debug("on-transfer command failed", "cmd", cmd, "error", err)
 			}
 		}()
@@ -212,6 +214,17 @@ func (fr *FileReceiver) GetSaveDir(filename string) string {
 		return router.GetSaveDir(filename)
 	}
 	return fr.saveToDir
+}
+
+// GetSaveDirForSession returns the appropriate save directory for a file,
+// taking into account whether the session is a folder transfer.
+// Folder transfers bypass extension routing and always use the main save dir
+// to keep the folder contents together.
+func (fr *FileReceiver) GetSaveDirForSession(session *sess.RecvSession, filename string) string {
+	if session.IsFolderTransfer() {
+		return fr.saveToDir // Folder transfers bypass routing
+	}
+	return fr.GetSaveDir(filename) // Individual files use routing
 }
 
 // IsExtensionAllowed checks if a filename has an allowed extension.
@@ -289,6 +302,14 @@ func (fr *FileReceiver) hasExtensionFilter() bool {
 	return len(fr.allowedExtensions) > 0
 }
 
+// hasExtensionRouter returns true if an extension router is configured.
+// Used by handlers to check routing mode.
+func (fr *FileReceiver) hasExtensionRouter() bool {
+	fr.configMu.RLock()
+	defer fr.configMu.RUnlock()
+	return fr.router != nil
+}
+
 func (fr *FileReceiver) Init() error {
 	var err error
 
@@ -324,7 +345,7 @@ func (fr *FileReceiver) Init() error {
 	}
 
 	// start advertisement (non-fatal if it fails - server can still work without discovery)
-	fr.discoverier, err = localsend.NewDiscoverier(fr.identity, fr.supportHttps)
+	fr.discoverier, err = localsend.NewDiscoverer(fr.identity, fr.supportHttps)
 	if err != nil {
 		slog.Warn("Failed to create discoverer (device won't be discoverable)", "error", err)
 		// Continue without discovery - server can still accept connections by IP
@@ -394,7 +415,7 @@ func (fr *FileReceiver) startDiscoveryWithRetry(ctx context.Context) {
 			return
 		case <-ticker.C:
 			var err error
-			fr.discoverier, err = localsend.NewDiscoverier(fr.identity, fr.supportHttps)
+			fr.discoverier, err = localsend.NewDiscoverer(fr.identity, fr.supportHttps)
 			if err != nil {
 				// Still no network, keep trying
 				continue

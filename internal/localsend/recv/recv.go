@@ -157,7 +157,7 @@ func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := exec.CommandContext(ctx, "sh", "-c", cmd).Run(); err != nil {
-				slog.Debug("on-transfer command failed", "cmd", cmd, "error", err)
+				slog.Warn("on-transfer command failed", "cmd", cmd, "error", err)
 			}
 		}()
 	}

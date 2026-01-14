@@ -12,21 +12,24 @@ import (
 	"localsend-cli/internal/crypto"
 	lsrecv "localsend-cli/internal/localsend/recv"
 	lsutils "localsend-cli/internal/localsend/utils"
+	"localsend-cli/internal/storage"
 	"localsend-cli/internal/utils"
 	"localsend-cli/internal/webrtc/signaling"
 	"localsend-cli/internal/webrtc/transfer"
 )
 
 var (
-	devname       string
-	savetodir     string
-	supportHttps  bool
-	pin           string
-	acceptExt     string
-	logFile       string
-	webrtcMode    bool
-	extRouting    string
-	onTransferCmd string
+	devname        string
+	savetodir      string
+	supportHttps   bool
+	pin            string
+	acceptExt      string
+	logFile        string
+	webrtcMode     bool
+	extRouting     string
+	onTransferCmd  string
+	configDir      string
+	requirePairing bool
 )
 
 var Cmd = &cobra.Command{
@@ -98,7 +101,7 @@ var Cmd = &cobra.Command{
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				startWebRTCReceiver(ctx, devname, savetodir, pin, allowedExts, extRoutes, recver.LogTransfer)
+				startWebRTCReceiver(ctx, devname, savetodir, pin, allowedExts, extRoutes, recver.LogTransfer, configDir, requirePairing)
 			}()
 		}
 
@@ -121,12 +124,24 @@ var Cmd = &cobra.Command{
 	},
 }
 
-func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string)) {
+func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string), cfgDir string, reqPairing bool) {
 	// Generate signing key and token
 	key, token, err := crypto.GenerateKeyPairWithToken()
 	if err != nil {
 		slog.Error("Failed to generate key pair with token", "error", err)
 		return
+	}
+
+	// Initialize trusted device store if config dir is provided
+	var trustedStore *storage.TrustedDeviceStore
+	if cfgDir != "" {
+		trustedStore, err = storage.NewTrustedDeviceStore(cfgDir)
+		if err != nil {
+			slog.Error("Failed to initialize trusted device store", "error", err)
+			// Continue without trust - just won't persist
+		} else {
+			slog.Info("Trusted device store initialized", "config", cfgDir)
+		}
 	}
 
 	// Connect to signaling server
@@ -150,6 +165,17 @@ func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, a
 	// Create receiver
 	receiver := transfer.NewRTCReceiver(client, key, pin, saveDir)
 	defer func() { _ = receiver.Close() }()
+
+	// Set trusted device store if configured
+	if trustedStore != nil {
+		receiver.SetTrustedStore(trustedStore)
+	}
+
+	// Set pairing requirement
+	if reqPairing {
+		receiver.SetRequirePairing(true)
+		slog.Info("Pairing required for WebRTC transfers")
+	}
 
 	// Set extension routing if configured
 	if len(extRoutes) > 0 {
@@ -179,6 +205,8 @@ func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, a
 	// Listen for offers with context for proper cancellation
 	receiver.ListenForOffersWithContext(ctx, func(offer signaling.WsServerMessage) {
 		slog.Info("Received WebRTC offer", "peer", offer.Peer.Alias)
+		// Set sender info for PAIR flow (used for persisting trusted devices)
+		receiver.SetSenderInfo(offer.Peer.Alias)
 		if err := receiver.AcceptOffer(offer); err != nil {
 			slog.Error("Failed to accept offer", "error", err)
 		}
@@ -198,4 +226,6 @@ func init() {
 	Cmd.PersistentFlags().BoolVarP(&webrtcMode, "webrtc", "w", true, "Listen for WebRTC offers via signaling server (v3 protocol)")
 	Cmd.PersistentFlags().StringVar(&extRouting, "ext-routing", "", "Path to extension routing config (JSON). Routes files to different directories by extension.")
 	Cmd.PersistentFlags().StringVar(&onTransferCmd, "on-transfer", "", "Shell command to run after each file transfer completes (e.g., 'touch /tmp/notify')")
+	Cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "Config directory for trusted devices persistence")
+	Cmd.PersistentFlags().BoolVar(&requirePairing, "require-pairing", false, "Require PAIR before accepting WebRTC transfers from unknown devices")
 }

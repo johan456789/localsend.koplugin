@@ -324,7 +324,10 @@ func (fr *FileReceiver) preUploadV3Handler(c *fiber.Ctx) error {
 	if receivedNonce, ok := fr.receivedNonceCache.Get(clientID); ok {
 		if generatedNonce, ok := fr.generatedNonceCache.Get(clientID); ok {
 			// Combined nonce: client's nonce || our nonce
-			combinedNonce := append(receivedNonce, generatedNonce...)
+			// Use explicit copy to avoid mutating the underlying slice
+			combinedNonce := make([]byte, len(receivedNonce)+len(generatedNonce))
+			copy(combinedNonce, receivedNonce)
+			copy(combinedNonce[len(receivedNonce):], generatedNonce)
 
 			// Log V3 nonce verification was successful (replay protection active)
 			slog.Info("V3 nonce exchange verified",

@@ -17,6 +17,7 @@ import (
 
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/localsend/session"
+	"localsend-cli/internal/storage"
 	"localsend-cli/internal/utils"
 	"localsend-cli/internal/webrtc/signaling"
 )
@@ -80,6 +81,14 @@ type RTCReceiver struct {
 	// Callbacks
 	onSelectFiles  func([]RTCFileDto) []string
 	onFileReceived func(filename string, size int64, sender string)
+
+	// TrustedDeviceStore for PAIR flow persistence
+	trustedStore *storage.TrustedDeviceStore
+
+	// Sender info (set before AcceptOffer)
+	senderAlias     string // Alias from signaling offer
+	senderPublicPEM string // Sender's public key PEM from PAIR flow (for persistence)
+	senderToken     string // Sender's token from token exchange (for PAIR verification)
 }
 
 // NewRTCReceiver creates a new WebRTC receiver.
@@ -129,6 +138,19 @@ func (r *RTCReceiver) SetRequirePairing(require bool) {
 // Keys should be lowercase extensions without dots (e.g., "epub", "pdf").
 func (r *RTCReceiver) SetExtensionRoutes(routes map[string]string) {
 	r.extRoutes = routes
+}
+
+// SetTrustedStore sets the trusted device store for PAIR flow persistence.
+// When set, devices paired during the PAIR flow are persisted for future sessions.
+func (r *RTCReceiver) SetTrustedStore(store *storage.TrustedDeviceStore) {
+	r.trustedStore = store
+}
+
+// SetSenderInfo sets sender information for the current transfer.
+// The alias is used when persisting the trusted device after PAIR.
+// Call this before AcceptOffer with information from the signaling offer.
+func (r *RTCReceiver) SetSenderInfo(alias string) {
+	r.senderAlias = alias
 }
 
 // prepareFolderRemap computes folder remapping for unique folder names.
@@ -523,6 +545,9 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 	}
 	slog.Info("Received token from sender", "token", tokenPreview)
 
+	// Store sender's token for PAIR verification (if we don't have their public key yet)
+	r.senderToken = tokenReq.Token
+
 	// Optionally verify sender's token if we have their public key
 	if r.senderPublicKey != nil {
 		if err := crypto.VerifyTokenNonce(r.senderPublicKey, tokenReq.Token, r.finalNonce); err != nil {
@@ -720,13 +745,45 @@ func (r *RTCReceiver) handlePairResponse(_ interface{}, msgType string, data []b
 	case "OK":
 		slog.Info("PAIR accepted by sender", "hasPublicKey", resp.PublicKey != "")
 		if resp.PublicKey != "" {
-			// Parse and store sender's public key for future verification
+			// Parse sender's public key
 			key, err := crypto.ParsePublicKeyPEM(resp.PublicKey)
 			if err != nil {
 				slog.Error("Failed to parse sender's public key", "error", err)
-			} else {
-				r.senderPublicKey = key
-				slog.Info("Stored sender's public key for verification")
+				return
+			}
+
+			// CRITICAL: Verify sender's token was signed with this public key
+			// This ensures the PAIR public key matches the identity from token exchange
+			if r.senderToken != "" {
+				if err := crypto.VerifyTokenNonce(key, r.senderToken, r.finalNonce); err != nil {
+					slog.Error("Sender token does not match PAIR public key - potential identity mismatch", "error", err)
+					// Reject the pairing by not storing the key and not proceeding
+					return
+				}
+				slog.Info("Sender token verified against PAIR public key")
+			}
+
+			// Verification passed - safe to store
+			r.senderPublicKey = key
+			r.senderPublicPEM = resp.PublicKey
+			slog.Info("Stored sender's public key for verification")
+
+			// Persist to TrustedDeviceStore if configured
+			if r.trustedStore != nil {
+				alias := r.senderAlias
+				if alias == "" {
+					alias = "Unknown Device"
+				}
+				device := storage.TrustedDevice{
+					Alias:     alias,
+					PublicKey: resp.PublicKey,
+					AddedAt:   time.Now().Unix(),
+				}
+				if err := r.trustedStore.Add(device); err != nil {
+					slog.Warn("Failed to persist trusted device", "error", err)
+				} else {
+					slog.Info("Device paired and trusted", "alias", alias)
+				}
 			}
 		}
 

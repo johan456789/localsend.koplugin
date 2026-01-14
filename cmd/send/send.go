@@ -1,12 +1,14 @@
 package send
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"log/slog"
 	"mime"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -14,6 +16,7 @@ import (
 	"localsend-cli/internal/localsend"
 	lsutils "localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/models"
+	"localsend-cli/internal/storage"
 	"localsend-cli/internal/utils"
 	"localsend-cli/internal/webrtc/signaling"
 	"localsend-cli/internal/webrtc/transfer"
@@ -28,6 +31,7 @@ var (
 	useWebRTC         bool
 	targetID          string
 	preserveStructure bool
+	configDir         string
 )
 
 var Cmd = &cobra.Command{
@@ -188,6 +192,34 @@ func sendViaWebRTC() error {
 	// Create sender
 	sender := transfer.NewRTCSender(client, key, pin)
 
+	// Initialize trusted device store if config dir is provided
+	if configDir != "" {
+		trustedStore, err := storage.NewTrustedDeviceStore(configDir)
+		if err != nil {
+			slog.Error("Failed to initialize trusted device store", "error", err)
+			// Continue without trust - just won't persist
+		} else {
+			sender.SetTrustedStore(trustedStore)
+			slog.Info("Trusted device store initialized", "config", configDir)
+		}
+	}
+
+	// Set up PAIR confirmation callback (interactive prompt)
+	sender.SetOnPairRequest(func(alias, fingerprint string) bool {
+		fmt.Printf("\nDevice '%s' (fingerprint: %s) wants to pair.\n", alias, fingerprint)
+		fmt.Print("Accept pairing? [y/N]: ")
+
+		reader := bufio.NewReader(os.Stdin)
+		response, err := reader.ReadString('\n')
+		if err != nil {
+			slog.Warn("Failed to read input", "error", err)
+			return false
+		}
+
+		response = strings.TrimSpace(strings.ToLower(response))
+		return response == "y" || response == "yes"
+	})
+
 	// Send to target
 	slog.Info("Sending offer to target", "target", target)
 	if err := sender.Send(target, fileMetas); err != nil {
@@ -258,4 +290,5 @@ func init() {
 	Cmd.PersistentFlags().BoolVarP(&useWebRTC, "webrtc", "w", false, "Send via WebRTC signaling server")
 	Cmd.PersistentFlags().StringVarP(&targetID, "target", "t", "", "Target peer ID (from scan --webrtc)")
 	Cmd.PersistentFlags().BoolVar(&preserveStructure, "preserve-structure", true, "Preserve subdirectory structure when sending directories")
+	Cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "Config directory for trusted devices persistence")
 }

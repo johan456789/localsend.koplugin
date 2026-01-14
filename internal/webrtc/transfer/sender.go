@@ -1,6 +1,8 @@
 package transfer
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"localsend-cli/internal/crypto"
+	"localsend-cli/internal/storage"
 	"localsend-cli/internal/webrtc/signaling"
 )
 
@@ -61,6 +64,15 @@ type RTCSender struct {
 	strictVerification bool                // If true, fail on invalid tokens
 	receiverToken      string              // Stored for verification
 
+	// Receiver info (for PAIR flow)
+	receiverAlias string // Set via SetReceiverInfo
+
+	// PAIR callback
+	onPairRequest func(alias, fingerprint string) bool // User confirmation for PAIR
+
+	// TrustedDeviceStore for PAIR flow persistence
+	trustedStore *storage.TrustedDeviceStore
+
 	// Files
 	files       []FileMeta
 	fileTokens  map[string]string // fileId -> token from receiver
@@ -98,6 +110,26 @@ func (s *RTCSender) SetReceiverPublicKey(key crypto.VerifyingKey) {
 // When enabled, transfers will fail if token verification fails.
 func (s *RTCSender) SetStrictVerification(strict bool) {
 	s.strictVerification = strict
+}
+
+// SetReceiverInfo sets receiver information for the PAIR flow.
+// The alias is used when prompting for PAIR confirmation.
+func (s *RTCSender) SetReceiverInfo(alias string) {
+	s.receiverAlias = alias
+}
+
+// SetOnPairRequest sets the callback for PAIR confirmation.
+// When the receiver requests pairing, this callback is invoked with the
+// receiver's alias and public key fingerprint. Return true to accept pairing.
+// If no callback is set, pairing is automatically accepted.
+func (s *RTCSender) SetOnPairRequest(callback func(alias, fingerprint string) bool) {
+	s.onPairRequest = callback
+}
+
+// SetTrustedStore sets the trusted device store for PAIR flow persistence.
+// When set, devices paired during the PAIR flow are persisted for future sessions.
+func (s *RTCSender) SetTrustedStore(store *storage.TrustedDeviceStore) {
+	s.trustedStore = store
 }
 
 // Send initiates a file transfer to the target peer.
@@ -413,8 +445,76 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 		// Receiver wants to pair - they've sent their public key
 		slog.Info("Receiver requested pairing", "hasPublicKey", resp.PublicKey != "")
 
-		// For now, we auto-accept pairing by sending our public key back
-		// TODO: Add user confirmation callback (s.onPairRequest)
+		// Parse and verify receiver's public key against their token FIRST
+		var receiverKey crypto.VerifyingKey
+		if resp.PublicKey != "" {
+			key, err := crypto.ParsePublicKeyPEM(resp.PublicKey)
+			if err != nil {
+				slog.Error("Failed to parse receiver's public key", "error", err)
+				// Send INVALID_SIGNATURE response
+				pairResponse := RTCPairResponse{Status: "INVALID_SIGNATURE"}
+				_ = s.peer.SendJSONBinary(pairResponse)
+				_ = s.peer.SendDelimiter()
+				return
+			}
+
+			// CRITICAL: Verify receiver's token was signed with this public key
+			// This ensures the PAIR public key matches the identity from token exchange
+			if s.receiverToken != "" {
+				if err := crypto.VerifyTokenNonce(key, s.receiverToken, s.finalNonce); err != nil {
+					slog.Error("Receiver token does not match PAIR public key - potential identity mismatch", "error", err)
+					pairResponse := RTCPairResponse{Status: "INVALID_SIGNATURE"}
+					_ = s.peer.SendJSONBinary(pairResponse)
+					_ = s.peer.SendDelimiter()
+					return
+				}
+				slog.Info("Receiver token verified against PAIR public key")
+			}
+
+			// Verification passed - store the key
+			receiverKey = key
+			s.receiverPublicKey = key
+		}
+
+		// Compute fingerprint for user confirmation display
+		fingerprint := ""
+		if resp.PublicKey != "" {
+			fingerprint = computeFingerprint(resp.PublicKey)
+		}
+
+		// Check user confirmation callback
+		accepted := true // Default to accept if no callback
+		if s.onPairRequest != nil {
+			alias := s.receiverAlias
+			if alias == "" {
+				alias = "Unknown Device"
+			}
+			// Release lock before calling callback to prevent deadlock
+			s.mu.Unlock()
+			accepted = s.onPairRequest(alias, fingerprint)
+			s.mu.Lock()
+		}
+
+		if !accepted {
+			slog.Info("User declined PAIR request")
+			// Clear the stored key since user declined
+			s.receiverPublicKey = nil
+			pairResponse := RTCPairResponse{
+				Status: "PAIR_DECLINED",
+			}
+			if err := s.peer.SendJSONBinary(pairResponse); err != nil {
+				slog.Error("Failed to send PAIR decline", "error", err)
+				return
+			}
+			if err := s.peer.SendDelimiter(); err != nil {
+				slog.Error("Failed to send delimiter after PAIR decline", "error", err)
+				return
+			}
+			// Continue without pairing - receiver will send a new file list response
+			return
+		}
+
+		// Accept: send our public key
 		pairResponse := RTCPairResponse{
 			Status:    "OK",
 			PublicKey: s.signingKey.PublicKeyPEM(),
@@ -428,6 +528,24 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 			return
 		}
 		slog.Info("Sent PAIR response with our public key")
+
+		// Persist receiver's public key to TrustedDeviceStore if configured
+		if s.trustedStore != nil && receiverKey != nil && resp.PublicKey != "" {
+			alias := s.receiverAlias
+			if alias == "" {
+				alias = "Unknown Device"
+			}
+			device := storage.TrustedDevice{
+				Alias:     alias,
+				PublicKey: resp.PublicKey,
+				AddedAt:   time.Now().Unix(),
+			}
+			if err := s.trustedStore.Add(device); err != nil {
+				slog.Warn("Failed to persist trusted device", "error", err)
+			} else {
+				slog.Info("Device paired and trusted", "alias", alias)
+			}
+		}
 
 		// After PAIR, receiver will send a new file list response
 		// We stay in senderStateWaitFileAccept to receive it
@@ -531,4 +649,16 @@ func (s *RTCSender) Close() error {
 		return s.peer.Close()
 	}
 	return nil
+}
+
+// computeFingerprint computes the SHA256 fingerprint of a public key PEM string.
+// Returns a hex-encoded truncated fingerprint suitable for display.
+func computeFingerprint(publicKeyPEM string) string {
+	hash := sha256.Sum256([]byte(publicKeyPEM))
+	fullHash := hex.EncodeToString(hash[:])
+	// Return first 16 hex chars for display (8 bytes)
+	if len(fullHash) > 16 {
+		return fullHash[:16]
+	}
+	return fullHash
 }

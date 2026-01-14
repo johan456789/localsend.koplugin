@@ -113,6 +113,19 @@ func (s *TrustedDeviceStore) List() []TrustedDevice {
 	return list
 }
 
+// ListPublicKeys returns a map of fingerprint to public key PEM for all trusted devices.
+// This is used for token-based lookup where we need to try verifying against all keys.
+func (s *TrustedDeviceStore) ListPublicKeys() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	keys := make(map[string]string, len(s.devices))
+	for fingerprint, device := range s.devices {
+		keys[fingerprint] = device.PublicKey
+	}
+	return keys
+}
+
 // GetFingerprint computes the SHA256 fingerprint of a public key.
 func (s *TrustedDeviceStore) GetFingerprint(publicKey string) string {
 	hash := sha256.Sum256([]byte(publicKey))

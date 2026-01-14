@@ -52,14 +52,16 @@ type FileReceiver struct {
 
 // PIN rate limiting constants
 const (
-	maxPINAttempts   = 3               // Maximum incorrect PIN attempts before lockout
-	pinBlockDuration = 5 * time.Minute // Duration of lockout after max attempts
+	maxPINAttempts     = 3               // Maximum incorrect PIN attempts before lockout
+	pinBlockDuration   = 5 * time.Minute // Duration of lockout after max attempts
+	pinCleanupInterval = 5 * time.Minute // Interval for cleaning up expired PIN attempt entries
 )
 
 // pinAttemptInfo tracks failed PIN attempts for an IP
 type pinAttemptInfo struct {
-	count     int
-	blockedAt time.Time
+	count       int
+	blockedAt   time.Time
+	lastAttempt time.Time // When the last attempt occurred (for stale entry cleanup)
 }
 
 // TransferLogEntry represents a single transfer log entry
@@ -281,6 +283,7 @@ func (fr *FileReceiver) recordPINAttempt(ip string) {
 	}
 
 	info.count++
+	info.lastAttempt = time.Now()
 	if info.count >= maxPINAttempts {
 		info.blockedAt = time.Now()
 		slog.Warn("PIN rate limit reached, blocking IP", "ip", ip, "duration", pinBlockDuration)
@@ -379,6 +382,9 @@ func (fr *FileReceiver) Start(ctx context.Context) error {
 
 	slog.Info("Waiting for files (Ctrl-C to terminate)")
 
+	// Start PIN attempts cleanup goroutine (prevents unbounded memory growth)
+	go fr.pinCleanupTask(ctx)
+
 	// Start discovery/advertisement (with retry if network wasn't available at init)
 	go fr.startDiscoveryWithRetry(ctx)
 
@@ -447,4 +453,51 @@ func (fr *FileReceiver) Stop() error {
 	defer cancel()
 
 	return fr.webServer.ShutdownWithContext(ctx)
+}
+
+// pinCleanupTask periodically removes expired PIN attempt entries.
+// This prevents unbounded memory growth from attackers using rotating IPs.
+func (fr *FileReceiver) pinCleanupTask(ctx context.Context) {
+	ticker := time.NewTicker(pinCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fr.cleanupExpiredPINAttempts()
+		}
+	}
+}
+
+// cleanupExpiredPINAttempts removes PIN attempt entries that have expired.
+// This includes both blocked IPs whose block has expired and stale partial-attempt
+// entries from IPs that haven't made attempts recently (handles rotating IP attacks).
+func (fr *FileReceiver) cleanupExpiredPINAttempts() {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
+
+	if fr.pinAttempts == nil {
+		return
+	}
+
+	now := time.Now()
+	cleaned := 0
+	for ip, info := range fr.pinAttempts {
+		// Remove blocked entries whose block has expired
+		if info.count >= maxPINAttempts && now.Sub(info.blockedAt) > pinBlockDuration {
+			delete(fr.pinAttempts, ip)
+			cleaned++
+			continue
+		}
+		// Remove stale partial-attempt entries (no activity for pinBlockDuration)
+		if info.count < maxPINAttempts && now.Sub(info.lastAttempt) > pinBlockDuration {
+			delete(fr.pinAttempts, ip)
+			cleaned++
+		}
+	}
+	if cleaned > 0 {
+		slog.Debug("Cleaned up expired PIN attempt entries", "count", cleaned)
+	}
 }

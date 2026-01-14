@@ -684,7 +684,7 @@ func TestIsFolderTransfer_WithSubdirectory(t *testing.T) {
 		"file2": {Id: "file2", Filename: "Photos/sunset.jpg", Size: 200},
 	}
 
-	if !isFolderTransfer(files) {
+	if !files.IsFolderTransfer() {
 		t.Error("Files with subdirectory paths should be detected as folder transfer")
 	}
 }
@@ -695,7 +695,7 @@ func TestIsFolderTransfer_FlatFiles(t *testing.T) {
 		"file2": {Id: "file2", Filename: "sunset.jpg", Size: 200},
 	}
 
-	if isFolderTransfer(files) {
+	if files.IsFolderTransfer() {
 		t.Error("Flat files (no subdirectory) should not be detected as folder transfer")
 	}
 }
@@ -707,7 +707,7 @@ func TestIsFolderTransfer_MixedFiles(t *testing.T) {
 		"file2": {Id: "file2", Filename: "docs/manual.pdf", Size: 200},
 	}
 
-	if !isFolderTransfer(files) {
+	if !files.IsFolderTransfer() {
 		t.Error("Mixed files with at least one subdirectory should be detected as folder transfer")
 	}
 }
@@ -715,7 +715,7 @@ func TestIsFolderTransfer_MixedFiles(t *testing.T) {
 func TestIsFolderTransfer_EmptyFiles(t *testing.T) {
 	files := models.FileMetas{}
 
-	if isFolderTransfer(files) {
+	if files.IsFolderTransfer() {
 		t.Error("Empty file list should not be detected as folder transfer")
 	}
 }

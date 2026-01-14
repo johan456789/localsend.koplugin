@@ -24,6 +24,10 @@ import (
 // Sessions that don't receive any file uploads within this time will be cleaned up.
 const SessionTimeout = 1 * time.Minute
 
+// MaxFilesPerSession is the maximum number of files that can be accepted in a single session.
+// This prevents DoS attacks via excessive file metadata entries.
+const MaxFilesPerSession = 10000
+
 // activityReader wraps an io.Reader and updates a timestamp pointer periodically.
 // This keeps the session alive during long file transfers without excessive writes.
 type activityReader struct {
@@ -94,6 +98,11 @@ func (sess *RecvSession) AcceptFile(fileId string, fileMeta models.FileMeta) err
 	// (previously checked before lock, allowing race with Start())
 	if sess.started.Load() {
 		return lserrors.ErrBlockedByOthers
+	}
+
+	// Prevent DoS via excessive file count
+	if len(sess.fileMetas) >= MaxFilesPerSession {
+		return lserrors.ErrTooManyFiles
 	}
 
 	// store the file metadata

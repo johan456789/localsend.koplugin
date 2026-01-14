@@ -32,6 +32,7 @@ var (
 	targetID          string
 	preserveStructure bool
 	configDir         string
+	stunServers       []string
 )
 
 var Cmd = &cobra.Command{
@@ -192,6 +193,12 @@ func sendViaWebRTC() error {
 	// Create sender
 	sender := transfer.NewRTCSender(client, key, pin)
 
+	// Set custom STUN servers if configured
+	if len(stunServers) > 0 {
+		sender.SetSTUNServers(stunServers)
+		slog.Info("Using custom STUN servers", "servers", stunServers)
+	}
+
 	// Initialize trusted device store if config dir is provided
 	if configDir != "" {
 		trustedStore, err := storage.NewTrustedDeviceStore(configDir)
@@ -291,4 +298,5 @@ func init() {
 	Cmd.PersistentFlags().StringVarP(&targetID, "target", "t", "", "Target peer ID (from scan --webrtc)")
 	Cmd.PersistentFlags().BoolVar(&preserveStructure, "preserve-structure", true, "Preserve subdirectory structure when sending directories")
 	Cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "Config directory for trusted devices persistence")
+	Cmd.PersistentFlags().StringSliceVar(&stunServers, "stun-servers", nil, "Custom STUN servers for WebRTC (e.g., stun:stun.example.com:3478). Defaults to Google STUN servers if not set.")
 }

@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"io"
 	"log/slog"
-	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"localsend-cli/internal/crypto"
@@ -13,23 +12,12 @@ import (
 	"localsend-cli/internal/models"
 )
 
-// isFolderTransfer checks if the file set contains folder transfers
-// (any file with subdirectory structure in its path).
-func isFolderTransfer(files models.FileMetas) bool {
-	for _, meta := range files {
-		if strings.Contains(meta.Filename, "/") {
-			return true
-		}
-	}
-	return false
-}
-
 // filterFilesByExtension filters files based on allowed extensions.
 // Returns the filtered files, or an error status code if all files were rejected.
 // Folder transfers are rejected entirely when in strict routing mode
 // (extension routing + extension filter both enabled).
 func (fr *FileReceiver) filterFilesByExtension(files models.FileMetas, remoteIP string) (models.FileMetas, int) {
-	isFolderXfer := isFolderTransfer(files)
+	isFolderXfer := files.IsFolderTransfer()
 
 	// Strict mode: routing enabled + extension filter enabled
 	// In this mode, reject folder transfers entirely because the user has

@@ -89,6 +89,9 @@ type RTCReceiver struct {
 	senderAlias     string // Alias from signaling offer
 	senderPublicPEM string // Sender's public key PEM from PAIR flow (for persistence)
 	senderToken     string // Sender's token from token exchange (for PAIR verification)
+
+	// Custom STUN servers (if empty, uses DefaultSTUNServers)
+	stunServers []string
 }
 
 // NewRTCReceiver creates a new WebRTC receiver.
@@ -151,6 +154,12 @@ func (r *RTCReceiver) SetTrustedStore(store *storage.TrustedDeviceStore) {
 // Call this before AcceptOffer with information from the signaling offer.
 func (r *RTCReceiver) SetSenderInfo(alias string) {
 	r.senderAlias = alias
+}
+
+// SetSTUNServers sets custom STUN servers for ICE negotiation.
+// If not set or empty, DefaultSTUNServers will be used.
+func (r *RTCReceiver) SetSTUNServers(servers []string) {
+	r.stunServers = servers
 }
 
 // prepareFolderRemap computes folder remapping for unique folder names.
@@ -373,8 +382,14 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 		return fmt.Errorf("failed to decompress SDP: %w", err)
 	}
 
+	// Use custom STUN servers if set, otherwise use defaults
+	stunServers := r.stunServers
+	if len(stunServers) == 0 {
+		stunServers = DefaultSTUNServers
+	}
+
 	peer, err := NewPeerConnection(PeerConfig{
-		STUNServers: DefaultSTUNServers,
+		STUNServers: stunServers,
 		IsInitiator: false,
 	})
 	if err != nil {
@@ -547,6 +562,15 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 
 	// Store sender's token for PAIR verification (if we don't have their public key yet)
 	r.senderToken = tokenReq.Token
+
+	// Try to find sender in trusted device store (skip PAIR for previously paired devices)
+	if r.senderPublicKey == nil && r.trustedStore != nil && r.requirePairing {
+		if key, pem := r.findTrustedSender(tokenReq.Token); key != nil {
+			r.senderPublicKey = key
+			r.senderPublicPEM = pem
+			slog.Info("Sender found in trusted devices, PAIR will be skipped")
+		}
+	}
 
 	// Optionally verify sender's token if we have their public key
 	if r.senderPublicKey != nil {
@@ -964,4 +988,36 @@ func (r *RTCReceiver) ListenForOffersWithContext(ctx context.Context, onOffer fu
 			}
 		}
 	}()
+}
+
+// findTrustedSender searches the trusted device store for a public key that can verify
+// the sender's token. This allows skipping the PAIR flow for previously paired devices.
+// Returns the verifying key and PEM if found, nil otherwise.
+func (r *RTCReceiver) findTrustedSender(token string) (crypto.VerifyingKey, string) {
+	if r.trustedStore == nil {
+		return nil, ""
+	}
+
+	// Get all trusted public keys
+	pubKeys := r.trustedStore.ListPublicKeys()
+	if len(pubKeys) == 0 {
+		return nil, ""
+	}
+
+	// Try to verify the token against each trusted public key
+	for _, pemStr := range pubKeys {
+		key, err := crypto.ParsePublicKeyPEM(pemStr)
+		if err != nil {
+			slog.Debug("Failed to parse trusted public key", "error", err)
+			continue
+		}
+
+		// Try to verify the sender's token with this key
+		if err := crypto.VerifyTokenNonce(key, token, r.finalNonce); err == nil {
+			slog.Info("Found matching trusted device for sender")
+			return key, pemStr
+		}
+	}
+
+	return nil, ""
 }

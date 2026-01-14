@@ -721,8 +721,8 @@ function LocalSend:rotateCertificates()
         ok_callback = function()
             -- Remove certificates from the certs folder next to the binary
             -- Go will generate new ones on next start
-            os.execute(util.shell_escape({"rm", "-f", certs_path .. "/server.key.pem"}))
-            os.execute(util.shell_escape({"rm", "-f", certs_path .. "/server.crt"}))
+            os.remove(certs_path .. "/server.key.pem")
+            os.remove(certs_path .. "/server.crt")
 
             UIManager:show(InfoMessage:new{
                 text = _("Certificates cleared. New certificates will be generated on next start."),

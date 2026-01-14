@@ -30,7 +30,11 @@ var (
 	onTransferCmd  string
 	configDir      string
 	requirePairing bool
+	stunServers    []string
 )
+
+// shutdownTimeout is the maximum time to wait for goroutines to exit cleanly during shutdown.
+const shutdownTimeout = 5 * time.Second
 
 var Cmd = &cobra.Command{
 	Use:   "recv",
@@ -101,7 +105,7 @@ var Cmd = &cobra.Command{
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				startWebRTCReceiver(ctx, devname, savetodir, pin, allowedExts, extRoutes, recver.LogTransfer, configDir, requirePairing)
+				startWebRTCReceiver(ctx, devname, savetodir, pin, allowedExts, extRoutes, recver.LogTransfer, configDir, requirePairing, stunServers)
 			}()
 		}
 
@@ -118,13 +122,13 @@ var Cmd = &cobra.Command{
 		select {
 		case <-done:
 			// Clean shutdown
-		case <-time.After(5 * time.Second):
+		case <-time.After(shutdownTimeout):
 			slog.Warn("Shutdown timeout: some goroutines did not exit cleanly")
 		}
 	},
 }
 
-func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string), cfgDir string, reqPairing bool) {
+func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string), cfgDir string, reqPairing bool, customSTUN []string) {
 	// Generate signing key and token
 	key, token, err := crypto.GenerateKeyPairWithToken()
 	if err != nil {
@@ -175,6 +179,12 @@ func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, a
 	if reqPairing {
 		receiver.SetRequirePairing(true)
 		slog.Info("Pairing required for WebRTC transfers")
+	}
+
+	// Set custom STUN servers if configured
+	if len(customSTUN) > 0 {
+		receiver.SetSTUNServers(customSTUN)
+		slog.Info("Using custom STUN servers", "servers", customSTUN)
 	}
 
 	// Set extension routing if configured
@@ -228,4 +238,5 @@ func init() {
 	Cmd.PersistentFlags().StringVar(&onTransferCmd, "on-transfer", "", "Shell command to run after each file transfer completes (e.g., 'touch /tmp/notify')")
 	Cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "Config directory for trusted devices persistence")
 	Cmd.PersistentFlags().BoolVar(&requirePairing, "require-pairing", false, "Require PAIR before accepting WebRTC transfers from unknown devices")
+	Cmd.PersistentFlags().StringSliceVar(&stunServers, "stun-servers", nil, "Custom STUN servers for WebRTC (e.g., stun:stun.example.com:3478). Defaults to Google STUN servers if not set.")
 }

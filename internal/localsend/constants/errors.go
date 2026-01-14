@@ -12,6 +12,7 @@ var (
 	ErrBlockedByOthers = errors.New("block by another session")
 	ErrUnknown         = errors.New("unknown error")
 	ErrTooManyReq      = errors.New("too many request")
+	ErrTooManyFiles    = errors.New("too many files in session")
 	ErrFileIO          = errors.New("file IO")
 	ErrChecksum        = errors.New("sha256 mismatch")
 	ErrFingerprint     = errors.New("fingerprint mismatch")

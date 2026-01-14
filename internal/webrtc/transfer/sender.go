@@ -83,6 +83,9 @@ type RTCSender struct {
 	declined  chan struct{}
 	errors    chan error
 	closeOnce sync.Once // Ensures channels are closed only once
+
+	// Custom STUN servers (if empty, uses DefaultSTUNServers)
+	stunServers []string
 }
 
 // NewRTCSender creates a new WebRTC sender.
@@ -132,13 +135,25 @@ func (s *RTCSender) SetTrustedStore(store *storage.TrustedDeviceStore) {
 	s.trustedStore = store
 }
 
+// SetSTUNServers sets custom STUN servers for ICE negotiation.
+// If not set or empty, DefaultSTUNServers will be used.
+func (s *RTCSender) SetSTUNServers(servers []string) {
+	s.stunServers = servers
+}
+
 // Send initiates a file transfer to the target peer.
 func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 	s.files = files
 
+	// Use custom STUN servers if set, otherwise use defaults
+	stunServers := s.stunServers
+	if len(stunServers) == 0 {
+		stunServers = DefaultSTUNServers
+	}
+
 	// Create peer connection as initiator
 	peer, err := NewPeerConnection(PeerConfig{
-		STUNServers: DefaultSTUNServers,
+		STUNServers: stunServers,
 		IsInitiator: true,
 	})
 	if err != nil {

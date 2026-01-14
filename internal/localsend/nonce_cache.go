@@ -33,15 +33,20 @@ func NewNonceCache(capacity int) *NonceCache {
 // Put stores a nonce for the given clientID.
 // If the clientID already exists, its nonce is updated and moved to the front.
 // If the cache is at capacity, the least recently used entry is evicted.
+// The nonce is copied to prevent the caller from modifying the cached value.
 func (nc *NonceCache) Put(clientID string, nonce []byte) {
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
+
+	// Make defensive copy to prevent caller from modifying cached value
+	nonceCopy := make([]byte, len(nonce))
+	copy(nonceCopy, nonce)
 
 	// If entry exists, update it and move to front
 	if elem, exists := nc.cache[clientID]; exists {
 		nc.lru.MoveToFront(elem)
 		if entry, ok := elem.Value.(*cacheEntry); ok {
-			entry.nonce = nonce
+			entry.nonce = nonceCopy
 		}
 		return
 	}
@@ -49,7 +54,7 @@ func (nc *NonceCache) Put(clientID string, nonce []byte) {
 	// Add new entry
 	entry := &cacheEntry{
 		clientID: clientID,
-		nonce:    nonce,
+		nonce:    nonceCopy,
 	}
 	elem := nc.lru.PushFront(entry)
 	nc.cache[clientID] = elem
@@ -69,6 +74,7 @@ func (nc *NonceCache) Put(clientID string, nonce []byte) {
 // Get retrieves the nonce for the given clientID.
 // Returns the nonce and true if found, nil and false otherwise.
 // Accessing an entry moves it to the front (most recently used).
+// The returned nonce is a copy to prevent the caller from modifying the cached value.
 func (nc *NonceCache) Get(clientID string) ([]byte, bool) {
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
@@ -80,7 +86,10 @@ func (nc *NonceCache) Get(clientID string) ([]byte, bool) {
 
 	nc.lru.MoveToFront(elem)
 	if entry, ok := elem.Value.(*cacheEntry); ok {
-		return entry.nonce, true
+		// Return defensive copy to prevent caller from modifying cached value
+		result := make([]byte, len(entry.nonce))
+		copy(result, entry.nonce)
+		return result, true
 	}
 	return nil, false
 }

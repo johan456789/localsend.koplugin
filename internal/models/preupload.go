@@ -1,5 +1,7 @@
 package models
 
+import "strings"
+
 // PreUploadReq is the request body for POST /api/localsend/v2/prepare-upload
 // Per protocol spec Section 4.1, info must include port and protocol.
 type PreUploadReq struct {
@@ -16,6 +18,17 @@ type PreDownloadResp struct {
 }
 
 type FileMetas map[string]FileMeta
+
+// IsFolderTransfer checks if any file in the map has a path separator,
+// indicating this is a folder/directory transfer.
+func (fm FileMetas) IsFolderTransfer() bool {
+	for _, meta := range fm {
+		if strings.Contains(meta.Filename, "/") {
+			return true
+		}
+	}
+	return false
+}
 
 type PreUploadResp struct {
 	SessionId string     `json:"sessionId"`

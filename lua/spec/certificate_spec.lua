@@ -13,6 +13,7 @@ describe("Certificate Management", function()
     before_each(function()
         helper.before_each()
         helper.mock_os_execute()
+        helper.mock_os_remove()
     end)
 
     describe("rotateCertificates", function()
@@ -40,14 +41,12 @@ describe("Certificate Management", function()
 
             local found_rm_key = false
             local found_rm_crt = false
-            for _, cmd in ipairs(helper.state.os_execute_calls) do
-                if cmd:match("'rm' '%-f'") then
-                    if cmd:match("certs/server%.key%.pem") then
-                        found_rm_key = true
-                    end
-                    if cmd:match("certs/server%.crt") then
-                        found_rm_crt = true
-                    end
+            for _, path in ipairs(helper.state.removed_files) do
+                if path:match("certs/server%.key%.pem") then
+                    found_rm_key = true
+                end
+                if path:match("certs/server%.crt") then
+                    found_rm_crt = true
                 end
             end
             assert.is_true(found_rm_key, "Should remove key from certs folder")
@@ -63,9 +62,12 @@ describe("Certificate Management", function()
             local confirm = helper.find_dialog("ConfirmBox")
             confirm.ok_callback()
 
+            -- Count certificate file removals
             local rm_count = 0
-            for _, cmd in ipairs(helper.state.os_execute_calls) do
-                if cmd:match("^'rm' '%-f'") then rm_count = rm_count + 1 end
+            for _, path in ipairs(helper.state.removed_files) do
+                if path:match("certs/server%.key%.pem") or path:match("certs/server%.crt") then
+                    rm_count = rm_count + 1
+                end
             end
             assert.equal(2, rm_count, "Should remove 2 certificate files")
         end)
@@ -118,10 +120,12 @@ describe("Certificate Management", function()
             local confirm = helper.find_dialog("ConfirmBox")
             assert.is_truthy(confirm, "Should show ConfirmBox")
 
-            -- No ok_callback invoked, so check no rm commands were issued
+            -- No ok_callback invoked, so check no cert files were removed
             local rm_count = 0
-            for _, cmd in ipairs(helper.state.os_execute_calls) do
-                if cmd:match("^'rm' '%-f'") then rm_count = rm_count + 1 end
+            for _, path in ipairs(helper.state.removed_files) do
+                if path:match("certs/server%.key%.pem") or path:match("certs/server%.crt") then
+                    rm_count = rm_count + 1
+                end
             end
             assert.equal(0, rm_count, "Should not remove certificates when cancelled")
         end)

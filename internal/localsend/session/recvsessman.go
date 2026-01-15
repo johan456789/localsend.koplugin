@@ -13,6 +13,7 @@ import (
 type RecvSessManager struct {
 	sessions *sync.Map
 	done     chan struct{}
+	stopOnce sync.Once
 }
 
 func NewRecvSessManager() *RecvSessManager {
@@ -27,7 +28,9 @@ func (rsm *RecvSessManager) Start() {
 }
 
 func (rsm *RecvSessManager) Stop() {
-	close(rsm.done)
+	rsm.stopOnce.Do(func() {
+		close(rsm.done)
+	})
 }
 
 func (rsm *RecvSessManager) vacuumTask() {

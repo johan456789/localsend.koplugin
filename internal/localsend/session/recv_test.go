@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"localsend-cli/internal/models"
+	"localsend-cli/internal/utils"
 )
 
 // TestCreateUniqueFile tests the CreateUniqueFile function
@@ -21,7 +22,7 @@ func TestCreateUniqueFile(t *testing.T) {
 		dir := t.TempDir()
 		filename := "test.txt"
 
-		file, path, err := CreateUniqueFile(dir, filename)
+		file, path, err := utils.CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -48,7 +49,7 @@ func TestCreateUniqueFile(t *testing.T) {
 			t.Fatalf("failed to create test file: %v", err)
 		}
 
-		file, path, err := CreateUniqueFile(dir, filename)
+		file, path, err := utils.CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -72,7 +73,7 @@ func TestCreateUniqueFile(t *testing.T) {
 			}
 		}
 
-		file, path, err := CreateUniqueFile(dir, filename)
+		file, path, err := utils.CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -94,7 +95,7 @@ func TestCreateUniqueFile(t *testing.T) {
 			t.Fatalf("failed to create test file: %v", err)
 		}
 
-		file, path, err := CreateUniqueFile(dir, filename)
+		file, path, err := utils.CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -116,7 +117,7 @@ func TestCreateUniqueFile(t *testing.T) {
 			t.Fatalf("failed to create test file: %v", err)
 		}
 
-		file, path, err := CreateUniqueFile(dir, filename)
+		file, path, err := utils.CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -140,7 +141,7 @@ func TestCreateUniqueFile(t *testing.T) {
 			t.Fatalf("failed to create test file: %v", err)
 		}
 
-		file, path, err := CreateUniqueFile(dir, filename)
+		file, path, err := utils.CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -161,10 +162,10 @@ func TestCreateUniqueFileBounded(t *testing.T) {
 		t.Skip("skipping bounded loop test in short mode")
 	}
 
-	t.Run("respects maxUniquePathAttempts constant", func(t *testing.T) {
+	t.Run("respects MaxUniquePathAttempts constant", func(t *testing.T) {
 		// Verify the constant is set to a reasonable value
-		if maxUniquePathAttempts != 10000 {
-			t.Errorf("expected maxUniquePathAttempts to be 10000, got %d", maxUniquePathAttempts)
+		if utils.MaxUniquePathAttempts != 10000 {
+			t.Errorf("expected MaxUniquePathAttempts to be 10000, got %d", utils.MaxUniquePathAttempts)
 		}
 	})
 
@@ -190,7 +191,7 @@ func TestCreateUniqueFileBounded(t *testing.T) {
 		}
 
 		// Should create test (6).txt
-		file, path, err := CreateUniqueFile(dir, filename)
+		file, path, err := utils.CreateUniqueFile(dir, filename)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1097,7 +1098,7 @@ func TestCreateUniqueFileConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			file, path, err := CreateUniqueFile(dir, filename)
+			file, path, err := utils.CreateUniqueFile(dir, filename)
 			if err != nil {
 				errors <- err
 				return
@@ -1144,7 +1145,7 @@ func TestCreateUniqueFileConcurrent(t *testing.T) {
 func TestFindUniqueFolderName(t *testing.T) {
 	t.Run("returns original name when folder doesn't exist", func(t *testing.T) {
 		dir := t.TempDir()
-		result, err := findUniqueFolderName(dir, "Photos")
+		result, err := utils.FindUniqueFolderName(dir, "Photos")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1160,7 +1161,7 @@ func TestFindUniqueFolderName(t *testing.T) {
 			t.Fatalf("failed to create folder: %v", err)
 		}
 
-		result, err := findUniqueFolderName(dir, "Photos")
+		result, err := utils.FindUniqueFolderName(dir, "Photos")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1182,7 +1183,7 @@ func TestFindUniqueFolderName(t *testing.T) {
 			}
 		}
 
-		result, err := findUniqueFolderName(dir, "Photos")
+		result, err := utils.FindUniqueFolderName(dir, "Photos")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

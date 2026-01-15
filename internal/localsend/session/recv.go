@@ -3,7 +3,6 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -64,9 +63,8 @@ type RecvSession struct {
 
 	// Folder remapping for unique folder creation (computed once on first SaveFile)
 	folderRemapOnce sync.Once
-	folderRemap     map[string]string // maps original root folder -> unique root folder
+	folderRemapper  *utils.FolderRemapper
 	folderRemapErr  error
-	folderRemapDir  string // the saveDir used for remap computation
 
 	// Cached folder transfer detection (computed once)
 	isFolderTransferOnce   sync.Once
@@ -121,71 +119,31 @@ func (sess *RecvSession) Start() {
 	sess.started.Store(true)
 }
 
-// maxUniquePathAttempts is the maximum number of attempts to find a unique filename/folder
-const maxUniquePathAttempts = 10000
-
-// FindUniqueFolderName finds a unique folder name in saveDir, appending a counter if needed.
-// For example: "Photos" -> "Photos (1)" -> "Photos (2)" if folders already exist.
-// Exported for use by WebRTC receiver.
-func FindUniqueFolderName(saveDir, folderName string) (string, error) {
-	return findUniqueFolderName(saveDir, folderName)
-}
-
-// findUniqueFolderName is the internal implementation.
-func findUniqueFolderName(saveDir, folderName string) (string, error) {
-	path := filepath.Join(saveDir, folderName)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return folderName, nil // doesn't exist, use as-is
-	}
-
-	// Folder exists, find unique name
-	for i := 1; i <= maxUniquePathAttempts; i++ {
-		newName := fmt.Sprintf("%s (%d)", folderName, i)
-		path = filepath.Join(saveDir, newName)
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return newName, nil
-		}
-	}
-	return "", fmt.Errorf("could not find unique folder name after %d attempts for %s", maxUniquePathAttempts, folderName)
-}
-
 // prepareFolderRemap computes folder remapping for the session.
 // This finds unique names for root folders that already exist in saveDir.
 // Called once on first SaveFile via sync.Once.
 func (sess *RecvSession) prepareFolderRemap(saveDir string) error {
 	sess.folderRemapOnce.Do(func() {
-		sess.folderRemap = make(map[string]string)
-		sess.folderRemapDir = saveDir
-
-		// Extract all unique root folders from fileMetas
-		rootFolders := make(map[string]bool)
+		// Collect filenames from fileMetas
 		sess.mu.RLock()
+		filenames := make([]string, 0, len(sess.fileMetas))
 		for _, meta := range sess.fileMetas {
-			sanitizedPath, err := utils.SanitizeRelativePath(meta.Filename)
-			if err != nil {
-				continue
-			}
-			// Get the first path component (root folder)
-			parts := strings.SplitN(filepath.ToSlash(sanitizedPath), "/", 2)
-			if len(parts) > 1 {
-				// Has subdirectory structure - track root folder
-				rootFolders[parts[0]] = true
-			}
+			filenames = append(filenames, meta.Filename)
 		}
 		sess.mu.RUnlock()
 
-		// For each root folder, find a unique name if needed
-		for root := range rootFolders {
-			uniqueRoot, err := findUniqueFolderName(saveDir, root)
-			if err != nil {
-				sess.folderRemapErr = err
-				return
-			}
-			if uniqueRoot != root {
-				sess.folderRemap[root] = uniqueRoot
-				slog.Info("Remapping folder for uniqueness", "original", root, "unique", uniqueRoot)
-			}
+		remapper, err := utils.NewFolderRemapper(saveDir, filenames)
+		if err != nil {
+			sess.folderRemapErr = err
+			return
 		}
+
+		// Log remapped folders
+		for orig, unique := range remapper.GetRemap() {
+			slog.Info("Remapping folder for uniqueness", "original", orig, "unique", unique)
+		}
+
+		sess.folderRemapper = remapper
 	})
 	return sess.folderRemapErr
 }
@@ -193,55 +151,10 @@ func (sess *RecvSession) prepareFolderRemap(saveDir string) error {
 // applyFolderRemap applies the folder remap to a sanitized path.
 // If the path's root folder has been remapped, returns the remapped path.
 func (sess *RecvSession) applyFolderRemap(sanitizedPath string) string {
-	if len(sess.folderRemap) == 0 {
+	if sess.folderRemapper == nil {
 		return sanitizedPath
 	}
-
-	parts := strings.SplitN(filepath.ToSlash(sanitizedPath), "/", 2)
-	if len(parts) > 1 {
-		if newRoot, ok := sess.folderRemap[parts[0]]; ok {
-			return newRoot + "/" + parts[1]
-		}
-	}
-	return sanitizedPath
-}
-
-// CreateUniqueFile atomically creates a file with a unique name, appending a counter if needed.
-// For example: "file.txt" -> "file (1).txt" -> "file (2).txt"
-// Uses O_CREATE|O_EXCL to prevent race conditions between concurrent uploads.
-// Returns the opened file and its path, or an error if a unique name cannot be found.
-func CreateUniqueFile(dir, filename string) (*os.File, string, error) {
-	path := filepath.Join(dir, filename)
-
-	// Try the original filename first
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
-	if err == nil {
-		return file, path, nil
-	}
-	if !os.IsExist(err) {
-		// Some other error (permissions, etc.)
-		return nil, "", err
-	}
-
-	// File exists, try with counter suffix
-	ext := filepath.Ext(filename)
-	name := strings.TrimSuffix(filename, ext)
-
-	for i := 1; i <= maxUniquePathAttempts; i++ {
-		newFilename := fmt.Sprintf("%s (%d)%s", name, i, ext)
-		path = filepath.Join(dir, newFilename)
-
-		file, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
-		if err == nil {
-			return file, path, nil
-		}
-		if !os.IsExist(err) {
-			// Some other error (permissions, etc.)
-			return nil, "", err
-		}
-	}
-
-	return nil, "", fmt.Errorf("could not create unique file after %d attempts for %s", maxUniquePathAttempts, filename)
+	return sess.folderRemapper.Apply(sanitizedPath)
 }
 
 func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string, clientIP string, fileData io.Reader) (string, error) {
@@ -310,7 +223,7 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	}
 
 	// Atomically create a file with a unique name (prevents race conditions)
-	file, saveAs, err := CreateUniqueFile(fullSaveDir, baseName)
+	file, saveAs, err := utils.CreateUniqueFile(fullSaveDir, baseName)
 	if err != nil {
 		slog.Error("Failed to create unique file", "error", err)
 		return "", lserrors.ErrFileIO

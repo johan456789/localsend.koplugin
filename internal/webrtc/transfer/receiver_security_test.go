@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"localsend-cli/internal/localsend/session"
+	"localsend-cli/internal/utils"
 )
 
 // makeHasherMap creates an empty hash map for testing
@@ -241,7 +241,7 @@ func TestCreateUniqueFile_PathTraversal_CallerMustSanitize(t *testing.T) {
 			// NOTE: This test demonstrates the vulnerability in CreateUniqueFile
 			// which does NOT sanitize the filename.
 			// The caller (prepareFilesForReceive) should sanitize before calling.
-			file, path, err := session.CreateUniqueFile(saveDir, filename)
+			file, path, err := utils.CreateUniqueFile(saveDir, filename)
 			if err != nil {
 				// Error is acceptable - means we couldn't create the file
 				t.Logf("CreateUniqueFile returned error (acceptable): %v", err)

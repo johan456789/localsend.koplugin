@@ -48,6 +48,8 @@ function M.exportExtRouting(routing_enabled, ext_dirs, routing_accept_all, save_
         end
         deps.logger.dbg("[LocalSend] Exported extension routing config to", path)
         return path
+    else
+        deps.logger.warn("[LocalSend] Failed to open extension routing config file for writing:", path)
     end
     return nil
 end

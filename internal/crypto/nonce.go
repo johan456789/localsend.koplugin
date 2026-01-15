@@ -50,3 +50,12 @@ func DecodeNonce(encoded string) ([]byte, error) {
 	}
 	return nonce, nil
 }
+
+// CombineNonces concatenates sender and receiver nonces for token verification.
+// Order is sender_nonce || receiver_nonce per LocalSend protocol spec.
+func CombineNonces(senderNonce, receiverNonce []byte) []byte {
+	combined := make([]byte, len(senderNonce)+len(receiverNonce))
+	copy(combined, senderNonce)
+	copy(combined[len(senderNonce):], receiverNonce)
+	return combined
+}

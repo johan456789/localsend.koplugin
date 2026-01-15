@@ -248,3 +248,75 @@ func TestNonceCombinationSymmetry(t *testing.T) {
 		t.Error("Correct combined nonce should end with receiver nonce")
 	}
 }
+
+// =============================================================================
+// CombineNonces Helper Function Tests
+// =============================================================================
+
+// TestCombineNonces verifies the CombineNonces helper function.
+func TestCombineNonces(t *testing.T) {
+	senderNonce := []byte{0x01, 0x02, 0x03, 0x04}
+	receiverNonce := []byte{0x05, 0x06, 0x07, 0x08}
+
+	combined := CombineNonces(senderNonce, receiverNonce)
+
+	// Check length
+	if len(combined) != 8 {
+		t.Errorf("Combined length = %d; want 8", len(combined))
+	}
+
+	// Check order: sender first, then receiver
+	expected := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	if !bytes.Equal(combined, expected) {
+		t.Errorf("Combined = %v; want %v", combined, expected)
+	}
+}
+
+// TestCombineNonces_EmptyInputs verifies CombineNonces handles empty inputs.
+func TestCombineNonces_EmptyInputs(t *testing.T) {
+	tests := []struct {
+		name     string
+		sender   []byte
+		receiver []byte
+		wantLen  int
+	}{
+		{"both empty", nil, nil, 0},
+		{"sender empty", nil, []byte{1, 2, 3}, 3},
+		{"receiver empty", []byte{1, 2, 3}, nil, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			combined := CombineNonces(tt.sender, tt.receiver)
+			if len(combined) != tt.wantLen {
+				t.Errorf("Combined length = %d; want %d", len(combined), tt.wantLen)
+			}
+		})
+	}
+}
+
+// TestCombineNonces_DoesNotMutateInputs verifies that input slices are not modified.
+func TestCombineNonces_DoesNotMutateInputs(t *testing.T) {
+	senderNonce := []byte{0x01, 0x02, 0x03}
+	receiverNonce := []byte{0x04, 0x05, 0x06}
+
+	// Copy originals
+	senderCopy := make([]byte, len(senderNonce))
+	receiverCopy := make([]byte, len(receiverNonce))
+	copy(senderCopy, senderNonce)
+	copy(receiverCopy, receiverNonce)
+
+	// Call CombineNonces
+	combined := CombineNonces(senderNonce, receiverNonce)
+
+	// Mutate combined to ensure it doesn't affect originals
+	combined[0] = 0xFF
+
+	// Verify originals unchanged
+	if !bytes.Equal(senderNonce, senderCopy) {
+		t.Error("CombineNonces mutated sender nonce")
+	}
+	if !bytes.Equal(receiverNonce, receiverCopy) {
+		t.Error("CombineNonces mutated receiver nonce")
+	}
+}

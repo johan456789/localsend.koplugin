@@ -190,11 +190,21 @@ func (c *SignalingClient) readLoop() {
 }
 
 // writeLoop sends messages to the WebSocket.
+// All writes go through this goroutine to ensure thread safety.
 func (c *SignalingClient) writeLoop() {
 	for {
 		select {
 		case msg := <-c.sendChan:
 			_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			// Empty Type is a sentinel for ping messages from pingLoop
+			if msg.Type == "" {
+				if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					slog.Warn("Failed to send ping", "error", err)
+					_ = c.Close()
+					return
+				}
+				continue
+			}
 			if err := c.conn.WriteJSON(msg); err != nil {
 				slog.Warn("Failed to send message", "error", err)
 				// Close connection on write failure so subsequent operations fail properly
@@ -208,6 +218,7 @@ func (c *SignalingClient) writeLoop() {
 }
 
 // pingLoop sends periodic pings to keep the connection alive.
+// Pings are routed through writeLoop to avoid concurrent writes.
 func (c *SignalingClient) pingLoop() {
 	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
@@ -215,9 +226,12 @@ func (c *SignalingClient) pingLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				slog.Warn("Failed to send ping", "error", err)
+			// Send ping request to writeLoop via sendChan
+			// Use empty Type as sentinel for ping (writeLoop handles this specially)
+			select {
+			case c.sendChan <- WsClientMessage{Type: ""}:
+				// Ping request sent to writeLoop
+			case <-c.done:
 				return
 			}
 		case <-c.done:

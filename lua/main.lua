@@ -152,7 +152,6 @@ function LocalSend:init()
     self.ext_dirs = G_reader_settings:readSetting("LocalSend_ext_dirs") or {} -- Extension routing: ext -> dir
     self.routing_accept_all = G_reader_settings:isTrue("LocalSend_routing_accept_all") -- Accept unrouted files to default dir
     self.routing_enabled = G_reader_settings:isTrue("LocalSend_routing_enabled") -- Whether routing is active
-    self.last_transfer_count = 0
 
     -- Auto update check settings
     self.auto_update_check = G_reader_settings:nilOrTrue("LocalSend_auto_update_check")
@@ -163,9 +162,13 @@ function LocalSend:init()
     -- Initialize update module with dependencies
     initUpdateModule()
 
-    -- Clear Kindle telemetry files on startup (no-op on non-Kindle)
+    -- Clear Kindle telemetry files once per session (no-op on non-Kindle)
     -- These fm-out-* files accumulate in /tmp and can fill the 64MB tmpfs
-    lsupdate.clearTmpTelemetryFiles()
+    -- Guard with ServerState flag to avoid unnecessary disk I/O on every widget recreation
+    if not ServerState.telemetry_cleaned then
+        ServerState.telemetry_cleaned = true
+        lsupdate.clearTmpTelemetryFiles()
+    end
 
     -- Initialize optional modules with dependencies (guarded for recovery mode)
     if lsrouting then

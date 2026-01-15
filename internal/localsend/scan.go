@@ -42,6 +42,7 @@ type Discoverer struct {
 	cachedIPs   []net.IP
 	ipCacheTime time.Time
 	ipCacheMu   sync.RWMutex // protects cachedIPs and ipCacheTime
+	readBuf     []byte       // reusable buffer for UDP reads
 }
 
 func NewDiscoverer(devInfo models.DeviceInfo, supportHttps bool) (*Discoverer, error) {
@@ -68,6 +69,7 @@ func NewDiscoverer(devInfo models.DeviceInfo, supportHttps bool) (*Discoverer, e
 		stop:       make(chan struct{}, 1),
 		discovered: make(map[string]models.Announcement),
 		mu:         &sync.RWMutex{},
+		readBuf:    make([]byte, 512),
 	}, nil
 }
 
@@ -150,15 +152,13 @@ func (mcs *Discoverer) getCachedIPs() ([]net.IP, error) {
 func (mcs *Discoverer) readAndRegister() error {
 	_ = mcs.mcastConn.SetReadDeadline(time.Now().Add(1 * time.Second))
 
-	buf := make([]byte, 512)
-
-	n, remoteAddr, err := mcs.mcastConn.ReadFromUDP(buf)
+	n, remoteAddr, err := mcs.mcastConn.ReadFromUDP(mcs.readBuf)
 	if err != nil {
 		return err
 	}
 
 	var anno models.Announcement
-	err = json.Unmarshal(buf[:n], &anno)
+	err = json.Unmarshal(mcs.readBuf[:n], &anno)
 	if err != nil {
 		return err
 	}
@@ -296,6 +296,19 @@ func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 		return
 	}
 
+	// Pre-marshal the registration body once (avoids JSON marshaling per IP)
+	regBody := models.Announcement{
+		DeviceInfo: mcs.selfAnno.DeviceInfo,
+		Protocol:   mcs.selfAnno.Protocol,
+		Port:       mcs.selfAnno.Port,
+		Announce:   false,
+	}
+	bodyBytes, err := json.Marshal(regBody)
+	if err != nil {
+		slog.Error("Failed to marshal registration body", "error", err)
+		return
+	}
+
 	var wg sync.WaitGroup
 	// Semaphore to limit concurrent scans and prevent resource exhaustion
 	sem := make(chan struct{}, maxConcurrentScans)
@@ -329,7 +342,7 @@ func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				default:
-					mcs.scanIP(targetIP.String())
+					mcs.scanIP(targetIP.String(), bodyBytes)
 				}
 			}(targetIP)
 		}
@@ -390,16 +403,7 @@ func (mcs *Discoverer) tryScanIP(ip, scheme string, bodyBytes []byte) bool {
 	return true
 }
 
-func (mcs *Discoverer) scanIP(ip string) {
-	regBody := models.Announcement{
-		DeviceInfo: mcs.selfAnno.DeviceInfo,
-		Protocol:   mcs.selfAnno.Protocol,
-		Port:       mcs.selfAnno.Port,
-		Announce:   false,
-	}
-
-	bodyBytes, _ := json.Marshal(regBody)
-
+func (mcs *Discoverer) scanIP(ip string, bodyBytes []byte) {
 	// Try both HTTPS and HTTP as we don't know the receiver's preference
 	// Protocol spec 3.2 says to send to all local IP addresses.
 	for _, scheme := range []string{"https", "http"} {

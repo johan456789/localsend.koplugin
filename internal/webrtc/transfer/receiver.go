@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"localsend-cli/internal/crypto"
-	"localsend-cli/internal/localsend/session"
 	"localsend-cli/internal/storage"
 	"localsend-cli/internal/utils"
 	"localsend-cli/internal/webrtc/signaling"
@@ -53,7 +52,7 @@ type RTCReceiver struct {
 	extRoutes map[string]string // lowercase ext -> directory
 
 	// Folder remapping for unique folder names
-	folderRemap map[string]string // original root folder -> unique root folder
+	folderRemapper *utils.FolderRemapper
 
 	// Handshake state
 	state       int
@@ -165,50 +164,32 @@ func (r *RTCReceiver) SetSTUNServers(servers []string) {
 // prepareFolderRemap computes folder remapping for unique folder names.
 // This finds unique names for root folders that already exist in saveDir.
 func (r *RTCReceiver) prepareFolderRemap() {
-	r.folderRemap = make(map[string]string)
-
-	// Extract all unique root folders from files
-	rootFolders := make(map[string]bool)
-	for _, f := range r.files {
-		sanitizedPath, err := utils.SanitizeRelativePath(f.FileName)
-		if err != nil {
-			continue
-		}
-		// Get the first path component (root folder)
-		parts := strings.SplitN(filepath.ToSlash(sanitizedPath), "/", 2)
-		if len(parts) > 1 {
-			// Has subdirectory structure - track root folder
-			rootFolders[parts[0]] = true
-		}
+	// Collect filenames from files
+	filenames := make([]string, len(r.files))
+	for i, f := range r.files {
+		filenames[i] = f.FileName
 	}
 
-	// For each root folder, find a unique name if needed
-	for root := range rootFolders {
-		uniqueRoot, err := session.FindUniqueFolderName(r.saveDir, root)
-		if err != nil {
-			slog.Warn("Failed to find unique folder name", "root", root, "error", err)
-			continue
-		}
-		if uniqueRoot != root {
-			r.folderRemap[root] = uniqueRoot
-			slog.Info("Remapping folder for uniqueness", "original", root, "unique", uniqueRoot)
-		}
+	remapper, err := utils.NewFolderRemapper(r.saveDir, filenames)
+	if err != nil {
+		slog.Warn("Failed to create folder remapper", "error", err)
+		return
 	}
+
+	// Log remapped folders
+	for orig, unique := range remapper.GetRemap() {
+		slog.Info("Remapping folder for uniqueness", "original", orig, "unique", unique)
+	}
+
+	r.folderRemapper = remapper
 }
 
 // applyFolderRemap applies the folder remap to a sanitized path.
 func (r *RTCReceiver) applyFolderRemap(sanitizedPath string) string {
-	if len(r.folderRemap) == 0 {
+	if r.folderRemapper == nil {
 		return sanitizedPath
 	}
-
-	parts := strings.SplitN(filepath.ToSlash(sanitizedPath), "/", 2)
-	if len(parts) > 1 {
-		if newRoot, ok := r.folderRemap[parts[0]]; ok {
-			return newRoot + "/" + parts[1]
-		}
-	}
-	return sanitizedPath
+	return r.folderRemapper.Apply(sanitizedPath)
 }
 
 // prepareFilesForReceive creates files and generates tokens for accepted file IDs.
@@ -267,7 +248,7 @@ func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]st
 		}
 
 		// Atomically create file with unique name (prevents race conditions)
-		file, path, err := session.CreateUniqueFile(saveDir, baseName)
+		file, path, err := utils.CreateUniqueFile(saveDir, baseName)
 		if err != nil {
 			slog.Error("Failed to create unique file", "error", err)
 			continue
@@ -524,10 +505,7 @@ func (r *RTCReceiver) handleNonce(msg interface{}, msgType string) {
 	r.localNonce = localNonce
 
 	// Final nonce = sender_nonce || receiver_nonce
-	// Use explicit allocation to avoid modifying underlying arrays
-	r.finalNonce = make([]byte, len(r.remoteNonce)+len(r.localNonce))
-	copy(r.finalNonce, r.remoteNonce)
-	copy(r.finalNonce[len(r.remoteNonce):], r.localNonce)
+	r.finalNonce = crypto.CombineNonces(r.remoteNonce, r.localNonce)
 
 	response := RTCNonceMessage{
 		Nonce: crypto.EncodeNonce(localNonce),

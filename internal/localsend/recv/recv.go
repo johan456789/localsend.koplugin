@@ -2,6 +2,7 @@ package recv
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -48,6 +49,9 @@ type FileReceiver struct {
 	// V3 nonce caches for token verification
 	receivedNonceCache  *localsend.NonceCache // nonces received from clients
 	generatedNonceCache *localsend.NonceCache // nonces generated for clients
+
+	// cmdWg tracks running transfer command goroutines for graceful shutdown
+	cmdWg sync.WaitGroup
 }
 
 // PIN rate limiting constants
@@ -155,7 +159,9 @@ func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) 
 	// Always run callback, even if logging is disabled
 	cmd := fr.onTransferCmd
 	if cmd != "" {
+		fr.cmdWg.Add(1)
 		go func() {
+			defer fr.cmdWg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := exec.CommandContext(ctx, "sh", "-c", cmd).Run(); err != nil {
@@ -295,6 +301,32 @@ func (fr *FileReceiver) clearPINAttempts(ip string) {
 	fr.configMu.Lock()
 	defer fr.configMu.Unlock()
 	delete(fr.pinAttempts, ip)
+}
+
+// validatePIN checks PIN authentication and rate limiting.
+// Returns HTTP status code: 0 = success, 401 = wrong PIN, 429 = rate limited.
+func (fr *FileReceiver) validatePIN(c *fiber.Ctx) int {
+	expectedPin := fr.getExpectedPIN()
+	if expectedPin == "" {
+		return 0 // No PIN required
+	}
+
+	// Check if IP is blocked due to too many failed attempts
+	if fr.isPINBlocked(c.IP()) {
+		slog.Warn("PIN attempt blocked - too many failures", "remote", c.IP())
+		return 429 // Too Many Requests
+	}
+
+	pin := c.Query("pin")
+	// Use constant-time comparison to prevent timing attacks
+	if subtle.ConstantTimeCompare([]byte(pin), []byte(expectedPin)) != 1 {
+		fr.recordPINAttempt(c.IP())
+		return 401
+	}
+
+	// Clear attempts on successful PIN
+	fr.clearPINAttempts(c.IP())
+	return 0
 }
 
 // hasExtensionFilter returns true if an extension filter is configured.
@@ -447,6 +479,19 @@ func (fr *FileReceiver) Stop() error {
 		_ = fr.discoverier.Shutdown()
 	}
 	fr.closeTransferLog()
+
+	// Wait for transfer command goroutines to finish (with timeout)
+	done := make(chan struct{})
+	go func() {
+		fr.cmdWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// All commands finished
+	case <-time.After(5 * time.Second):
+		slog.Warn("Transfer commands still running at shutdown")
+	}
 
 	// Graceful shutdown with 5 second timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

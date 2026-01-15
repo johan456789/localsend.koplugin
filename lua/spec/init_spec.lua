@@ -168,15 +168,6 @@ describe("init() function", function()
         end)
     end)
 
-    describe("last_transfer_count initialization", function()
-        it("should initialize last_transfer_count to 0", function()
-            LocalSend = require("main")
-            local instance = helper.create_instance()
-
-            assert.equal(0, instance.last_transfer_count)
-        end)
-    end)
-
     describe("menu registration", function()
         it("should register to main menu", function()
             LocalSend = require("main")

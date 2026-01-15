@@ -13,6 +13,7 @@ M.ServerState = {
     last_log_position = 0,  -- Track transfer log read position across instances
     transfer_count = 0,  -- Cached transfer count (avoids full file read on e-readers)
     last_sentinel_value = nil,  -- Last known content of sentinel file for fast change detection
+    telemetry_cleaned = false,  -- True after clearTmpTelemetryFiles() has run (once per session)
 }
 
 -- Expose for testing (matches current LocalSend._ServerState pattern)

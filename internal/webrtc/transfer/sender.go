@@ -22,6 +22,14 @@ const (
 	ChunkSize = 16 * 1024 // 16KB chunks
 )
 
+// chunkPool provides reusable buffers for file transfer to reduce GC pressure.
+var chunkPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, ChunkSize)
+		return &buf
+	},
+}
+
 // Sender handshake states
 const (
 	senderStateInit = iota
@@ -305,10 +313,7 @@ func (s *RTCSender) handleNonceResponse(msg interface{}, msgType string) {
 	s.remoteNonce = remoteNonce
 
 	// Final nonce = sender_nonce || receiver_nonce
-	// Use explicit allocation to avoid modifying underlying arrays
-	s.finalNonce = make([]byte, len(s.localNonce)+len(s.remoteNonce))
-	copy(s.finalNonce, s.localNonce)
-	copy(s.finalNonce[len(s.localNonce):], s.remoteNonce)
+	s.finalNonce = crypto.CombineNonces(s.localNonce, s.remoteNonce)
 
 	slog.Info("Nonce exchange complete, sending token")
 
@@ -578,6 +583,11 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 
 // SendFiles sends all accepted files.
 func (s *RTCSender) SendFiles() error {
+	// Get buffer from pool (reuse for all files to reduce GC)
+	bufPtr := chunkPool.Get().(*[]byte)
+	defer chunkPool.Put(bufPtr)
+	buf := *bufPtr
+
 	for _, id := range s.acceptedIDs {
 		token, ok := s.fileTokens[id]
 		if !ok {
@@ -612,7 +622,6 @@ func (s *RTCSender) SendFiles() error {
 		}
 
 		// Send file data
-		buf := make([]byte, ChunkSize)
 		for {
 			n, err := f.Read(buf)
 			if err == io.EOF {

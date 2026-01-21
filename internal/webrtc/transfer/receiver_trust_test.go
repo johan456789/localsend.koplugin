@@ -280,6 +280,217 @@ func TestRTCReceiver_PairVerificationFailure(t *testing.T) {
 	}
 }
 
+// TestRTCReceiver_findTrustedSender_MatchesTrustedDevice verifies that findTrustedSender
+// returns the correct key and PEM for a trusted device that can verify the sender's token.
+func TestRTCReceiver_findTrustedSender_MatchesTrustedDevice(t *testing.T) {
+	// Create temp dir for trusted store
+	tempDir, err := os.MkdirTemp("", "find_trusted_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create sender key
+	senderKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("Failed to generate sender key: %v", err)
+	}
+
+	// Create nonces
+	senderNonce := make([]byte, 32)
+	receiverNonce := make([]byte, 32)
+	for i := range senderNonce {
+		senderNonce[i] = byte(i)
+		receiverNonce[i] = byte(i + 32)
+	}
+	combinedNonce := crypto.CombineNonces(senderNonce, receiverNonce)
+
+	// Add sender to trusted store
+	store, err := storage.NewTrustedDeviceStore(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	senderPEM := senderKey.PublicKeyPEM()
+	device := storage.TrustedDevice{
+		Alias:     "Trusted Sender",
+		PublicKey: senderPEM,
+		AddedAt:   time.Now().Unix(),
+	}
+	if err := store.Add(device); err != nil {
+		t.Fatalf("Failed to add device: %v", err)
+	}
+
+	// Create receiver with trusted store and finalNonce
+	receiver := NewRTCReceiver(nil, nil, "", "/tmp")
+	receiver.SetTrustedStore(store)
+	receiver.finalNonce = combinedNonce
+
+	// Generate sender's token with the combined nonce
+	senderToken, err := senderKey.GenerateTokenWithNonce(combinedNonce)
+	if err != nil {
+		t.Fatalf("Failed to generate sender token: %v", err)
+	}
+
+	// findTrustedSender should match and return the key
+	foundKey, foundPEM := receiver.findTrustedSender(senderToken)
+	if foundKey == nil {
+		t.Error("Expected to find trusted sender, got nil key")
+	}
+	if foundPEM != senderPEM {
+		t.Errorf("Expected PEM %q, got %q", senderPEM, foundPEM)
+	}
+}
+
+// TestRTCReceiver_findTrustedSender_NoMatchReturnsNil verifies that findTrustedSender
+// returns nil for a token from an unknown device.
+func TestRTCReceiver_findTrustedSender_NoMatchReturnsNil(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "find_trusted_nomatch_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create different keys
+	senderKey, _ := crypto.GenerateKeyPair()
+	otherKey, _ := crypto.GenerateKeyPair()
+
+	// Add OTHER device (not sender) to trusted store
+	store, err := storage.NewTrustedDeviceStore(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	device := storage.TrustedDevice{
+		Alias:     "Other Device",
+		PublicKey: otherKey.PublicKeyPEM(),
+		AddedAt:   time.Now().Unix(),
+	}
+	if err := store.Add(device); err != nil {
+		t.Fatalf("Failed to add device: %v", err)
+	}
+
+	// Create nonces and token with sender's key (not in store)
+	senderNonce := make([]byte, 32)
+	receiverNonce := make([]byte, 32)
+	combinedNonce := crypto.CombineNonces(senderNonce, receiverNonce)
+
+	receiver := NewRTCReceiver(nil, nil, "", "/tmp")
+	receiver.SetTrustedStore(store)
+	receiver.finalNonce = combinedNonce
+
+	senderToken, _ := senderKey.GenerateTokenWithNonce(combinedNonce)
+
+	// Should NOT find the sender (different key)
+	foundKey, foundPEM := receiver.findTrustedSender(senderToken)
+	if foundKey != nil {
+		t.Error("Expected nil key for unknown sender")
+	}
+	if foundPEM != "" {
+		t.Errorf("Expected empty PEM, got %q", foundPEM)
+	}
+}
+
+// TestRTCReceiver_findTrustedSender_NilStoreReturnsNil verifies that findTrustedSender
+// handles nil trustedStore gracefully.
+func TestRTCReceiver_findTrustedSender_NilStoreReturnsNil(t *testing.T) {
+	receiver := NewRTCReceiver(nil, nil, "", "/tmp")
+	// trustedStore is nil by default
+
+	foundKey, foundPEM := receiver.findTrustedSender("some-token")
+	if foundKey != nil {
+		t.Error("Expected nil key when trustedStore is nil")
+	}
+	if foundPEM != "" {
+		t.Error("Expected empty PEM when trustedStore is nil")
+	}
+}
+
+// TestRTCReceiver_findTrustedSender_EmptyStoreReturnsNil verifies that findTrustedSender
+// returns nil when the store is empty.
+func TestRTCReceiver_findTrustedSender_EmptyStoreReturnsNil(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "find_trusted_empty_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store, err := storage.NewTrustedDeviceStore(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	// Don't add any devices
+
+	receiver := NewRTCReceiver(nil, nil, "", "/tmp")
+	receiver.SetTrustedStore(store)
+	receiver.finalNonce = make([]byte, 64)
+
+	foundKey, foundPEM := receiver.findTrustedSender("some-token")
+	if foundKey != nil {
+		t.Error("Expected nil key for empty store")
+	}
+	if foundPEM != "" {
+		t.Error("Expected empty PEM for empty store")
+	}
+}
+
+// TestRTCReceiver_findTrustedSender_MalformedPEMSkipped verifies that findTrustedSender
+// skips malformed PEM entries without crashing and continues checking other entries.
+func TestRTCReceiver_findTrustedSender_MalformedPEMSkipped(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "find_trusted_malformed_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create valid sender key
+	senderKey, _ := crypto.GenerateKeyPair()
+	senderPEM := senderKey.PublicKeyPEM()
+
+	store, err := storage.NewTrustedDeviceStore(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	// Add malformed PEM first
+	badDevice := storage.TrustedDevice{
+		Alias:     "Bad Device",
+		PublicKey: "-----BEGIN PUBLIC KEY-----\nINVALID_BASE64!\n-----END PUBLIC KEY-----",
+		AddedAt:   time.Now().Unix(),
+	}
+	if err := store.Add(badDevice); err != nil {
+		t.Fatalf("Failed to add bad device: %v", err)
+	}
+
+	// Add valid sender
+	goodDevice := storage.TrustedDevice{
+		Alias:     "Good Device",
+		PublicKey: senderPEM,
+		AddedAt:   time.Now().Unix(),
+	}
+	if err := store.Add(goodDevice); err != nil {
+		t.Fatalf("Failed to add good device: %v", err)
+	}
+
+	// Create nonces and token
+	senderNonce := make([]byte, 32)
+	receiverNonce := make([]byte, 32)
+	combinedNonce := crypto.CombineNonces(senderNonce, receiverNonce)
+
+	receiver := NewRTCReceiver(nil, nil, "", "/tmp")
+	receiver.SetTrustedStore(store)
+	receiver.finalNonce = combinedNonce
+
+	senderToken, _ := senderKey.GenerateTokenWithNonce(combinedNonce)
+
+	// Should skip malformed PEM and still find the valid sender
+	foundKey, foundPEM := receiver.findTrustedSender(senderToken)
+	if foundKey == nil {
+		t.Error("Expected to find trusted sender despite malformed entry")
+	}
+	if foundPEM != senderPEM {
+		t.Errorf("Expected sender PEM, got %q", foundPEM)
+	}
+}
+
 // TestRTCReceiver_PairVerificationIntegration tests the full PAIR flow
 // with cryptographic binding verification.
 func TestRTCReceiver_PairVerificationIntegration(t *testing.T) {

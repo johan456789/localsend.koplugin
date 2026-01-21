@@ -20,6 +20,15 @@ import (
 const (
 	// ChunkSize is the size of each binary chunk sent over WebRTC.
 	ChunkSize = 16 * 1024 // 16KB chunks
+
+	// answerTimeout is the maximum time to wait for an SDP answer from the receiver.
+	answerTimeout = 30 * time.Second
+
+	// fileAcceptTimeout is the maximum time to wait for the receiver to accept/decline files.
+	fileAcceptTimeout = 60 * time.Second
+
+	// bufferFlushTimeout is the maximum time to wait for the send buffer to flush before closing.
+	bufferFlushTimeout = 10 * time.Second
 )
 
 // chunkPool provides reusable buffers for file transfer to reduce GC pressure.
@@ -114,18 +123,24 @@ func NewRTCSender(sig *signaling.SignalingClient, key *crypto.SigningKey, pin st
 // SetReceiverPublicKey sets the receiver's public key for token verification.
 // This is typically obtained through the PAIR flow.
 func (s *RTCSender) SetReceiverPublicKey(key crypto.VerifyingKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.receiverPublicKey = key
 }
 
 // SetStrictVerification enables strict token verification mode.
 // When enabled, transfers will fail if token verification fails.
 func (s *RTCSender) SetStrictVerification(strict bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.strictVerification = strict
 }
 
 // SetReceiverInfo sets receiver information for the PAIR flow.
 // The alias is used when prompting for PAIR confirmation.
 func (s *RTCSender) SetReceiverInfo(alias string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.receiverAlias = alias
 }
 
@@ -134,18 +149,24 @@ func (s *RTCSender) SetReceiverInfo(alias string) {
 // receiver's alias and public key fingerprint. Return true to accept pairing.
 // If no callback is set, pairing is automatically accepted.
 func (s *RTCSender) SetOnPairRequest(callback func(alias, fingerprint string) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.onPairRequest = callback
 }
 
 // SetTrustedStore sets the trusted device store for PAIR flow persistence.
 // When set, devices paired during the PAIR flow are persisted for future sessions.
 func (s *RTCSender) SetTrustedStore(store *storage.TrustedDeviceStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.trustedStore = store
 }
 
 // SetSTUNServers sets custom STUN servers for ICE negotiation.
 // If not set or empty, DefaultSTUNServers will be used.
 func (s *RTCSender) SetSTUNServers(servers []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.stunServers = servers
 }
 
@@ -210,7 +231,7 @@ func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 			return fmt.Errorf("failed to set answer: %w", err)
 		}
 		slog.Info("Received answer, waiting for connection")
-	case <-time.After(30 * time.Second):
+	case <-time.After(answerTimeout):
 		_ = peer.Close()
 		return fmt.Errorf("timeout waiting for answer")
 	}
@@ -229,7 +250,7 @@ func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 	case err := <-s.errors:
 		_ = peer.Close()
 		return err
-	case <-time.After(60 * time.Second):
+	case <-time.After(fileAcceptTimeout):
 		_ = peer.Close()
 		return fmt.Errorf("timeout waiting for file acceptance")
 	}
@@ -650,7 +671,7 @@ func (s *RTCSender) SendFiles() error {
 	// Wait for buffer to actually flush instead of fixed sleep
 	// This is critical per protocol spec to ensure all data is delivered
 	slog.Info("Waiting for buffer to flush...")
-	if err := s.peer.WaitBufferEmptyWithTimeout(10 * time.Second); err != nil {
+	if err := s.peer.WaitBufferEmptyWithTimeout(bufferFlushTimeout); err != nil {
 		slog.Warn("Timeout waiting for buffer flush, continuing anyway", "error", err)
 		// Don't return error - allow graceful degradation
 	}

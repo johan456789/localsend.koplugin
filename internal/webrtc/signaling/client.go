@@ -28,6 +28,9 @@ const (
 
 	// Write timeout for WebSocket messages.
 	writeTimeout = 10 * time.Second
+
+	// readTimeout is the timeout for reading a single WebSocket message.
+	readTimeout = 30 * time.Second
 )
 
 // SignalingClient manages connection to the LocalSend signaling server.
@@ -115,7 +118,7 @@ func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutI
 
 // waitForHello waits for the initial HELLO message from the server.
 func (c *SignalingClient) waitForHello() error {
-	_ = c.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = c.conn.SetReadDeadline(time.Now().Add(readTimeout))
 	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
 
 	_, msgBytes, err := c.conn.ReadMessage()

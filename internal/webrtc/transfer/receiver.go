@@ -110,41 +110,55 @@ func NewRTCReceiver(sig *signaling.SignalingClient, key *crypto.SigningKey, pin,
 
 // OnSelectFiles sets the callback for selecting which files to accept.
 func (r *RTCReceiver) OnSelectFiles(handler func([]RTCFileDto) []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.onSelectFiles = handler
 }
 
 // OnFileReceived sets the callback for when a file is received.
 func (r *RTCReceiver) OnFileReceived(handler func(filename string, size int64, sender string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.onFileReceived = handler
 }
 
 // SetSenderPublicKey sets the sender's public key for token verification.
 // This is typically obtained through the PAIR flow.
 func (r *RTCReceiver) SetSenderPublicKey(key crypto.VerifyingKey) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.senderPublicKey = key
 }
 
 // SetStrictVerification enables strict token verification mode.
 // When enabled, transfers will fail if token verification fails.
 func (r *RTCReceiver) SetStrictVerification(strict bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.strictVerification = strict
 }
 
 // SetRequirePairing enables pairing requirement.
 // When enabled, the receiver will request PAIR before accepting files from unknown senders.
 func (r *RTCReceiver) SetRequirePairing(require bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.requirePairing = require
 }
 
 // SetExtensionRoutes sets extension-to-directory routing.
 // Keys should be lowercase extensions without dots (e.g., "epub", "pdf").
 func (r *RTCReceiver) SetExtensionRoutes(routes map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.extRoutes = routes
 }
 
 // SetTrustedStore sets the trusted device store for PAIR flow persistence.
 // When set, devices paired during the PAIR flow are persisted for future sessions.
 func (r *RTCReceiver) SetTrustedStore(store *storage.TrustedDeviceStore) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.trustedStore = store
 }
 
@@ -152,12 +166,16 @@ func (r *RTCReceiver) SetTrustedStore(store *storage.TrustedDeviceStore) {
 // The alias is used when persisting the trusted device after PAIR.
 // Call this before AcceptOffer with information from the signaling offer.
 func (r *RTCReceiver) SetSenderInfo(alias string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.senderAlias = alias
 }
 
 // SetSTUNServers sets custom STUN servers for ICE negotiation.
 // If not set or empty, DefaultSTUNServers will be used.
 func (r *RTCReceiver) SetSTUNServers(servers []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.stunServers = servers
 }
 

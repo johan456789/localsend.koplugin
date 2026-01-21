@@ -25,6 +25,10 @@ const (
 	maxConcurrentScans = 50
 	// ipCacheTTL is the time-to-live for cached IP addresses
 	ipCacheTTL = 30 * time.Second
+	// discoveryTTL is the time-to-live for discovered device entries
+	discoveryTTL = 5 * time.Minute
+	// discoveryCleanupInterval is how often stale discoveries are cleaned up
+	discoveryCleanupInterval = 1 * time.Minute
 )
 
 var multicastDiscoveryAddr = &net.UDPAddr{
@@ -32,10 +36,16 @@ var multicastDiscoveryAddr = &net.UDPAddr{
 	Port: constants.DefaultPort,
 }
 
+// discoveryEntry wraps an Announcement with last-seen timestamp for TTL cleanup.
+type discoveryEntry struct {
+	anno     models.Announcement
+	lastSeen time.Time
+}
+
 type Discoverer struct {
 	mcastConn   *net.UDPConn
 	selfAnno    *models.Announcement
-	discovered  map[string]models.Announcement
+	discovered  map[string]discoveryEntry
 	mu          *sync.RWMutex
 	stop        chan struct{}
 	stopOnce    sync.Once
@@ -67,7 +77,7 @@ func NewDiscoverer(devInfo models.DeviceInfo, supportHttps bool) (*Discoverer, e
 			Announce:   true,
 		},
 		stop:       make(chan struct{}, 1),
-		discovered: make(map[string]models.Announcement),
+		discovered: make(map[string]discoveryEntry),
 		mu:         &sync.RWMutex{},
 		readBuf:    make([]byte, 512),
 	}, nil
@@ -76,6 +86,9 @@ func NewDiscoverer(devInfo models.DeviceInfo, supportHttps bool) (*Discoverer, e
 func (ma *Discoverer) Listen() error {
 	ticker := time.NewTicker(advInterval)
 	defer ticker.Stop()
+
+	// Start cleanup task in background
+	go ma.discoveryCleanupTask()
 
 	_ = ma.advertise()
 
@@ -94,6 +107,44 @@ func (ma *Discoverer) Listen() error {
 				continue
 			}
 		}
+	}
+}
+
+// discoveryCleanupTask periodically removes stale discovered device entries.
+// This prevents unbounded memory growth from devices that appear once and disappear.
+func (ma *Discoverer) discoveryCleanupTask() {
+	ticker := time.NewTicker(discoveryCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ma.stop:
+			return
+		case <-ticker.C:
+			ma.cleanupStaleDiscovered()
+		}
+	}
+}
+
+// cleanupStaleDiscovered removes discovered entries older than discoveryTTL.
+func (ma *Discoverer) cleanupStaleDiscovered() {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+
+	if ma.discovered == nil {
+		return
+	}
+
+	now := time.Now()
+	cleaned := 0
+	for ip, entry := range ma.discovered {
+		if now.Sub(entry.lastSeen) > discoveryTTL {
+			delete(ma.discovered, ip)
+			cleaned++
+		}
+	}
+	if cleaned > 0 {
+		slog.Debug("Cleaned up stale discovered devices", "count", cleaned)
 	}
 }
 
@@ -266,8 +317,8 @@ func (mcs *Discoverer) GetAllDiscovered() map[string]models.Announcement {
 	defer mcs.mu.RUnlock()
 
 	result := make(map[string]models.Announcement, len(mcs.discovered))
-	for k, v := range mcs.discovered {
-		result[k] = v
+	for k, entry := range mcs.discovered {
+		result[k] = entry.anno
 	}
 	return result
 }
@@ -278,7 +329,10 @@ func (mcs *Discoverer) PutDiscovered(ip string, anno models.Announcement) {
 
 	// Normalize deviceType per protocol spec Section 7.1
 	anno.DeviceType = normalizeDeviceType(anno.DeviceType)
-	mcs.discovered[ip] = anno
+	mcs.discovered[ip] = discoveryEntry{
+		anno:     anno,
+		lastSeen: time.Now(),
+	}
 }
 
 func (mcs *Discoverer) RegisterDevice(anno models.Announcement) {

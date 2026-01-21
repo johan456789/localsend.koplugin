@@ -1334,3 +1334,82 @@ func TestSaveFileFolderRemapOnlyAffectsSubdirs(t *testing.T) {
 		t.Errorf("expected 'photo (1).jpg', got '%s'", saved)
 	}
 }
+
+// TestRecvSession_AcceptFile_RejectsBeyondMaxLimit verifies that AcceptFile
+// returns ErrTooManyFiles when the session has reached MaxFilesPerSession files.
+func TestRecvSession_AcceptFile_RejectsBeyondMaxLimit(t *testing.T) {
+	sess, err := NewRecvSession("test-session", "192.168.1.1")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// Accept exactly MaxFilesPerSession files
+	for i := 0; i < MaxFilesPerSession; i++ {
+		fileId := fmt.Sprintf("file%d", i)
+		fileMeta := models.FileMeta{
+			Id:       fileId,
+			Filename: fmt.Sprintf("test%d.txt", i),
+			Size:     100,
+		}
+		if err := sess.AcceptFile(fileId, fileMeta); err != nil {
+			t.Fatalf("AcceptFile failed for file %d: %v", i, err)
+		}
+	}
+
+	// Verify we have exactly MaxFilesPerSession files
+	tokens := sess.FileTokens()
+	if len(tokens) != MaxFilesPerSession {
+		t.Fatalf("Expected %d tokens, got %d", MaxFilesPerSession, len(tokens))
+	}
+
+	// Try to accept one more file - should fail
+	extraFileMeta := models.FileMeta{
+		Id:       "extra-file",
+		Filename: "extra.txt",
+		Size:     100,
+	}
+	err = sess.AcceptFile("extra-file", extraFileMeta)
+	if err == nil {
+		t.Error("AcceptFile should reject files beyond MaxFilesPerSession")
+	}
+
+	// Verify it's the correct error type
+	if err.Error() != "too many files in session" {
+		t.Errorf("Expected 'too many files in session' error, got: %v", err)
+	}
+}
+
+// TestRecvSession_AcceptFile_AllowsExactlyMaxFiles verifies that AcceptFile
+// accepts exactly MaxFilesPerSession files (boundary test).
+func TestRecvSession_AcceptFile_AllowsExactlyMaxFiles(t *testing.T) {
+	sess, err := NewRecvSession("test-session", "192.168.1.1")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// Accept exactly MaxFilesPerSession files - all should succeed
+	for i := 0; i < MaxFilesPerSession; i++ {
+		fileId := fmt.Sprintf("file%d", i)
+		fileMeta := models.FileMeta{
+			Id:       fileId,
+			Filename: fmt.Sprintf("test%d.txt", i),
+			Size:     100,
+		}
+		if err := sess.AcceptFile(fileId, fileMeta); err != nil {
+			t.Fatalf("AcceptFile should allow file %d (max is %d): %v", i, MaxFilesPerSession, err)
+		}
+	}
+
+	// Verify we have exactly MaxFilesPerSession files
+	tokens := sess.FileTokens()
+	if len(tokens) != MaxFilesPerSession {
+		t.Errorf("Expected exactly %d tokens, got %d", MaxFilesPerSession, len(tokens))
+	}
+}
+
+// TestRecvSession_MaxFilesPerSession_Constant verifies the constant value is as expected.
+func TestRecvSession_MaxFilesPerSession_Constant(t *testing.T) {
+	if MaxFilesPerSession != 10000 {
+		t.Errorf("MaxFilesPerSession should be 10000, got %d", MaxFilesPerSession)
+	}
+}

@@ -3,6 +3,7 @@ package transfer
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -407,4 +408,67 @@ func TestRTCSender_PairVerificationIntegration(t *testing.T) {
 	if !store.IsTrusted(receiverPublicPEM) {
 		t.Error("Receiver should be trusted after successful PAIR")
 	}
+}
+
+// =============================================================================
+// Concurrency Tests
+// =============================================================================
+
+// TestRTCSender_Close_ConcurrentWithHandleMessage verifies that Close() can be
+// safely called concurrently with handleMessage() without causing a panic.
+// Before the fix, calling Close() while handleMessage() was running could cause
+// a send on closed channel panic because Close() did not acquire the mutex.
+func TestRTCSender_Close_ConcurrentWithHandleMessage(t *testing.T) {
+	const iterations = 100
+	const goroutines = 10
+
+	for i := 0; i < iterations; i++ {
+		sender := NewRTCSender(nil, nil, "")
+		sender.state = senderStateWaitFileAccept
+
+		var wg sync.WaitGroup
+		wg.Add(goroutines * 2) // Half for handleMessage, half for Close
+
+		// Spawn goroutines that call handleMessage
+		for j := 0; j < goroutines; j++ {
+			go func() {
+				defer wg.Done()
+				// This simulates receiving a DECLINED message which triggers
+				// sending on s.declined channel
+				data := []byte(`{"status":"DECLINED"}`)
+				sender.handleMessage(data)
+			}()
+		}
+
+		// Spawn goroutines that call Close
+		for j := 0; j < goroutines; j++ {
+			go func() {
+				defer wg.Done()
+				_ = sender.Close()
+			}()
+		}
+
+		wg.Wait()
+	}
+	// If we get here without panicking, the race condition is fixed
+}
+
+// TestRTCSender_Close_MultipleCalls verifies that Close() is idempotent and
+// can be called multiple times safely.
+func TestRTCSender_Close_MultipleCalls(t *testing.T) {
+	sender := NewRTCSender(nil, nil, "")
+
+	var wg sync.WaitGroup
+	const calls = 50
+
+	wg.Add(calls)
+	for i := 0; i < calls; i++ {
+		go func() {
+			defer wg.Done()
+			_ = sender.Close()
+		}()
+	}
+
+	wg.Wait()
+	// If we get here without panicking, Close() is idempotent
 }

@@ -4,6 +4,7 @@ local Dispatcher = require("dispatcher")
 local InfoMessage = require("ui/widget/infomessage")
 local Notification = require("ui/widget/notification")
 local InputDialog = require("ui/widget/inputdialog")
+local ButtonDialog = require("ui/widget/buttondialog")
 local NetworkMgr = require("ui/network/manager")
 local PathChooser = require("ui/widget/pathchooser")
 local UIManager = require("ui/uimanager")
@@ -41,6 +42,7 @@ local lstransfers = tryRequire("localsend_transfers")
 local lsdialogs = tryRequire("localsend_dialogs")
 local lsfirewall = tryRequire("localsend_firewall")
 local lsserver = tryRequire("localsend_server")
+local lssender = tryRequire("localsend_sender")
 
 -- Check if any critical optional modules failed
 if not state or not lsserver then
@@ -234,6 +236,25 @@ function LocalSend:init()
         }, {
             binary_path = binary_path,
             plugin_path = plugin_path,
+        })
+    end
+
+    if lssender then
+        lssender.init({
+            UIManager = UIManager,
+            InfoMessage = InfoMessage,
+            Notification = Notification,
+            InputDialog = InputDialog,
+            ButtonDialog = ButtonDialog,
+            PathChooser = PathChooser,
+            NetworkMgr = NetworkMgr,
+            util = util,
+            json = json,
+            logger = logger,
+            T = T,
+            _ = _,
+        }, {
+            binary_path = binary_path,
         })
     end
 
@@ -715,6 +736,38 @@ function LocalSend:showRecentTransfers()
     lstransfers.showRecentTransfers(self)
 end
 
+-- Send file flow functions (delegated to localsend_sender module)
+function LocalSend:showFileSendFlow()
+    if lssender then
+        -- Open firewall for scanning (needs UDP 53317 for multicast discovery)
+        -- Note: Firewall is opened temporarily; we don't close it after since:
+        -- 1. WebRTC sends also need ports open
+        -- 2. User may do multiple scans/sends
+        -- 3. If receiver is also running, ports are already open
+        -- 4. Ports are closed on KOReader exit anyway
+        self:openFirewall()
+        lssender.showFileSendFlow(self)
+    end
+end
+
+function LocalSend:sendCurrentBook()
+    if not lssender then return end
+
+    -- Get current document path
+    local doc_path = self.ui.document and self.ui.document.file
+    if not doc_path then
+        UIManager:show(InfoMessage:new{
+            text = _("No book is currently open."),
+            timeout = 3,
+        })
+        return
+    end
+
+    -- Open firewall for scanning/sending
+    self:openFirewall()
+    lssender.showFileSendFlow(self, doc_path)
+end
+
 function LocalSend:rotateCertificates()
     local ConfirmBox = require("ui/widget/confirmbox")
     UIManager:show(ConfirmBox:new{
@@ -1039,6 +1092,30 @@ function LocalSend:_buildMainMenu()
         },
         separator = true,
     })
+
+    -- Send file
+    if lssender then
+        table.insert(menu, {
+            text = _("Send file..."),
+            callback = function()
+                self:showFileSendFlow()
+            end,
+            help_text = _("Send a file to another LocalSend device on the network."),
+        })
+
+        -- Send current book (only in reader view)
+        table.insert(menu, {
+            text = _("Send current book"),
+            enabled_func = function()
+                return self.ui.document ~= nil
+            end,
+            callback = function()
+                self:sendCurrentBook()
+            end,
+            help_text = _("Send the currently open book to another LocalSend device."),
+            separator = true,
+        })
+    end
 
     -- Auto-check for updates
     table.insert(menu, {

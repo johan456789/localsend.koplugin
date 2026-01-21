@@ -99,6 +99,7 @@ type RTCSender struct {
 	accepted  chan map[string]string // fileId -> token
 	declined  chan struct{}
 	errors    chan error
+	closed    bool      // Set to true when Close() is called
 	closeOnce sync.Once // Ensures channels are closed only once
 
 	// Custom STUN servers (if empty, uses DefaultSTUNServers)
@@ -266,7 +267,9 @@ func (s *RTCSender) startNonceExchange() {
 	// Generate our nonce
 	nonce, err := crypto.GenerateNonce()
 	if err != nil {
-		s.errors <- fmt.Errorf("failed to generate nonce: %w", err)
+		if !s.closed {
+			s.errors <- fmt.Errorf("failed to generate nonce: %w", err)
+		}
 		return
 	}
 	s.localNonce = nonce
@@ -274,7 +277,9 @@ func (s *RTCSender) startNonceExchange() {
 	// Send nonce
 	msg := RTCNonceMessage{Nonce: crypto.EncodeNonce(nonce)}
 	if err := s.peer.SendJSON(msg); err != nil {
-		s.errors <- fmt.Errorf("failed to send nonce: %w", err)
+		if !s.closed {
+			s.errors <- fmt.Errorf("failed to send nonce: %w", err)
+		}
 		return
 	}
 
@@ -358,12 +363,16 @@ func (s *RTCSender) handleNonceResponse(msg interface{}, msgType string) {
 func (s *RTCSender) handleTokenResponse(msg interface{}, msgType string, data []byte) {
 	// Status responses: OK, PIN_REQUIRED, TOO_MANY_ATTEMPTS, INVALID_SIGNATURE
 	if msgType == "status_TOO_MANY_ATTEMPTS" {
-		s.errors <- fmt.Errorf("too many PIN attempts, receiver blocked transfer")
+		if !s.closed {
+			s.errors <- fmt.Errorf("too many PIN attempts, receiver blocked transfer")
+		}
 		return
 	}
 
 	if msgType == "status_INVALID_SIGNATURE" {
-		s.errors <- fmt.Errorf("receiver rejected our token signature")
+		if !s.closed {
+			s.errors <- fmt.Errorf("receiver rejected our token signature")
+		}
 		return
 	}
 
@@ -388,7 +397,9 @@ func (s *RTCSender) handleTokenResponse(msg interface{}, msgType string, data []
 		if err := crypto.VerifyTokenNonce(s.receiverPublicKey, tokenResp.Token, s.finalNonce); err != nil {
 			slog.Warn("Receiver token verification failed", "error", err)
 			if s.strictVerification {
-				s.errors <- fmt.Errorf("receiver token verification failed: %w", err)
+				if !s.closed {
+					s.errors <- fmt.Errorf("receiver token verification failed: %w", err)
+				}
 				return
 			}
 			// In lenient mode, log warning but continue
@@ -400,12 +411,16 @@ func (s *RTCSender) handleTokenResponse(msg interface{}, msgType string, data []
 
 	if tokenResp.Status == "PIN_REQUIRED" {
 		if s.pin == "" {
-			s.errors <- fmt.Errorf("receiver requires PIN but none provided")
+			if !s.closed {
+				s.errors <- fmt.Errorf("receiver requires PIN but none provided")
+			}
 			return
 		}
 
 		if s.pinAttempts >= maxPINAttempts {
-			s.errors <- fmt.Errorf("max PIN attempts reached")
+			if !s.closed {
+				s.errors <- fmt.Errorf("max PIN attempts reached")
+			}
 			return
 		}
 
@@ -415,7 +430,9 @@ func (s *RTCSender) handleTokenResponse(msg interface{}, msgType string, data []
 		// Send PIN message
 		pinMsg := RTCPinMessage{Pin: s.pin}
 		if err := s.peer.SendJSON(pinMsg); err != nil {
-			s.errors <- fmt.Errorf("failed to send PIN: %w", err)
+			if !s.closed {
+				s.errors <- fmt.Errorf("failed to send PIN: %w", err)
+			}
 			return
 		}
 		s.state = senderStateWaitPin
@@ -476,9 +493,11 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 
 	switch resp.Status {
 	case "DECLINED":
-		select {
-		case s.declined <- struct{}{}:
-		default:
+		if !s.closed {
+			select {
+			case s.declined <- struct{}{}:
+			default:
+			}
 		}
 		return
 
@@ -594,9 +613,11 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 
 	case "OK":
 		// Files accepted
-		select {
-		case s.accepted <- resp.Files:
-		default:
+		if !s.closed {
+			select {
+			case s.accepted <- resp.Files:
+			default:
+			}
 		}
 		s.state = senderStateSendingFiles
 	}
@@ -682,13 +703,19 @@ func (s *RTCSender) SendFiles() error {
 
 // Close closes the sender and peer connection.
 // Channels are closed exactly once using sync.Once to prevent panic.
+// Mutex is held during channel close to prevent race with handleMessage.
 func (s *RTCSender) Close() error {
+	// Acquire mutex to synchronize with handleMessage
+	s.mu.Lock()
+	// Set closed flag before closing channels so handleMessage knows not to send
+	s.closed = true
 	// Close channels safely (only once)
 	s.closeOnce.Do(func() {
 		close(s.accepted)
 		close(s.declined)
 		close(s.errors)
 	})
+	s.mu.Unlock()
 
 	if s.peer != nil {
 		return s.peer.Close()

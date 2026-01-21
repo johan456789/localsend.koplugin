@@ -1102,7 +1102,7 @@ func TestSetTokenGeneratorMultipleCallsSpawnsMultipleGoroutines(t *testing.T) {
 	// Create a minimal client for testing (without actual connection)
 	client := &SignalingClient{
 		done:     make(chan struct{}),
-		onAnswer: make(map[string]func(WsServerMessage)),
+		onAnswer: make(map[string]answerCallback),
 	}
 
 	generator := func() (string, error) {
@@ -1136,7 +1136,7 @@ func TestSetTokenGeneratorCloseRace(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		client := &SignalingClient{
 			done:     make(chan struct{}),
-			onAnswer: make(map[string]func(WsServerMessage)),
+			onAnswer: make(map[string]answerCallback),
 		}
 
 		generator := func() (string, error) {
@@ -1168,7 +1168,7 @@ func TestSetTokenGeneratorCloseRace(t *testing.T) {
 func TestOnAnswerCallbackLeak(t *testing.T) {
 	client := &SignalingClient{
 		done:     make(chan struct{}),
-		onAnswer: make(map[string]func(WsServerMessage)),
+		onAnswer: make(map[string]answerCallback),
 	}
 
 	// Register many callbacks that will never be triggered
@@ -1210,7 +1210,7 @@ func TestOnAnswerCallbackLeak(t *testing.T) {
 func TestOnAnswerCallbackCancelMethod(t *testing.T) {
 	client := &SignalingClient{
 		done:     make(chan struct{}),
-		onAnswer: make(map[string]func(WsServerMessage)),
+		onAnswer: make(map[string]answerCallback),
 	}
 
 	// Register a callback

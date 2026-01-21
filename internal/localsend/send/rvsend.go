@@ -90,8 +90,9 @@ func (rs *ReverseSender) predownloadHandler(c *fiber.Ctx) error {
 	}
 
 	// Support session refresh - if sessionId provided, validate it matches
+	// Use constant-time comparison to prevent timing attacks on session IDs
 	sessionId := c.Query("sessionId")
-	if sessionId != "" && sessionId != rs.session {
+	if sessionId != "" && subtle.ConstantTimeCompare([]byte(sessionId), []byte(rs.session)) != 1 {
 		return c.SendStatus(403)
 	}
 
@@ -111,7 +112,8 @@ func (rs *ReverseSender) downloadHandler(c *fiber.Ctx) error {
 		return c.SendStatus(400)
 	}
 
-	if sessionId != rs.session {
+	// Use constant-time comparison to prevent timing attacks on session IDs
+	if subtle.ConstantTimeCompare([]byte(sessionId), []byte(rs.session)) != 1 {
 		return c.SendStatus(403)
 	}
 

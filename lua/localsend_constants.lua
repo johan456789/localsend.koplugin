@@ -8,14 +8,26 @@ local M = {}
 M.PID_FILE = "/tmp/localsend_koreader.pid"
 M.TRANSFER_LOG_FILE = "/tmp/localsend_transfers.log"
 M.TRANSFER_NOTIFY_FILE = "/tmp/localsend_notify"
+M.SIGNALING_ID_FILE = "/tmp/localsend_signaling.id"  -- WebRTC signaling ID for self-filtering
+
+-- Send-related file paths
+M.SEND_PID_FILE = "/tmp/localsend_send.pid"
+M.SEND_OUTPUT_FILE = "/tmp/localsend_send.out"
+M.SCAN_OUTPUT_FILE = "/tmp/localsend_scan.json"
 
 -- Polling intervals (seconds)
 M.SENTINEL_POLL_INTERVAL = 2
+M.SEND_POLL_INTERVAL = 0.5
+M.SCAN_POLL_INTERVAL = 0.2
 
 -- Network defaults
 M.DEFAULT_PORT = "53317"
 M.DEFAULT_SAVE_DIR = "/mnt/us/documents"
 M.WEBRTC_PORT_RANGE = "50000:50100"
+
+-- Scan defaults
+M.SCAN_TIMEOUT_SECONDS = 4
+M.SCAN_MAX_POLL_DURATION = 15  -- Maximum seconds to poll before giving up (guard against hung processes)
 
 -- Update check defaults
 M.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS = 168  -- Weekly

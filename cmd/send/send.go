@@ -104,18 +104,23 @@ var Cmd = &cobra.Command{
 			slog.Info("Start sending", "file", file)
 		}
 
+		// Channel to signal when sender.Start() completes, allowing signal goroutine to exit cleanly
+		done := make(chan struct{})
 		go func() {
-			<-utils.WaitForSignal()
-
-			slog.Info("Abort")
-			err := sender.Cancel()
-			if err != nil {
-				slog.Error("Fail to cancel", "error", err)
-				return
+			select {
+			case <-utils.WaitForSignal():
+				slog.Info("Abort")
+				err := sender.Cancel()
+				if err != nil {
+					slog.Error("Fail to cancel", "error", err)
+				}
+			case <-done:
+				// sender.Start() completed, exit goroutine
 			}
 		}()
 
 		err = sender.Start()
+		close(done) // Signal the goroutine to exit
 		if err != nil {
 			slog.Error("Fail to send", "error", err)
 			return err

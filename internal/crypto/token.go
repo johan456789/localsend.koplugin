@@ -193,9 +193,12 @@ func VerifyToken(publicKey VerifyingKey, token string, validateSalt func([]byte)
 	}
 	expectedDigest := createDigestFromDER(pubKeyDER, salt)
 
-	// Verify hash matches
-	expectedHashBase64 := base64.RawURLEncoding.EncodeToString(expectedDigest)
-	if expectedHashBase64 != hashBase64 {
+	// Verify hash matches (constant-time comparison to prevent timing attacks)
+	providedDigest, err := base64.RawURLEncoding.DecodeString(hashBase64)
+	if err != nil {
+		return fmt.Errorf("failed to decode hash: %w", err)
+	}
+	if subtle.ConstantTimeCompare(expectedDigest, providedDigest) != 1 {
 		return errors.New("hash mismatch")
 	}
 

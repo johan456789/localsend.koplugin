@@ -31,7 +31,21 @@ const (
 
 	// readTimeout is the timeout for reading a single WebSocket message.
 	readTimeout = 30 * time.Second
+
+	// MaxPeers is the maximum number of peers to track.
+	// Protects against memory exhaustion on resource-constrained devices (e.g., e-readers with 256MB RAM).
+	MaxPeers = 500
+
+	// answerCallbackTTL is the time-to-live for answer callbacks.
+	// Callbacks not invoked within this time are cleaned up to prevent memory leaks.
+	answerCallbackTTL = 60 * time.Second
 )
+
+// answerCallback holds a callback and its creation time for TTL cleanup.
+type answerCallback struct {
+	callback  func(WsServerMessage)
+	createdAt time.Time
+}
 
 // SignalingClient manages connection to the LocalSend signaling server.
 type SignalingClient struct {
@@ -42,8 +56,8 @@ type SignalingClient struct {
 	msgChan   chan WsServerMessage
 	sendChan  chan WsClientMessage
 	done      chan struct{}
-	closeOnce sync.Once                        // Ensures Close() is only executed once
-	onAnswer  map[string]func(WsServerMessage) // sessionID -> callback
+	closeOnce sync.Once                 // Ensures Close() is only executed once
+	onAnswer  map[string]answerCallback // sessionID -> callback with TTL
 	answerMu  sync.Mutex
 
 	// Token refresh support
@@ -90,7 +104,7 @@ func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutI
 		msgChan:  make(chan WsServerMessage, 16),
 		sendChan: make(chan WsClientMessage, 16),
 		done:     make(chan struct{}),
-		onAnswer: make(map[string]func(WsServerMessage)),
+		onAnswer: make(map[string]answerCallback),
 		baseInfo: ClientInfoWithoutID{
 			Alias:       info.Alias,
 			Version:     info.Version,
@@ -110,8 +124,9 @@ func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutI
 	go client.readLoop()
 	go client.writeLoop()
 	go client.pingLoop()
+	go client.answerCallbackCleanupLoop()
 
-	slog.Info("Connected to signaling server", "id", client.client.ID, "peers", len(client.peers))
+	slog.Debug("Connected to signaling server", "id", client.client.ID, "peers", len(client.peers))
 
 	return client, nil
 }
@@ -174,10 +189,10 @@ func (c *SignalingClient) readLoop() {
 		// Handle answer callbacks
 		if msg.Type == "ANSWER" && msg.SessionID != "" {
 			c.answerMu.Lock()
-			if callback, ok := c.onAnswer[msg.SessionID]; ok {
+			if cb, ok := c.onAnswer[msg.SessionID]; ok {
 				delete(c.onAnswer, msg.SessionID)
 				c.answerMu.Unlock()
-				callback(msg)
+				cb.callback(msg)
 				continue
 			}
 			c.answerMu.Unlock()
@@ -280,6 +295,31 @@ func (c *SignalingClient) tokenRefreshLoop() {
 	}
 }
 
+// answerCallbackCleanupLoop periodically removes stale answer callbacks.
+// Callbacks that haven't received an answer within answerCallbackTTL are removed
+// to prevent memory leaks in long-running sessions with failed transfers.
+func (c *SignalingClient) answerCallbackCleanupLoop() {
+	ticker := time.NewTicker(answerCallbackTTL / 2) // Check twice per TTL period
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			c.answerMu.Lock()
+			for sessionID, cb := range c.onAnswer {
+				if now.Sub(cb.createdAt) > answerCallbackTTL {
+					slog.Debug("Removing stale answer callback", "sessionID", sessionID)
+					delete(c.onAnswer, sessionID)
+				}
+			}
+			c.answerMu.Unlock()
+		case <-c.done:
+			return
+		}
+	}
+}
+
 // SetTokenGenerator sets a function to generate new tokens for refresh.
 // If set, the client will periodically refresh the token during long sessions.
 // Thread-safe: uses atomic operations to prevent data races.
@@ -303,12 +343,20 @@ func (c *SignalingClient) handlePeerUpdate(msg WsServerMessage) {
 	switch msg.Type {
 	case "JOIN":
 		if msg.Peer != nil {
+			// Limit peer count to prevent memory exhaustion on resource-constrained devices
+			if len(c.peers) >= MaxPeers {
+				slog.Warn("Maximum peers reached, ignoring new peer", "max", MaxPeers, "alias", msg.Peer.Alias)
+				return
+			}
 			c.peers[msg.Peer.ID] = *msg.Peer
 			slog.Info("Peer joined", "alias", msg.Peer.Alias, "id", msg.Peer.ID)
 		}
 	case "UPDATE":
 		if msg.Peer != nil {
-			c.peers[msg.Peer.ID] = *msg.Peer
+			// Only update if peer already exists (don't bypass JOIN limit)
+			if _, exists := c.peers[msg.Peer.ID]; exists {
+				c.peers[msg.Peer.ID] = *msg.Peer
+			}
 		}
 	case "LEFT":
 		if msg.PeerID != nil {
@@ -329,7 +377,7 @@ func (c *SignalingClient) Close() error {
 
 		// Clear pending answer callbacks to prevent memory leak
 		c.answerMu.Lock()
-		c.onAnswer = make(map[string]func(WsServerMessage))
+		c.onAnswer = make(map[string]answerCallback)
 		c.answerMu.Unlock()
 
 		if c.conn != nil {
@@ -421,5 +469,8 @@ func (c *SignalingClient) SendAnswer(sessionID string, target uuid.UUID, sdp str
 func (c *SignalingClient) OnAnswer(sessionID string, callback func(WsServerMessage)) {
 	c.answerMu.Lock()
 	defer c.answerMu.Unlock()
-	c.onAnswer[sessionID] = callback
+	c.onAnswer[sessionID] = answerCallback{
+		callback:  callback,
+		createdAt: time.Now(),
+	}
 }

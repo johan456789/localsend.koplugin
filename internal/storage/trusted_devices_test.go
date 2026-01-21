@@ -169,3 +169,192 @@ func TestTrustedDeviceStore_Persistence(t *testing.T) {
 		t.Error("Device should be trusted after reload")
 	}
 }
+
+// =============================================================================
+// Error Handling Tests
+// =============================================================================
+
+// TestTrustedDeviceStore_CorruptedFile_ReturnsError verifies that corrupted
+// JSON files return an error on load (does not silently ignore corruption).
+func TestTrustedDeviceStore_CorruptedFile_ReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write corrupted JSON to the trusted_devices.json file
+	corruptedData := []byte(`{"device1": {"alias": "Test", "publicKey": truncated...`)
+	filePath := filepath.Join(tmpDir, "trusted_devices.json")
+	if err := os.WriteFile(filePath, corruptedData, 0644); err != nil {
+		t.Fatalf("Failed to write corrupted file: %v", err)
+	}
+
+	// Attempt to create store with corrupted file
+	_, err := NewTrustedDeviceStore(tmpDir)
+	if err == nil {
+		t.Error("Expected error for corrupted JSON file")
+	}
+}
+
+// TestTrustedDeviceStore_EmptyFile_ReturnsError verifies that empty files
+// return an error (empty file is not valid JSON).
+func TestTrustedDeviceStore_EmptyFile_ReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write empty file
+	filePath := filepath.Join(tmpDir, "trusted_devices.json")
+	if err := os.WriteFile(filePath, []byte(""), 0644); err != nil {
+		t.Fatalf("Failed to write empty file: %v", err)
+	}
+
+	// Attempt to create store with empty file
+	_, err := NewTrustedDeviceStore(tmpDir)
+	if err == nil {
+		t.Error("Expected error for empty file (not valid JSON)")
+	}
+}
+
+// TestTrustedDeviceStore_ValidEmptyObject_Succeeds verifies that an empty
+// JSON object is valid and creates an empty store.
+func TestTrustedDeviceStore_ValidEmptyObject_Succeeds(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write valid empty JSON object
+	filePath := filepath.Join(tmpDir, "trusted_devices.json")
+	if err := os.WriteFile(filePath, []byte("{}"), 0644); err != nil {
+		t.Fatalf("Failed to write file: %v", err)
+	}
+
+	store, err := NewTrustedDeviceStore(tmpDir)
+	if err != nil {
+		t.Fatalf("Should succeed with empty JSON object: %v", err)
+	}
+
+	devices := store.List()
+	if len(devices) != 0 {
+		t.Errorf("Expected 0 devices, got %d", len(devices))
+	}
+}
+
+// TestTrustedDeviceStore_NoFile_Succeeds verifies that missing file is OK
+// (store starts empty).
+func TestTrustedDeviceStore_NoFile_Succeeds(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	store, err := NewTrustedDeviceStore(tmpDir)
+	if err != nil {
+		t.Fatalf("Should succeed when file doesn't exist: %v", err)
+	}
+
+	devices := store.List()
+	if len(devices) != 0 {
+		t.Errorf("Expected 0 devices for new store, got %d", len(devices))
+	}
+}
+
+// =============================================================================
+// ListPublicKeys Tests
+// =============================================================================
+
+// TestTrustedDeviceStore_ListPublicKeys verifies that ListPublicKeys returns
+// all public keys in the store.
+func TestTrustedDeviceStore_ListPublicKeys(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	store, err := NewTrustedDeviceStore(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	// Add multiple devices
+	devices := []TrustedDevice{
+		{Alias: "Device 1", PublicKey: "key1", AddedAt: time.Now().Unix()},
+		{Alias: "Device 2", PublicKey: "key2", AddedAt: time.Now().Unix()},
+		{Alias: "Device 3", PublicKey: "key3", AddedAt: time.Now().Unix()},
+	}
+
+	for _, d := range devices {
+		if err := store.Add(d); err != nil {
+			t.Fatalf("Failed to add device: %v", err)
+		}
+	}
+
+	keys := store.ListPublicKeys()
+
+	if len(keys) != 3 {
+		t.Errorf("Expected 3 keys, got %d", len(keys))
+	}
+
+	// Verify all keys are present (by value, not fingerprint)
+	foundKeys := make(map[string]bool)
+	for _, key := range keys {
+		foundKeys[key] = true
+	}
+
+	for _, d := range devices {
+		if !foundKeys[d.PublicKey] {
+			t.Errorf("Key %q not found in ListPublicKeys result", d.PublicKey)
+		}
+	}
+}
+
+// TestTrustedDeviceStore_ListPublicKeys_Empty verifies ListPublicKeys on empty store.
+func TestTrustedDeviceStore_ListPublicKeys_Empty(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	store, err := NewTrustedDeviceStore(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	keys := store.ListPublicKeys()
+
+	if len(keys) != 0 {
+		t.Errorf("Expected 0 keys, got %d", len(keys))
+	}
+}
+
+// TestTrustedDeviceStore_GetPublicKey_NotFound verifies GetPublicKey returns
+// false for non-existent fingerprints.
+func TestTrustedDeviceStore_GetPublicKey_NotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	store, err := NewTrustedDeviceStore(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	_, ok := store.GetPublicKey("nonexistent-fingerprint")
+	if ok {
+		t.Error("GetPublicKey should return ok=false for non-existent fingerprint")
+	}
+}
+
+// TestTrustedDeviceStore_IsTrusted_NotFound verifies IsTrusted returns false
+// for non-existent keys.
+func TestTrustedDeviceStore_IsTrusted_NotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	store, err := NewTrustedDeviceStore(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	if store.IsTrusted("nonexistent-public-key") {
+		t.Error("IsTrusted should return false for non-existent key")
+	}
+}
+
+// TestTrustedDeviceStore_Remove_NotFound verifies Remove is a no-op for
+// non-existent fingerprints.
+func TestTrustedDeviceStore_Remove_NotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	store, err := NewTrustedDeviceStore(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+
+	// Remove on non-existent fingerprint should not error
+	err = store.Remove("nonexistent-fingerprint")
+	if err != nil {
+		t.Errorf("Remove should not error for non-existent fingerprint: %v", err)
+	}
+}

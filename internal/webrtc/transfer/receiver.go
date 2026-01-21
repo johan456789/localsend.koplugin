@@ -34,8 +34,9 @@ const (
 
 // Configuration constants
 const (
-	maxPINAttempts     = 3  // Maximum incorrect PIN attempts before closing connection
-	tokenPreviewLength = 30 // Max characters to show in token preview logs
+	maxPINAttempts     = 3     // Maximum incorrect PIN attempts before closing connection
+	tokenPreviewLength = 30    // Max characters to show in token preview logs
+	MaxFilesPerSession = 10000 // Maximum files per session to prevent DoS attacks
 )
 
 // RTCReceiver handles receiving files over WebRTC.
@@ -662,6 +663,15 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 	var fileListMsg RTCPinSendingResponse
 	if err := json.Unmarshal(data, &fileListMsg); err != nil {
 		slog.Error("Failed to parse file list", "error", err)
+		return
+	}
+
+	// Validate file count to prevent DoS via excessive file metadata
+	if len(fileListMsg.Files) > MaxFilesPerSession {
+		slog.Error("Too many files in transfer", "count", len(fileListMsg.Files), "max", MaxFilesPerSession)
+		response := RTCFileListResponse{Status: "DECLINED"}
+		_ = r.peer.SendJSONBinary(response)
+		_ = r.peer.SendDelimiter()
 		return
 	}
 

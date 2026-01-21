@@ -24,16 +24,22 @@ function M.getTransferLog()
         return transfers
     end
 
-    local f = io.open(constants.TRANSFER_LOG_FILE, "r")
-    if not f then return transfers end
+    local ok, f = pcall(io.open, constants.TRANSFER_LOG_FILE, "r")
+    if not ok or not f then return transfers end
 
-    for line in f:lines() do
-        local ok, entry = pcall(deps.json.decode, line)
-        if ok and entry then
-            table.insert(transfers, entry)
+    local success, _ = pcall(function()
+        for line in f:lines() do
+            local decode_ok, entry = pcall(deps.json.decode, line)
+            if decode_ok and entry then
+                table.insert(transfers, entry)
+            end
         end
-    end
+    end)
     f:close()
+
+    if not success then
+        deps.logger.warn("[LocalSend] Error reading transfer log")
+    end
 
     return transfers
 end
@@ -50,32 +56,38 @@ function M.getNewTransfers()
         return transfers
     end
 
-    local f = io.open(constants.TRANSFER_LOG_FILE, "r")
-    if not f then
+    local open_ok, f = pcall(io.open, constants.TRANSFER_LOG_FILE, "r")
+    if not open_ok or not f then
         ServerState.last_log_position = 0
         return transfers
     end
 
-    -- Check if file was truncated (position beyond file size)
-    local file_size = f:seek("end")
-    if ServerState.last_log_position > file_size then
-        ServerState.last_log_position = 0
-    end
-
-    -- Seek to last known position
-    f:seek("set", ServerState.last_log_position)
-
-    for line in f:lines() do
-        local ok, entry = pcall(deps.json.decode, line)
-        if ok and entry then
-            table.insert(transfers, entry)
+    local success, _ = pcall(function()
+        -- Check if file was truncated (position beyond file size)
+        local file_size = f:seek("end")
+        if ServerState.last_log_position > file_size then
+            ServerState.last_log_position = 0
         end
-    end
 
-    -- Save new position and update cached count
-    ServerState.last_log_position = f:seek()
-    ServerState.transfer_count = ServerState.transfer_count + #transfers
+        -- Seek to last known position
+        f:seek("set", ServerState.last_log_position)
+
+        for line in f:lines() do
+            local decode_ok, entry = pcall(deps.json.decode, line)
+            if decode_ok and entry then
+                table.insert(transfers, entry)
+            end
+        end
+
+        -- Save new position and update cached count
+        ServerState.last_log_position = f:seek()
+        ServerState.transfer_count = ServerState.transfer_count + #transfers
+    end)
     f:close()
+
+    if not success then
+        deps.logger.warn("[LocalSend] Error reading new transfers")
+    end
 
     return transfers
 end

@@ -50,7 +50,7 @@ type ClientInfoWithoutID struct {
 func NewClientInfo(alias, token string) ClientInfoWithoutID {
 	return ClientInfoWithoutID{
 		Alias:       alias,
-		Version:     "2.1",
+		Version:     "2.3",
 		DeviceModel: "LocalSend-CLI",
 		DeviceType:  "headless",
 		Token:       token,

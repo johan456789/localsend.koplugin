@@ -255,6 +255,12 @@ function M.start(instance, silent)
     table.insert(args, "--on-transfer")
     table.insert(args, "date +%s%N > " .. constants.TRANSFER_NOTIFY_FILE)
 
+    -- Write signaling ID to file for self-filtering in scan (WebRTC mode only)
+    if instance.use_webrtc then
+        table.insert(args, "--signaling-id-file")
+        table.insert(args, constants.SIGNALING_ID_FILE)
+    end
+
     -- Open firewall before starting
     instance:openFirewall()
 

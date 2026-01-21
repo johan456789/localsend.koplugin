@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -97,8 +98,18 @@ func (ma *Discoverer) Listen() error {
 		case <-ma.stop:
 			return nil
 		case <-ticker.C:
+			// Check if stopped before attempting network operations
+			select {
+			case <-ma.stop:
+				return nil
+			default:
+			}
 			err := ma.advertise()
 			if err != nil {
+				// If connection is closed, exit gracefully
+				if isClosedConnError(err) {
+					return nil
+				}
 				slog.Warn("Fail to send announcement", "error", err)
 				continue
 			}
@@ -108,6 +119,15 @@ func (ma *Discoverer) Listen() error {
 			}
 		}
 	}
+}
+
+// isClosedConnError checks if the error is due to a closed network connection
+func isClosedConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "use of closed network connection") ||
+		err == net.ErrClosed
 }
 
 // discoveryCleanupTask periodically removes stale discovered device entries.
@@ -167,7 +187,7 @@ func (ma *Discoverer) Shutdown() error {
 		// Close connection first to unblock any pending reads in readAndRegister(),
 		// allowing Listen() to return to the select and receive the stop signal
 		_ = ma.mcastConn.Close()
-		ma.stop <- struct{}{}
+		close(ma.stop) // Close the channel so all goroutines watching it exit
 	})
 	return nil
 }

@@ -883,3 +883,254 @@ func TestGetSaveDirForSession_IndividualFilesUseRouting(t *testing.T) {
 		t.Errorf("SaveDir = %q; want %q (individual files use routing)", saveDir, epubDir)
 	}
 }
+
+// =============================================================================
+// V2 Cancel Handler Tests (POST /api/localsend/v2/cancel)
+// =============================================================================
+
+// TestCancelHandler_MissingSessionId_Returns400 verifies that missing sessionId
+// returns 400 Bad Request.
+func TestCancelHandler_MissingSessionId_Returns400(t *testing.T) {
+	fr := newTestReceiver()
+
+	app := fiber.New()
+	app.Post(constants.CancelPath, fr.cancelHandler)
+
+	// Request without sessionId parameter
+	req := httptest.NewRequest("POST", constants.CancelPath, nil)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+
+	if resp.StatusCode != 400 {
+		t.Errorf("Status = %d; want 400 for missing sessionId", resp.StatusCode)
+	}
+}
+
+// TestCancelHandler_ValidSessionId_KillsSession verifies that a valid sessionId
+// kills the session and returns 200.
+func TestCancelHandler_ValidSessionId_KillsSession(t *testing.T) {
+	fr := newTestReceiver()
+
+	// Create an active session
+	testFiles := models.FileMetas{
+		"file1": {Id: "file1", Filename: "test.txt", Size: 100},
+	}
+	sessionId, err := fr.sessman.NewSession(testFiles, "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// Verify session exists
+	if !fr.sessman.HasActiveSessions() {
+		t.Fatal("Session should exist before cancel")
+	}
+
+	app := fiber.New()
+	app.Post(constants.CancelPath, fr.cancelHandler)
+
+	req := httptest.NewRequest("POST", constants.CancelPath+"?sessionId="+sessionId, nil)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+
+	if resp.StatusCode != 200 {
+		t.Errorf("Status = %d; want 200 for valid cancel", resp.StatusCode)
+	}
+
+	// Session should be killed
+	if fr.sessman.HasActiveSessions() {
+		t.Error("Session should be killed after cancel")
+	}
+}
+
+// TestCancelHandler_NonexistentSessionId_Returns200 verifies that cancelling
+// a non-existent session still returns 200 (idempotent operation).
+// NOTE: This documents current behavior. The handler does NOT validate that
+// the session exists - it just calls KillSession which is a no-op for missing sessions.
+func TestCancelHandler_NonexistentSessionId_Returns200(t *testing.T) {
+	fr := newTestReceiver()
+
+	app := fiber.New()
+	app.Post(constants.CancelPath, fr.cancelHandler)
+
+	req := httptest.NewRequest("POST", constants.CancelPath+"?sessionId=nonexistent-session-id", nil)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+
+	// Current behavior: returns 200 even for non-existent sessions
+	// This is idempotent behavior (safe to call multiple times)
+	if resp.StatusCode != 200 {
+		t.Errorf("Status = %d; want 200 (idempotent cancel)", resp.StatusCode)
+	}
+}
+
+// TestCancelHandler_NoAuthCheck_AllowsAnyClientToCancel documents the security gap
+// where any network client can cancel ANY session by guessing session IDs.
+// This test serves as documentation that this is known behavior.
+func TestCancelHandler_NoAuthCheck_AllowsAnyClientToCancel(t *testing.T) {
+	fr := newTestReceiver()
+
+	// Create a session from "original client" IP
+	testFiles := models.FileMetas{
+		"file1": {Id: "file1", Filename: "test.txt", Size: 100},
+	}
+	sessionId, _ := fr.sessman.NewSession(testFiles, "192.168.1.100")
+
+	app := fiber.New()
+	app.Post(constants.CancelPath, fr.cancelHandler)
+
+	// A different client (simulated by X-Forwarded-For) can cancel the session
+	// Note: In a real scenario, the attacker just needs to know/guess the sessionId
+	req := httptest.NewRequest("POST", constants.CancelPath+"?sessionId="+sessionId, nil)
+	req.Header.Set("X-Forwarded-For", "192.168.1.200") // Different IP
+
+	resp, _ := app.Test(req)
+
+	// SECURITY NOTE: This succeeds because there's no IP validation on cancel
+	// The cancelHandler only checks for sessionId presence, not ownership.
+	if resp.StatusCode != 200 {
+		t.Errorf("Status = %d; expected 200 (no auth check)", resp.StatusCode)
+	}
+
+	// Session was killed despite being from a different client
+	if fr.sessman.HasActiveSessions() {
+		t.Log("SECURITY NOTE: Cancel from different IP was rejected (if this fails, auth was added)")
+	}
+}
+
+// =============================================================================
+// V2 Info Handler Tests (GET /api/localsend/v2/info)
+// =============================================================================
+
+// TestInfoHandler_ReturnsDeviceIdentity verifies that the info handler returns
+// the receiver's device identity.
+func TestInfoHandler_ReturnsDeviceIdentity(t *testing.T) {
+	fr := newTestReceiver()
+
+	app := fiber.New()
+	app.Get(constants.InfoPath, fr.infoHandler)
+
+	req := httptest.NewRequest("GET", constants.InfoPath, nil)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+
+	if resp.StatusCode != 200 {
+		t.Errorf("Status = %d; want 200", resp.StatusCode)
+	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var deviceInfo models.DeviceInfo
+	if err := json.Unmarshal(respBody, &deviceInfo); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	// Verify returned identity matches receiver's identity
+	if deviceInfo.Alias != "Test Device" {
+		t.Errorf("Alias = %q; want 'Test Device'", deviceInfo.Alias)
+	}
+	if deviceInfo.Version != "2.3" {
+		t.Errorf("Version = %q; want '2.3'", deviceInfo.Version)
+	}
+	if deviceInfo.DeviceModel != "Test" {
+		t.Errorf("DeviceModel = %q; want 'Test'", deviceInfo.DeviceModel)
+	}
+	if deviceInfo.DeviceType != "headless" {
+		t.Errorf("DeviceType = %q; want 'headless'", deviceInfo.DeviceType)
+	}
+}
+
+// =============================================================================
+// V2 Register Handler Tests (POST /api/localsend/v2/register)
+// =============================================================================
+
+// TestRegisterHandler_ValidAnnouncement_ReturnsDeviceInfo verifies that valid
+// announcement parsing works and returns device info.
+func TestRegisterHandler_ValidAnnouncement_ReturnsDeviceInfo(t *testing.T) {
+	fr := newTestReceiver()
+
+	app := fiber.New()
+	app.Post(constants.RegisterPath, fr.registerHandler)
+
+	announcement := models.Announcement{
+		DeviceInfo: models.DeviceInfo{
+			Alias:       "Sender Device",
+			Version:     "2.3",
+			DeviceModel: "iPhone",
+			DeviceType:  "mobile",
+		},
+		Protocol: "https",
+		Port:     53317,
+		Announce: true,
+	}
+	body, _ := json.Marshal(announcement)
+
+	req := httptest.NewRequest("POST", constants.RegisterPath, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+
+	if resp.StatusCode != 200 {
+		t.Errorf("Status = %d; want 200", resp.StatusCode)
+	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var deviceInfo models.DeviceInfo
+	if err := json.Unmarshal(respBody, &deviceInfo); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	// Response should contain our device info
+	if deviceInfo.Alias != "Test Device" {
+		t.Errorf("Alias = %q; want 'Test Device'", deviceInfo.Alias)
+	}
+}
+
+// TestRegisterHandler_MalformedJSON_Returns400 verifies that malformed JSON
+// returns 400 Bad Request.
+func TestRegisterHandler_MalformedJSON_Returns400(t *testing.T) {
+	fr := newTestReceiver()
+
+	app := fiber.New()
+	app.Post(constants.RegisterPath, fr.registerHandler)
+
+	req := httptest.NewRequest("POST", constants.RegisterPath, bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, _ := app.Test(req)
+
+	if resp.StatusCode != 400 {
+		t.Errorf("Status = %d; want 400 for malformed JSON", resp.StatusCode)
+	}
+}
+
+// TestRegisterHandler_EmptyBody_Returns400 verifies that empty body
+// returns 400 Bad Request.
+func TestRegisterHandler_EmptyBody_Returns400(t *testing.T) {
+	fr := newTestReceiver()
+
+	app := fiber.New()
+	app.Post(constants.RegisterPath, fr.registerHandler)
+
+	req := httptest.NewRequest("POST", constants.RegisterPath, bytes.NewReader([]byte("")))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, _ := app.Test(req)
+
+	if resp.StatusCode != 400 {
+		t.Errorf("Status = %d; want 400 for empty body", resp.StatusCode)
+	}
+}

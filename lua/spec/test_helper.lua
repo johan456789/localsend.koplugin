@@ -373,6 +373,10 @@ function M.mock_localsend_state()
             last_log_position = 0,
             transfer_count = 0,
             last_sentinel_value = nil,
+            -- Send-related state
+            discovered_devices = {},
+            scan_in_progress = false,
+            send_in_progress = false,
         },
     }
     -- Expose for testing (matches LocalSend._ServerState pattern)
@@ -389,6 +393,9 @@ function M.reset_localsend_state()
         state.ServerState.last_log_position = 0
         state.ServerState.transfer_count = 0
         state.ServerState.last_sentinel_value = nil
+        state.ServerState.discovered_devices = {}
+        state.ServerState.scan_in_progress = false
+        state.ServerState.send_in_progress = false
     end
 end
 
@@ -432,6 +439,16 @@ function M.load_localsend_server()
     package.loaded["localsend_server"] = require("localsend_server")
 end
 
+-- Load localsend_discovery (real module, not mocked)
+function M.load_localsend_discovery()
+    package.loaded["localsend_discovery"] = require("localsend_discovery")
+end
+
+-- Load localsend_sender (real module, not mocked)
+function M.load_localsend_sender()
+    package.loaded["localsend_sender"] = require("localsend_sender")
+end
+
 -- Clear cached main module to get fresh instance
 function M.reset_main()
     package.loaded["main"] = nil
@@ -442,6 +459,8 @@ function M.reset_main()
     package.loaded["localsend_dialogs"] = nil  -- Also reset dialogs module
     package.loaded["localsend_firewall"] = nil  -- Also reset firewall module
     package.loaded["localsend_server"] = nil  -- Also reset server module
+    package.loaded["localsend_discovery"] = nil  -- Also reset discovery module
+    package.loaded["localsend_sender"] = nil  -- Also reset sender module
 end
 
 -- Complete setup - call all standard mocks
@@ -477,6 +496,8 @@ function M.setup_complete(opts)
     M.load_localsend_dialogs()
     M.load_localsend_firewall()
     M.load_localsend_server()
+    M.load_localsend_discovery()
+    M.load_localsend_sender()
 end
 
 -- Standard before_each that resets state

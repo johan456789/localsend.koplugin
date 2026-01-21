@@ -14,6 +14,15 @@ M.ServerState = {
     transfer_count = 0,  -- Cached transfer count (avoids full file read on e-readers)
     last_sentinel_value = nil,  -- Last known content of sentinel file for fast change detection
     telemetry_cleaned = false,  -- True after clearTmpTelemetryFiles() has run (once per session)
+
+    -- Send-related state
+    discovered_devices = {},  -- Cached devices from last scan
+    scan_in_progress = false,  -- True while device scan is running
+    send_in_progress = false,  -- True while file send is in progress
+
+    -- Cancellation flags (checked by polling callbacks to avoid stale callbacks)
+    scan_cancelled = false,  -- True when scan was cancelled by user
+    send_cancelled = false,  -- True when send was cancelled by user
 }
 
 -- Expose for testing (matches current LocalSend._ServerState pattern)

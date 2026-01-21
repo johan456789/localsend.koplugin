@@ -19,18 +19,19 @@ import (
 )
 
 var (
-	devname        string
-	savetodir      string
-	supportHttps   bool
-	pin            string
-	acceptExt      string
-	logFile        string
-	webrtcMode     bool
-	extRouting     string
-	onTransferCmd  string
-	configDir      string
-	requirePairing bool
-	stunServers    []string
+	devname         string
+	savetodir       string
+	supportHttps    bool
+	pin             string
+	acceptExt       string
+	logFile         string
+	webrtcMode      bool
+	extRouting      string
+	onTransferCmd   string
+	configDir       string
+	requirePairing  bool
+	stunServers     []string
+	signalingIDFile string
 )
 
 // shutdownTimeout is the maximum time to wait for goroutines to exit cleanly during shutdown.
@@ -166,6 +167,16 @@ func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, a
 
 	slog.Info("WebRTC receiver listening", "id", client.ClientID())
 
+	// Write signaling ID to file for self-filtering in scan command
+	if signalingIDFile != "" {
+		if err := os.WriteFile(signalingIDFile, []byte(client.ClientID().String()), 0600); err != nil {
+			slog.Warn("Failed to write signaling ID file", "path", signalingIDFile, "error", err)
+		} else {
+			// Clean up the file on exit
+			defer func() { _ = os.Remove(signalingIDFile) }()
+		}
+	}
+
 	// Create receiver
 	receiver := transfer.NewRTCReceiver(client, key, pin, saveDir)
 	defer func() { _ = receiver.Close() }()
@@ -239,4 +250,5 @@ func init() {
 	Cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "Config directory for trusted devices persistence")
 	Cmd.PersistentFlags().BoolVar(&requirePairing, "require-pairing", false, "Require PAIR before accepting WebRTC transfers from unknown devices")
 	Cmd.PersistentFlags().StringSliceVar(&stunServers, "stun-servers", nil, "Custom STUN servers for WebRTC (e.g., stun:stun.example.com:3478). Defaults to Google STUN servers if not set.")
+	Cmd.PersistentFlags().StringVar(&signalingIDFile, "signaling-id-file", "", "Write WebRTC signaling client ID to this file (for self-filtering in scan)")
 }

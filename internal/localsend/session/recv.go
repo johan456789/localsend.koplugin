@@ -2,6 +2,7 @@ package session
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"io"
 	"log/slog"
@@ -178,8 +179,8 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	expectedToken, tokenExist := sess.fileTokens[fileId]
 	sess.mu.RUnlock()
 
-	// validate
-	if !metaExist || !tokenExist || expectedToken != token {
+	// validate (constant-time comparison to prevent timing attacks on file tokens)
+	if !metaExist || !tokenExist || subtle.ConstantTimeCompare([]byte(expectedToken), []byte(token)) != 1 {
 		return "", lserrors.ErrRejected
 	}
 

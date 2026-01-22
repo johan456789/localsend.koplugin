@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -356,5 +357,103 @@ func TestTrustedDeviceStore_Remove_NotFound(t *testing.T) {
 	err = store.Remove("nonexistent-fingerprint")
 	if err != nil {
 		t.Errorf("Remove should not error for non-existent fingerprint: %v", err)
+	}
+}
+
+// =============================================================================
+// Eviction Tests
+// =============================================================================
+
+// TestTrustedDeviceStore_EvictsOldestWhenAtCapacity verifies that when the store
+// reaches MaxTrustedDevices capacity, adding a new device evicts the oldest one.
+func TestTrustedDeviceStore_EvictsOldestWhenAtCapacity(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewTrustedDeviceStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Fill store to capacity
+	for i := 0; i < MaxTrustedDevices; i++ {
+		device := TrustedDevice{
+			Alias:     fmt.Sprintf("device-%d", i),
+			PublicKey: fmt.Sprintf("key-%d", i),
+			AddedAt:   int64(i), // Oldest has AddedAt=0
+		}
+		if err := store.Add(device); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Verify at capacity
+	if len(store.devices) != MaxTrustedDevices {
+		t.Errorf("expected %d devices, got %d", MaxTrustedDevices, len(store.devices))
+	}
+
+	// Add one more - should evict oldest (AddedAt=0)
+	newDevice := TrustedDevice{
+		Alias:     "new-device",
+		PublicKey: "new-key",
+		AddedAt:   int64(MaxTrustedDevices),
+	}
+	if err := store.Add(newDevice); err != nil {
+		t.Fatal(err)
+	}
+
+	// Still at capacity
+	if len(store.devices) != MaxTrustedDevices {
+		t.Errorf("expected %d devices after eviction, got %d", MaxTrustedDevices, len(store.devices))
+	}
+
+	// Oldest device (key-0) should be gone
+	if store.IsTrusted("key-0") {
+		t.Error("oldest device should have been evicted")
+	}
+
+	// New device should be present
+	if !store.IsTrusted("new-key") {
+		t.Error("new device should be present")
+	}
+}
+
+// TestTrustedDeviceStore_ReAddExistingDeviceDoesNotEvict verifies that re-adding
+// an existing device (same public key) updates it without triggering eviction.
+func TestTrustedDeviceStore_ReAddExistingDeviceDoesNotEvict(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewTrustedDeviceStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Fill store to capacity
+	for i := 0; i < MaxTrustedDevices; i++ {
+		device := TrustedDevice{
+			Alias:     fmt.Sprintf("device-%d", i),
+			PublicKey: fmt.Sprintf("key-%d", i),
+			AddedAt:   int64(i),
+		}
+		if err := store.Add(device); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Re-add an existing device (should update, not evict)
+	device := TrustedDevice{
+		Alias:     "device-50-updated",
+		PublicKey: "key-50", // Same key = same fingerprint
+		AddedAt:   int64(MaxTrustedDevices + 1),
+	}
+	if err := store.Add(device); err != nil {
+		t.Fatal(err)
+	}
+
+	// Still at capacity (no eviction happened)
+	if len(store.devices) != MaxTrustedDevices {
+		t.Errorf("expected %d devices, got %d", MaxTrustedDevices, len(store.devices))
+	}
+
+	// Oldest device should still be there (no eviction needed for re-add)
+	if !store.IsTrusted("key-0") {
+		t.Error("oldest device should NOT have been evicted on re-add")
 	}
 }

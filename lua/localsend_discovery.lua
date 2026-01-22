@@ -253,6 +253,9 @@ function M.showDeviceSelector(devices, onSelect)
     dialog = deps.ButtonDialog:new{
         title = deps._("Select target device"),
         buttons = buttons,
+        dismiss_callback = function()
+            M._current_dialog = nil
+        end,
     }
     M._current_dialog = dialog  -- Track for external closing
     deps.UIManager:show(dialog)

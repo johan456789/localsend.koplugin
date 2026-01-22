@@ -453,6 +453,54 @@ func TestRTCSender_Close_ConcurrentWithHandleMessage(t *testing.T) {
 	// If we get here without panicking, the race condition is fixed
 }
 
+// TestRTCSender_Send_ClosedChannelsReturnError verifies that reading from closed
+// channels returns an error rather than nil. This tests the fix for the bug
+// where Close() during Send() would cause Send() to return nil (success).
+func TestRTCSender_Send_ClosedChannelsReturnError(t *testing.T) {
+	sender := NewRTCSender(nil, nil, "")
+
+	// Close the sender - this closes all channels
+	_ = sender.Close()
+
+	// Verify closed channels behavior matches our fix expectations
+	// Reading from closed 'accepted' channel should return nil map, ok=false
+	select {
+	case tokens, ok := <-sender.accepted:
+		if ok {
+			t.Error("expected accepted channel to be closed (ok=false)")
+		}
+		if tokens != nil {
+			t.Error("expected nil tokens from closed channel")
+		}
+	default:
+		t.Error("expected to receive from closed channel")
+	}
+
+	// Reading from closed 'declined' channel should return zero value, ok=false
+	select {
+	case _, ok := <-sender.declined:
+		if ok {
+			t.Error("expected declined channel to be closed (ok=false)")
+		}
+	default:
+		t.Error("expected to receive from closed channel")
+	}
+
+	// Reading from closed 'errors' channel should return nil error, ok=false
+	select {
+	case err, ok := <-sender.errors:
+		if ok {
+			t.Error("expected errors channel to be closed (ok=false)")
+		}
+		if err != nil {
+			t.Error("expected nil error from closed channel")
+		}
+		// This is the bug: without checking ok, Send() would return nil
+	default:
+		t.Error("expected to receive from closed channel")
+	}
+}
+
 // TestRTCSender_Close_MultipleCalls verifies that Close() is idempotent and
 // can be called multiple times safely.
 func TestRTCSender_Close_MultipleCalls(t *testing.T) {

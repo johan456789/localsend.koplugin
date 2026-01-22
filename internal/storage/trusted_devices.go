@@ -25,10 +25,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
 )
+
+// MaxTrustedDevices is the maximum number of devices that can be stored.
+// This limit protects memory on resource-constrained e-readers (64MB RAM).
+const MaxTrustedDevices = 100
 
 // TrustedDevice represents a device that has been paired and trusted.
 type TrustedDevice struct {
@@ -64,6 +69,15 @@ func (s *TrustedDeviceStore) Add(device TrustedDevice) error {
 	defer s.mu.Unlock()
 
 	fingerprint := s.GetFingerprint(device.PublicKey)
+
+	// If device already exists (re-pairing), just update it
+	if _, exists := s.devices[fingerprint]; !exists {
+		// If at capacity, evict the oldest device
+		if len(s.devices) >= MaxTrustedDevices {
+			s.evictOldest()
+		}
+	}
+
 	s.devices[fingerprint] = device
 
 	return s.save()
@@ -130,6 +144,24 @@ func (s *TrustedDeviceStore) ListPublicKeys() map[string]string {
 func (s *TrustedDeviceStore) GetFingerprint(publicKey string) string {
 	hash := sha256.Sum256([]byte(publicKey))
 	return hex.EncodeToString(hash[:])
+}
+
+// evictOldest removes the device with the oldest AddedAt timestamp.
+// Must be called with s.mu held.
+func (s *TrustedDeviceStore) evictOldest() {
+	var oldestKey string
+	var oldestTime int64 = math.MaxInt64
+
+	for key, device := range s.devices {
+		if device.AddedAt < oldestTime {
+			oldestTime = device.AddedAt
+			oldestKey = key
+		}
+	}
+
+	if oldestKey != "" {
+		delete(s.devices, oldestKey)
+	}
 }
 
 func (s *TrustedDeviceStore) load() error {

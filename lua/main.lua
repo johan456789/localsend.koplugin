@@ -316,8 +316,11 @@ function LocalSend:_initRecoveryMode()
     -- Initialize only the update module (critical for recovery)
     initUpdateModule()
 
-    -- Clear Kindle telemetry files even in recovery mode
-    -- /tmp filling up affects device stability regardless of plugin state
+    -- Clear Kindle telemetry files even in recovery mode.
+    -- No ServerState guard here because:
+    -- 1. In recovery mode, ServerState is nil (the state module failed to load)
+    -- 2. This is an idempotent operation - safe to run on every widget recreation
+    -- 3. /tmp filling up affects device stability regardless of plugin state
     lsupdate.clearTmpTelemetryFiles()
 
     self.ui.menu:registerToMainMenu(self)

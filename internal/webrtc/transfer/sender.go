@@ -239,17 +239,27 @@ func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 
 	// Wait for file acceptance
 	select {
-	case tokens := <-s.accepted:
+	case tokens, ok := <-s.accepted:
+		if !ok {
+			_ = peer.Close()
+			return fmt.Errorf("sender closed")
+		}
 		s.fileTokens = tokens
 		for id := range tokens {
 			s.acceptedIDs = append(s.acceptedIDs, id)
 		}
 		slog.Info("Files accepted", "count", len(tokens))
-	case <-s.declined:
+	case _, ok := <-s.declined:
 		_ = peer.Close()
+		if !ok {
+			return fmt.Errorf("sender closed")
+		}
 		return fmt.Errorf("transfer declined by receiver")
-	case err := <-s.errors:
+	case err, ok := <-s.errors:
 		_ = peer.Close()
+		if !ok {
+			return fmt.Errorf("sender closed")
+		}
 		return err
 	case <-time.After(fileAcceptTimeout):
 		_ = peer.Close()

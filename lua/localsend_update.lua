@@ -169,8 +169,15 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
         })
         return
     end
-    local http_code = handle:read("*a")
+    local ok, http_code = pcall(handle.read, handle, "*a")
     handle:close()
+    if not ok then
+        deps.UIManager:show(deps.InfoMessage:new{
+            icon = "notice-warning",
+            text = deps._("Download failed: read error."),
+        })
+        return
+    end
 
     if http_code ~= "200" then
         deps.UIManager:show(deps.InfoMessage:new{
@@ -212,13 +219,18 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     local new_lua_files = {}
     local track_handle = io.popen("ls " .. deps.util.shell_escape({extracted_plugin}) .. "/*.lua 2>/dev/null")
     if track_handle then
-        for lua_file in track_handle:lines() do
-            local _, filename = deps.util.splitFilePathName(lua_file)
-            if filename then
-                new_lua_files[filename] = true
+        local ok, err = pcall(function()
+            for lua_file in track_handle:lines() do
+                local _, filename = deps.util.splitFilePathName(lua_file)
+                if filename then
+                    new_lua_files[filename] = true
+                end
             end
-        end
+        end)
         track_handle:close()
+        if not ok then
+            deps.logger.warn("[LocalSend] Error reading update package lua files:", err)
+        end
     end
 
     -- Copy files to plugin directory

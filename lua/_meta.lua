@@ -2,6 +2,6 @@ local _ = require("gettext")
 return {
     name = "localsend",
     fullname = _("LocalSend"),
-    description = _([[Receive files from other devices using LocalSend protocol.]]),
-    version = "v1.2.3"
+    description = _([[Send and receive files using LocalSend protocol.]]),
+    version = "v1.3.0"
 }

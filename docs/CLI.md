@@ -28,6 +28,22 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -ldflags="-s -w" -o localse
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o localsend
 ```
 
+## Scanning for Devices
+
+```bash
+# Scan for LocalSend devices on the network
+./localsend scan
+
+# Scan with JSON output (for scripting)
+./localsend scan --json
+
+# Scan only LAN devices
+./localsend scan --lan
+
+# Scan with custom timeout
+./localsend scan -t 10
+```
+
 ## Receiving Files
 
 ```bash
@@ -44,7 +60,28 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o localsend
 ./localsend recv -d ~/Downloads --ext-routing routing.json
 ```
 
+## Sending Files
+
+```bash
+# Send to a LAN device by IP
+./localsend send --ip 192.168.1.50 myfile.epub
+
+# Send via WebRTC (use ID from scan --json)
+./localsend send -w --target <peer-uuid> myfile.epub
+
+# Send with PIN
+./localsend send --ip 192.168.1.50 -p 1234 myfile.epub
+
+# Send a directory (preserves structure)
+./localsend send --ip 192.168.1.50 ./my-folder/
+
+# Send with custom device name
+./localsend send --ip 192.168.1.50 -n "My Computer" myfile.epub
+```
+
 ## CLI Flags
+
+### recv command
 
 | Flag | Description |
 | ---- | ----------- |
@@ -56,6 +93,68 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o localsend
 | `--https` | Enable HTTPS (default: true) |
 | `-w, --webrtc` | Enable WebRTC/v3 protocol (default: true) |
 | `-l, --log` | Path to transfer log file (JSON lines format) |
+| `--on-transfer` | Shell command to run after each transfer |
+| `--config-dir` | Config directory for trusted devices |
+| `--require-pairing` | Require PAIR before accepting WebRTC transfers |
+| `--stun-servers` | Custom STUN servers for WebRTC |
+| `--signaling-id-file` | Write WebRTC signaling ID to file |
+
+### send command
+
+| Flag | Description |
+| ---- | ----------- |
+| `--ip` | Target device IP address |
+| `-f, --file` | File or directory to send |
+| `-p, --pin` | PIN code for authentication |
+| `-n, --devname` | Device name shown to receiver |
+| `--https` | Use HTTPS (default: true) |
+| `-w, --webrtc` | Send via WebRTC signaling server |
+| `-t, --target` | Target peer ID (required for WebRTC) |
+| `--preserve-structure` | Keep subdirectory structure (default: true) |
+| `--config-dir` | Config directory for trusted devices |
+| `--stun-servers` | Custom STUN servers for WebRTC |
+| `--dapi` | Use Download API (reverse transfer) |
+
+### scan command
+
+| Flag | Description |
+| ---- | ----------- |
+| `-t, --timeout` | Scan duration in seconds (default: 4) |
+| `-n, --lan` | Enable LAN discovery (mDNS/UDP) |
+| `-l, --legacy` | Enable legacy HTTP subnet scan |
+| `-w, --webrtc` | Enable WebRTC signaling discovery |
+| `-j, --json` | Output results as JSON |
+| `-e, --exclude-id-file` | File with signaling ID to exclude |
+| `--devname` | Device name shown to other peers |
+
+## Trusted Devices (PAIR)
+
+LocalSend supports device pairing to skip PIN verification for trusted devices.
+
+```bash
+# Enable trusted devices with config directory
+./localsend recv -d ~/Downloads --config-dir ~/.config/localsend
+
+# Require pairing for all WebRTC transfers
+./localsend recv -d ~/Downloads --config-dir ~/.config/localsend --require-pairing
+```
+
+When `--config-dir` is set:
+- Paired devices are stored in `trusted_devices.json`
+- Maximum 100 devices (oldest evicted when full)
+- Trusted devices skip PIN verification automatically
+
+## Custom STUN Servers
+
+For corporate networks or privacy-conscious users:
+
+```bash
+./localsend recv -d ~/Downloads --stun-servers stun:stun.example.com:3478
+
+./localsend send -w --target <id> --stun-servers stun:stun.example.com:3478 myfile.epub
+```
+
+Default: Google STUN servers (`stun:stun.l.google.com:19302`)
 
 ## Extension Routing
 

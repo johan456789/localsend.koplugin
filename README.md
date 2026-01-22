@@ -1,6 +1,6 @@
 ## LocalSend for KOReader
 
-A KOReader plugin that enables receiving files from other devices using the [LocalSend](https://localsend.org/) protocol. Send ebooks, documents, and other files directly to your e-reader from any device running LocalSend.
+A KOReader plugin that enables sending and receiving files between devices using the [LocalSend](https://localsend.org/) protocol. Transfer ebooks, documents, and other files directly to and from your e-reader.
 
 **[Download latest release](https://github.com/kaikozlov/localsend.koplugin/releases/latest)**
 
@@ -23,10 +23,17 @@ A KOReader plugin that enables receiving files from other devices using the [Loc
 
 ### Usage
 
+**Receiving files:**
 1. Go to **Menu → Network → LocalSend**
 2. Configure your save directory and device name
 3. Tap **Start server**
 4. On your phone/computer, open LocalSend and send files to your e-reader
+
+**Sending files:**
+1. Go to **Menu → Network → LocalSend**
+2. Tap **Send file...** or **Send current book**
+3. Select a target device from the discovered list
+4. Choose a file to send (if using "Send file...")
 
 ### Settings
 

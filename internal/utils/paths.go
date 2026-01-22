@@ -66,3 +66,38 @@ func SanitizeRelativePath(filename string) (string, error) {
 func ToProtocolPath(osPath string) string {
 	return filepath.ToSlash(osPath)
 }
+
+// SanitizePathWithFallback sanitizes a path and falls back to the base filename
+// if the path is unsafe. Returns an error only if the result is still invalid
+// (empty, ".", or "/").
+//
+// This consolidates the common pattern used in both HTTP and WebRTC receivers:
+//   - Try to sanitize the relative path
+//   - If unsafe, fall back to just the base filename
+//   - Reject completely invalid results
+func SanitizePathWithFallback(filename string) (string, error) {
+	sanitizedPath, err := SanitizeRelativePath(filename)
+	if err != nil {
+		// Fall back to base filename only if path is unsafe
+		sanitizedPath = filepath.Base(filename)
+	}
+
+	// Reject invalid results including ".." which could come from base of "../.."
+	if sanitizedPath == "." || sanitizedPath == "/" || sanitizedPath == "" || sanitizedPath == ".." {
+		return "", ErrEmptyPath
+	}
+
+	return sanitizedPath, nil
+}
+
+// IsFolderTransfer checks if any filename in the list contains a subdirectory structure.
+// Used to detect folder transfers which should bypass extension routing to keep
+// folder contents together.
+func IsFolderTransfer(filenames []string) bool {
+	for _, filename := range filenames {
+		if strings.Contains(filename, "/") {
+			return true
+		}
+	}
+	return false
+}

@@ -240,3 +240,136 @@ func TestSanitizeRelativePathSecurityVectors(t *testing.T) {
 		})
 	}
 }
+
+// TestSanitizePathWithFallback tests the fallback path sanitization.
+func TestSanitizePathWithFallback(t *testing.T) {
+	testCases := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		// Valid paths should work as-is
+		{
+			name:  "simple file",
+			input: "document.pdf",
+			want:  "document.pdf",
+		},
+		{
+			name:  "subdirectory",
+			input: "Photos/beach.jpg",
+			want:  "Photos/beach.jpg",
+		},
+
+		// Path traversal should fall back to base name
+		{
+			name:  "path traversal falls back",
+			input: "../../../etc/passwd",
+			want:  "passwd",
+		},
+		{
+			name:  "deep traversal falls back",
+			input: "foo/../../../bar/secret.txt",
+			want:  "secret.txt",
+		},
+
+		// Invalid paths that can't be recovered
+		{
+			name:    "empty string",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "just dots",
+			input:   "..",
+			wantErr: true,
+		},
+		{
+			name:    "dot slash dot",
+			input:   "../.",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := SanitizePathWithFallback(tc.input)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got nil (result: %q)", got)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			// Normalize slashes for comparison
+			want := tc.want
+			if runtime.GOOS == "windows" {
+				want = filepath.FromSlash(want)
+			}
+
+			if got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// TestIsFolderTransfer tests folder transfer detection.
+func TestIsFolderTransfer(t *testing.T) {
+	testCases := []struct {
+		name      string
+		filenames []string
+		want      bool
+	}{
+		{
+			name:      "empty list",
+			filenames: []string{},
+			want:      false,
+		},
+		{
+			name:      "single flat file",
+			filenames: []string{"document.pdf"},
+			want:      false,
+		},
+		{
+			name:      "multiple flat files",
+			filenames: []string{"a.txt", "b.txt", "c.pdf"},
+			want:      false,
+		},
+		{
+			name:      "single folder path",
+			filenames: []string{"Photos/beach.jpg"},
+			want:      true,
+		},
+		{
+			name:      "mixed flat and folder",
+			filenames: []string{"readme.txt", "Photos/beach.jpg"},
+			want:      true,
+		},
+		{
+			name:      "deep folder",
+			filenames: []string{"a/b/c/d.txt"},
+			want:      true,
+		},
+		{
+			name:      "multiple folders",
+			filenames: []string{"a/1.txt", "b/2.txt"},
+			want:      true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsFolderTransfer(tc.filenames)
+			if got != tc.want {
+				t.Errorf("IsFolderTransfer = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -43,7 +43,12 @@ func (fsp *ForwardSender) Init(target *models.DeviceInfo, https bool) error {
 	fsp.https = https
 
 	// Create local device identity for sender
-	localInfo := models.NewDeviceInfo(lsutils.GenAlias(), lsutils.GenFingerprint())
+	// Use custom alias if set, otherwise generate random alias
+	alias := fsp.alias
+	if alias == "" {
+		alias = lsutils.GenAlias()
+	}
+	localInfo := models.NewDeviceInfo(alias, lsutils.GenFingerprint())
 	fsp.local = &localInfo
 
 	fsp.reset()

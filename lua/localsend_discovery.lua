@@ -82,8 +82,10 @@ end
 
 -- Start device discovery scan in background
 -- @param callback function Called with devices array when scan completes
-function M.scanDevices(callback)
+-- @param options table Optional settings: { use_webrtc = bool, device_name = string }
+function M.scanDevices(callback, options)
     local ServerState = state.ServerState
+    options = options or {}
 
     -- Prevent concurrent scans
     if ServerState.scan_in_progress then
@@ -97,6 +99,18 @@ function M.scanDevices(callback)
 
     -- Build scan command
     local args = {binary_path, "scan", "--json", "-t", tostring(constants.SCAN_TIMEOUT_SECONDS)}
+
+    -- Add device name if provided (shows this name to other peers during scan)
+    if options.device_name and options.device_name ~= "" then
+        table.insert(args, "--devname")
+        table.insert(args, options.device_name)
+    end
+
+    -- If WebRTC is disabled, only scan LAN and legacy devices
+    if options.use_webrtc == false then
+        table.insert(args, "--lan")
+        table.insert(args, "--legacy")
+    end
 
     -- Add self-filtering if signaling ID file exists (receiver is running)
     if deps.util.pathExists(constants.SIGNALING_ID_FILE) then

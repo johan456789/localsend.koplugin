@@ -14,6 +14,7 @@ import (
 	sess "localsend-cli/internal/localsend/session"
 	lsutils "localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/models"
+	"localsend-cli/internal/utils"
 )
 
 // newTestReceiver creates a FileReceiver for testing with minimal dependencies.
@@ -29,6 +30,7 @@ func newTestReceiver() *FileReceiver {
 		webServer:           lsutils.NewWebServer(),
 		sessman:             sess.NewRecvSessManager(),
 		saveToDir:           "/tmp/test",
+		pinRateLimiter:      utils.NewRateLimiter(maxPINAttempts, pinBlockDuration),
 		receivedNonceCache:  localsend.NewNonceCache(200),
 		generatedNonceCache: localsend.NewNonceCache(200),
 	}

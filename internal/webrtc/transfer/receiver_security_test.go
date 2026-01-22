@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/utils"
 )
 
@@ -738,8 +739,8 @@ func TestRTCReceiver_handleFileList_RejectsTooManyFiles(t *testing.T) {
 		state:       stateWaitFileList,
 	}
 
-	// Create a file list with MaxFilesPerSession + 1 files
-	files := make([]RTCFileDto, MaxFilesPerSession+1)
+	// Create a file list with constants.MaxFilesPerSession + 1 files
+	files := make([]RTCFileDto, constants.MaxFilesPerSession+1)
 	for i := 0; i < len(files); i++ {
 		files[i] = RTCFileDto{
 			ID:       "file-" + string(rune(i)),
@@ -834,8 +835,8 @@ func TestRTCReceiver_handleFileList_AcceptsMaxFiles(t *testing.T) {
 // MaxFilesPerSession constant is correctly defined.
 func TestRTCReceiver_MaxFilesPerSession_BoundaryValue(t *testing.T) {
 	// The V2 HTTP path uses the same limit, ensure consistency
-	if MaxFilesPerSession != 10000 {
-		t.Errorf("MaxFilesPerSession = %d; want 10000", MaxFilesPerSession)
+	if constants.MaxFilesPerSession != 10000 {
+		t.Errorf("MaxFilesPerSession = %d; want 10000", constants.MaxFilesPerSession)
 	}
 }
 
@@ -1178,5 +1179,149 @@ func TestRTCReceiver_ChecksumVerification_EmptyChecksum_Skips(t *testing.T) {
 	shouldVerify := fileDto.SHA256 != ""
 	if shouldVerify {
 		t.Error("Should not verify when checksum is empty")
+	}
+}
+
+// =============================================================================
+// Persistent Rate Limiting Tests
+// These tests verify that PIN rate limiting persists across WebRTC connections,
+// preventing attackers from bypassing the 3-attempt limit by reconnecting.
+// =============================================================================
+
+// TestBlockPeer_BlocksForDuration verifies that blockPeer adds a peer to the
+// blocked list for the configured duration.
+func TestBlockPeer_BlocksForDuration(t *testing.T) {
+	// Clear any existing blocks
+	ClearBlockedPeers()
+	defer ClearBlockedPeers()
+
+	peerID := "test-peer-123"
+
+	// Peer should not be blocked initially
+	if isPeerBlocked(peerID) {
+		t.Error("Peer should not be blocked initially")
+	}
+
+	// Block the peer
+	blockPeer(peerID)
+
+	// Peer should now be blocked
+	if !isPeerBlocked(peerID) {
+		t.Error("Peer should be blocked after blockPeer()")
+	}
+}
+
+// TestIsPeerBlocked_ExpiredBlock_Unblocks verifies that expired blocks are
+// automatically cleaned up when checked.
+func TestIsPeerBlocked_ExpiredBlock_Unblocks(t *testing.T) {
+	// Clear any existing blocks
+	ClearBlockedPeers()
+	defer ClearBlockedPeers()
+
+	peerID := "test-peer-expired"
+
+	// Manually add an expired block
+	blockedPeersMu.Lock()
+	blockedPeers[peerID] = time.Now().Add(-1 * time.Minute) // Expired 1 minute ago
+	blockedPeersMu.Unlock()
+
+	// Checking should find it expired and unblock
+	if isPeerBlocked(peerID) {
+		t.Error("Expired block should not be considered blocked")
+	}
+
+	// Verify it was cleaned up from the map
+	blockedPeersMu.RLock()
+	_, exists := blockedPeers[peerID]
+	blockedPeersMu.RUnlock()
+
+	if exists {
+		t.Error("Expired block should have been removed from map")
+	}
+}
+
+// TestIsPeerBlocked_NonexistentPeer_NotBlocked verifies that peers not in the
+// blocked list return false.
+func TestIsPeerBlocked_NonexistentPeer_NotBlocked(t *testing.T) {
+	// Clear any existing blocks
+	ClearBlockedPeers()
+	defer ClearBlockedPeers()
+
+	peerID := "never-blocked-peer"
+
+	if isPeerBlocked(peerID) {
+		t.Error("Non-existent peer should not be blocked")
+	}
+}
+
+// TestClearBlockedPeers_ClearsAll verifies that ClearBlockedPeers removes all
+// blocked peers from the map.
+func TestClearBlockedPeers_ClearsAll(t *testing.T) {
+	// Add some blocked peers
+	blockedPeersMu.Lock()
+	blockedPeers["peer1"] = time.Now().Add(time.Hour)
+	blockedPeers["peer2"] = time.Now().Add(time.Hour)
+	blockedPeers["peer3"] = time.Now().Add(time.Hour)
+	blockedPeersMu.Unlock()
+
+	// Verify they're blocked
+	if !isPeerBlocked("peer1") || !isPeerBlocked("peer2") || !isPeerBlocked("peer3") {
+		t.Error("Peers should be blocked before clear")
+	}
+
+	// Clear all
+	ClearBlockedPeers()
+
+	// Verify none are blocked
+	if isPeerBlocked("peer1") || isPeerBlocked("peer2") || isPeerBlocked("peer3") {
+		t.Error("No peers should be blocked after ClearBlockedPeers()")
+	}
+}
+
+// TestPinBlockDuration_Is30Seconds verifies the block duration constant.
+func TestPinBlockDuration_Is30Seconds(t *testing.T) {
+	expected := 30 * time.Second
+	if pinBlockDuration != expected {
+		t.Errorf("pinBlockDuration = %v; want %v", pinBlockDuration, expected)
+	}
+}
+
+// TestBlockPeer_ConcurrentSafety verifies that concurrent blockPeer and
+// isPeerBlocked calls don't cause race conditions.
+func TestBlockPeer_ConcurrentSafety(t *testing.T) {
+	ClearBlockedPeers()
+	defer ClearBlockedPeers()
+
+	var wg sync.WaitGroup
+	numGoroutines := 100
+
+	// Concurrent blocks
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			peerID := fmt.Sprintf("peer-%d", id)
+			blockPeer(peerID)
+		}(i)
+	}
+
+	// Concurrent checks
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			peerID := fmt.Sprintf("peer-%d", id)
+			_ = isPeerBlocked(peerID)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// All should be blocked now
+	for i := 0; i < numGoroutines; i++ {
+		peerID := fmt.Sprintf("peer-%d", i)
+		if !isPeerBlocked(peerID) {
+			t.Errorf("Peer %s should be blocked", peerID)
+		}
 	}
 }

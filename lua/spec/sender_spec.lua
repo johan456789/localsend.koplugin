@@ -306,9 +306,19 @@ describe("localsend_sender", function()
             assert.equals("rejected", category)
         end)
 
-        it("categorizeError identifies connection errors", function()
+        it("categorizeError identifies connection refused (device not running)", function()
             local category = sender.categorizeError("error: connection refused")
+            assert.equals("connection_refused", category)
+        end)
+
+        it("categorizeError identifies generic connection errors", function()
+            local category = sender.categorizeError("error: connection reset by peer")
             assert.equals("connection", category)
+        end)
+
+        it("categorizeError identifies rate limiting", function()
+            local category = sender.categorizeError("error: too many attempts")
+            assert.equals("rate_limited", category)
         end)
 
         it("categorizeError identifies timeout errors", function()

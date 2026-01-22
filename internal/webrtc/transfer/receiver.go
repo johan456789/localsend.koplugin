@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"localsend-cli/internal/crypto"
+	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/storage"
 	"localsend-cli/internal/utils"
 	"localsend-cli/internal/webrtc/signaling"
@@ -34,9 +35,16 @@ const (
 
 // Configuration constants
 const (
-	maxPINAttempts     = 3     // Maximum incorrect PIN attempts before closing connection
-	tokenPreviewLength = 30    // Max characters to show in token preview logs
-	MaxFilesPerSession = 10000 // Maximum files per session to prevent DoS attacks
+	maxPINAttempts     = constants.MaxPINAttempts   // Maximum incorrect PIN attempts before closing connection
+	tokenPreviewLength = 30                         // Max characters to show in token preview logs
+	pinBlockDuration   = constants.PINBlockDuration // How long a peer is blocked after max PIN attempts
+)
+
+// Package-level blocked peers map (persists across receiver instances)
+// This ensures attackers can't bypass rate limiting by reconnecting.
+var (
+	blockedPeers   = make(map[string]time.Time) // signaling ID -> blocked until
+	blockedPeersMu sync.RWMutex
 )
 
 // RTCReceiver handles receiving files over WebRTC.
@@ -86,12 +94,51 @@ type RTCReceiver struct {
 	trustedStore *storage.TrustedDeviceStore
 
 	// Sender info (set before AcceptOffer)
-	senderAlias     string // Alias from signaling offer
-	senderPublicPEM string // Sender's public key PEM from PAIR flow (for persistence)
-	senderToken     string // Sender's token from token exchange (for PAIR verification)
+	senderAlias       string // Alias from signaling offer
+	senderPublicPEM   string // Sender's public key PEM from PAIR flow (for persistence)
+	senderToken       string // Sender's token from token exchange (for PAIR verification)
+	senderSignalingID string // Signaling ID for rate limiting across connections
 
 	// Custom STUN servers (if empty, uses DefaultSTUNServers)
 	stunServers []string
+}
+
+// isPeerBlocked checks if a peer is currently blocked due to too many PIN attempts.
+// Thread-safe: uses package-level mutex.
+func isPeerBlocked(peerID string) bool {
+	blockedPeersMu.RLock()
+	blockedUntil, exists := blockedPeers[peerID]
+	blockedPeersMu.RUnlock()
+
+	if !exists {
+		return false
+	}
+
+	if time.Now().After(blockedUntil) {
+		// Block expired, clean it up
+		blockedPeersMu.Lock()
+		delete(blockedPeers, peerID)
+		blockedPeersMu.Unlock()
+		return false
+	}
+
+	return true
+}
+
+// blockPeer blocks a peer for pinBlockDuration.
+// Thread-safe: uses package-level mutex.
+func blockPeer(peerID string) {
+	blockedPeersMu.Lock()
+	blockedPeers[peerID] = time.Now().Add(pinBlockDuration)
+	blockedPeersMu.Unlock()
+	slog.Info("Peer blocked due to PIN attempts", "id", peerID, "duration", pinBlockDuration)
+}
+
+// ClearBlockedPeers clears all blocked peers (for testing).
+func ClearBlockedPeers() {
+	blockedPeersMu.Lock()
+	blockedPeers = make(map[string]time.Time)
+	blockedPeersMu.Unlock()
 }
 
 // NewRTCReceiver creates a new WebRTC receiver.
@@ -234,16 +281,9 @@ func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]st
 
 		// Sanitize filename to allow subdirectories but prevent path traversal attacks.
 		// A malicious sender could send "../../../etc/passwd" to write outside saveDir.
-		sanitizedPath, sanitizeErr := utils.SanitizeRelativePath(targetFile.FileName)
+		sanitizedPath, sanitizeErr := utils.SanitizePathWithFallback(targetFile.FileName)
 		if sanitizeErr != nil {
-			// Fall back to base filename only if path is unsafe
-			slog.Warn("Unsafe path in filename, falling back to base",
-				"filename", targetFile.FileName, "error", sanitizeErr)
-			sanitizedPath = filepath.Base(targetFile.FileName)
-		}
-
-		if sanitizedPath == "." || sanitizedPath == "/" || sanitizedPath == "" {
-			slog.Warn("Invalid filename rejected", "filename", targetFile.FileName, "id", id)
+			slog.Warn("Invalid filename rejected", "filename", targetFile.FileName, "id", id, "error", sanitizeErr)
 			continue
 		}
 
@@ -335,18 +375,24 @@ func (r *RTCReceiver) getSaveDir(filename string) string {
 
 // isFolderTransfer checks if any file in the current transfer has subdirectory structure.
 func (r *RTCReceiver) isFolderTransfer() bool {
-	for _, f := range r.files {
-		if strings.Contains(f.FileName, "/") {
-			return true
-		}
+	filenames := make([]string, len(r.files))
+	for i, f := range r.files {
+		filenames[i] = f.FileName
 	}
-	return false
+	return utils.IsFolderTransfer(filenames)
 }
 
 // AcceptOffer accepts an incoming WebRTC offer.
 func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 	if offer.Peer == nil {
 		return fmt.Errorf("offer missing peer info")
+	}
+
+	// Check if this peer is blocked due to too many PIN attempts
+	peerID := offer.Peer.ID.String()
+	if isPeerBlocked(peerID) {
+		slog.Warn("Rejecting offer from blocked peer", "peer", offer.Peer.Alias, "id", peerID)
+		return fmt.Errorf("too many failed PIN attempts, please try again later")
 	}
 
 	// Clean up any previous connection
@@ -371,6 +417,7 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 	r.localNonce = nil
 	r.finalNonce = nil
 	r.pinAttempts = 0
+	r.senderSignalingID = peerID // Store for rate limiting
 	r.mu.Unlock()
 
 	if hadPreviousPeer {
@@ -640,10 +687,21 @@ func (r *RTCReceiver) handlePin(msg interface{}, msgType string) {
 	slog.Warn("Incorrect PIN", "attempt", r.pinAttempts)
 
 	if r.pinAttempts >= maxPINAttempts {
-		slog.Error("Too many PIN attempts, closing connection")
+		slog.Error("Too many PIN attempts, blocking peer and closing connection")
+		// Block this peer from reconnecting for a duration
+		if r.senderSignalingID != "" {
+			blockPeer(r.senderSignalingID)
+		}
 		response := RTCPinReceivingResponse{Status: "TOO_MANY_ATTEMPTS"}
 		_ = r.peer.SendJSON(response)
-		_ = r.Close()
+		// Close peer connection asynchronously to avoid deadlock
+		// (we're holding r.mu via handleMessage's defer)
+		if r.peer != nil {
+			go func(peer *PeerConnection) {
+				_ = peer.Close()
+			}(r.peer)
+			r.peer = nil
+		}
 		return
 	}
 
@@ -667,8 +725,8 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 	}
 
 	// Validate file count to prevent DoS via excessive file metadata
-	if len(fileListMsg.Files) > MaxFilesPerSession {
-		slog.Error("Too many files in transfer", "count", len(fileListMsg.Files), "max", MaxFilesPerSession)
+	if len(fileListMsg.Files) > constants.MaxFilesPerSession {
+		slog.Error("Too many files in transfer", "count", len(fileListMsg.Files), "max", constants.MaxFilesPerSession)
 		response := RTCFileListResponse{Status: "DECLINED"}
 		_ = r.peer.SendJSONBinary(response)
 		_ = r.peer.SendDelimiter()

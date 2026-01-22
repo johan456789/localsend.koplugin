@@ -24,10 +24,6 @@ import (
 // Sessions that don't receive any file uploads within this time will be cleaned up.
 const SessionTimeout = 1 * time.Minute
 
-// MaxFilesPerSession is the maximum number of files that can be accepted in a single session.
-// This prevents DoS attacks via excessive file metadata entries.
-const MaxFilesPerSession = 10000
-
 // activityReader wraps an io.Reader and updates a timestamp pointer periodically.
 // This keeps the session alive during long file transfers without excessive writes.
 type activityReader struct {
@@ -100,7 +96,7 @@ func (sess *RecvSession) AcceptFile(fileId string, fileMeta models.FileMeta) err
 	}
 
 	// Prevent DoS via excessive file count
-	if len(sess.fileMetas) >= MaxFilesPerSession {
+	if len(sess.fileMetas) >= lserrors.MaxFilesPerSession {
 		return lserrors.ErrTooManyFiles
 	}
 
@@ -186,15 +182,8 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 
 	// Sanitize filename to allow subdirectories but prevent directory traversal attacks.
 	// A malicious client could send "../../../etc/passwd" to write outside saveToDir.
-	sanitizedPath, sanitizeErr := utils.SanitizeRelativePath(expectedMeta.Filename)
+	sanitizedPath, sanitizeErr := utils.SanitizePathWithFallback(expectedMeta.Filename)
 	if sanitizeErr != nil {
-		// Fall back to base filename only if path is unsafe
-		slog.Warn("Unsafe path in filename, falling back to base",
-			"filename", expectedMeta.Filename, "error", sanitizeErr)
-		sanitizedPath = filepath.Base(expectedMeta.Filename)
-	}
-
-	if sanitizedPath == "." || sanitizedPath == "/" || sanitizedPath == "" {
 		return "", lserrors.ErrInvalidBody
 	}
 

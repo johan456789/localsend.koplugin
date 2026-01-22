@@ -3,175 +3,179 @@ package recv
 import (
 	"testing"
 	"time"
+
+	"localsend-cli/internal/utils"
 )
 
 // TestFileReceiver_cleanupExpiredPINAttempts_RemovesExpiredBlocks verifies that
 // blocked IPs with expired blocks are removed during cleanup.
 func TestFileReceiver_cleanupExpiredPINAttempts_RemovesExpiredBlocks(t *testing.T) {
-	fr := NewFileReceiver("test", t.TempDir(), false)
+	// Use a very short block duration for testing
+	rl := utils.NewRateLimiter(maxPINAttempts, 1*time.Millisecond)
 
-	// Create a blocked IP with an old blockedAt time
-	fr.pinAttempts = make(map[string]*pinAttemptInfo)
-	fr.pinAttempts["192.168.1.1"] = &pinAttemptInfo{
-		count:       maxPINAttempts,
-		blockedAt:   time.Now().Add(-pinBlockDuration - time.Minute),
-		lastAttempt: time.Now().Add(-pinBlockDuration - time.Minute),
+	// Record max attempts to trigger block
+	for i := 0; i < maxPINAttempts; i++ {
+		rl.RecordAttempt("192.168.1.1")
 	}
 
+	// Verify it's blocked
+	if !rl.IsBlocked("192.168.1.1") {
+		t.Fatal("IP should be blocked after max attempts")
+	}
+
+	// Wait for block to expire
+	time.Sleep(5 * time.Millisecond)
+
 	// Run cleanup
-	fr.cleanupExpiredPINAttempts()
+	cleaned := rl.CleanupExpired()
 
 	// Verify the entry was removed
-	fr.configMu.Lock()
-	_, exists := fr.pinAttempts["192.168.1.1"]
-	fr.configMu.Unlock()
-
-	if exists {
+	if rl.IsBlocked("192.168.1.1") {
 		t.Error("Expired blocked IP should have been removed")
+	}
+	if cleaned != 1 {
+		t.Errorf("Expected 1 entry cleaned, got %d", cleaned)
 	}
 }
 
 // TestFileReceiver_cleanupExpiredPINAttempts_RemovesStalePartialAttempts verifies that
 // partial attempts (not yet blocked) with old lastAttempt are removed.
 func TestFileReceiver_cleanupExpiredPINAttempts_RemovesStalePartialAttempts(t *testing.T) {
-	fr := NewFileReceiver("test", t.TempDir(), false)
+	// Use a very short block duration for testing
+	rl := utils.NewRateLimiter(maxPINAttempts, 1*time.Millisecond)
 
-	// Create a partial attempt (not blocked) with old lastAttempt
-	fr.pinAttempts = make(map[string]*pinAttemptInfo)
-	fr.pinAttempts["192.168.1.1"] = &pinAttemptInfo{
-		count:       1, // Less than maxPINAttempts
-		lastAttempt: time.Now().Add(-pinBlockDuration - time.Minute),
-	}
+	// Record a partial attempt (not blocked)
+	rl.RecordAttempt("192.168.1.1")
+
+	// Wait for entry to become stale
+	time.Sleep(5 * time.Millisecond)
 
 	// Run cleanup
-	fr.cleanupExpiredPINAttempts()
+	cleaned := rl.CleanupExpired()
 
 	// Verify the entry was removed
-	fr.configMu.Lock()
-	_, exists := fr.pinAttempts["192.168.1.1"]
-	fr.configMu.Unlock()
-
-	if exists {
+	if rl.GetAttempts("192.168.1.1") != 0 {
 		t.Error("Stale partial attempt should have been removed")
+	}
+	if cleaned != 1 {
+		t.Errorf("Expected 1 entry cleaned, got %d", cleaned)
 	}
 }
 
 // TestFileReceiver_cleanupExpiredPINAttempts_KeepsActiveEntries verifies that
 // recent entries are NOT removed during cleanup.
 func TestFileReceiver_cleanupExpiredPINAttempts_KeepsActiveEntries(t *testing.T) {
-	fr := NewFileReceiver("test", t.TempDir(), false)
-
-	fr.pinAttempts = make(map[string]*pinAttemptInfo)
+	// Use a longer block duration so entries don't expire
+	rl := utils.NewRateLimiter(maxPINAttempts, 1*time.Hour)
 
 	// Recent blocked IP (should be kept)
-	fr.pinAttempts["192.168.1.1"] = &pinAttemptInfo{
-		count:       maxPINAttempts,
-		blockedAt:   time.Now(),
-		lastAttempt: time.Now(),
+	for i := 0; i < maxPINAttempts; i++ {
+		rl.RecordAttempt("192.168.1.1")
 	}
 
 	// Recent partial attempt (should be kept)
-	fr.pinAttempts["192.168.1.2"] = &pinAttemptInfo{
-		count:       1,
-		lastAttempt: time.Now(),
-	}
+	rl.RecordAttempt("192.168.1.2")
 
 	// Run cleanup
-	fr.cleanupExpiredPINAttempts()
+	cleaned := rl.CleanupExpired()
 
 	// Verify both entries are still present
-	fr.configMu.Lock()
-	_, exists1 := fr.pinAttempts["192.168.1.1"]
-	_, exists2 := fr.pinAttempts["192.168.1.2"]
-	fr.configMu.Unlock()
-
-	if !exists1 {
+	if cleaned != 0 {
+		t.Errorf("Expected 0 entries cleaned, got %d", cleaned)
+	}
+	if !rl.IsBlocked("192.168.1.1") {
 		t.Error("Recent blocked IP should NOT have been removed")
 	}
-	if !exists2 {
+	if rl.GetAttempts("192.168.1.2") != 1 {
 		t.Error("Recent partial attempt should NOT have been removed")
 	}
 }
 
-// TestFileReceiver_cleanupExpiredPINAttempts_NilMapNoOp verifies that
-// cleanup handles nil pinAttempts map gracefully (no panic).
-func TestFileReceiver_cleanupExpiredPINAttempts_NilMapNoOp(t *testing.T) {
-	fr := NewFileReceiver("test", t.TempDir(), false)
-
-	// Ensure pinAttempts is nil
-	fr.pinAttempts = nil
+// TestFileReceiver_cleanupExpiredPINAttempts_EmptyNoOp verifies that
+// cleanup handles empty rate limiter gracefully (no panic).
+func TestFileReceiver_cleanupExpiredPINAttempts_EmptyNoOp(t *testing.T) {
+	rl := utils.NewRateLimiter(maxPINAttempts, pinBlockDuration)
 
 	// This should not panic
-	fr.cleanupExpiredPINAttempts()
+	cleaned := rl.CleanupExpired()
 
-	// Verify map is still nil (not allocated)
-	fr.configMu.Lock()
-	isNil := fr.pinAttempts == nil
-	fr.configMu.Unlock()
-
-	if !isNil {
-		t.Error("pinAttempts should remain nil")
+	// Verify nothing was cleaned
+	if cleaned != 0 {
+		t.Errorf("Expected 0 entries cleaned from empty limiter, got %d", cleaned)
 	}
 }
 
 // TestFileReceiver_cleanupExpiredPINAttempts_MixedEntries verifies cleanup
 // correctly handles a mix of expired and active entries.
 func TestFileReceiver_cleanupExpiredPINAttempts_MixedEntries(t *testing.T) {
-	fr := NewFileReceiver("test", t.TempDir(), false)
+	// Use a short block duration for expired entries
+	rl := utils.NewRateLimiter(maxPINAttempts, 1*time.Millisecond)
 
-	fr.pinAttempts = make(map[string]*pinAttemptInfo)
+	// Add entry that will expire
+	rl.RecordAttempt("expired-partial")
 
-	// Expired blocked (should be removed)
-	fr.pinAttempts["expired-blocked"] = &pinAttemptInfo{
-		count:       maxPINAttempts,
-		blockedAt:   time.Now().Add(-pinBlockDuration - time.Minute),
-		lastAttempt: time.Now().Add(-pinBlockDuration - time.Minute),
+	// Wait for it to become stale
+	time.Sleep(5 * time.Millisecond)
+
+	// Add recent entries (after the stale entry)
+	for i := 0; i < maxPINAttempts; i++ {
+		rl.RecordAttempt("recent-blocked")
 	}
-
-	// Expired partial (should be removed)
-	fr.pinAttempts["expired-partial"] = &pinAttemptInfo{
-		count:       1,
-		lastAttempt: time.Now().Add(-pinBlockDuration - time.Minute),
-	}
-
-	// Recent blocked (should be kept)
-	fr.pinAttempts["recent-blocked"] = &pinAttemptInfo{
-		count:       maxPINAttempts,
-		blockedAt:   time.Now(),
-		lastAttempt: time.Now(),
-	}
-
-	// Recent partial (should be kept)
-	fr.pinAttempts["recent-partial"] = &pinAttemptInfo{
-		count:       2,
-		lastAttempt: time.Now(),
-	}
+	rl.RecordAttempt("recent-partial")
 
 	// Run cleanup
-	fr.cleanupExpiredPINAttempts()
+	cleaned := rl.CleanupExpired()
 
 	// Verify results
-	fr.configMu.Lock()
-	_, expiredBlockedExists := fr.pinAttempts["expired-blocked"]
-	_, expiredPartialExists := fr.pinAttempts["expired-partial"]
-	_, recentBlockedExists := fr.pinAttempts["recent-blocked"]
-	_, recentPartialExists := fr.pinAttempts["recent-partial"]
-	total := len(fr.pinAttempts)
-	fr.configMu.Unlock()
-
-	if expiredBlockedExists {
-		t.Error("Expired blocked entry should have been removed")
+	if cleaned != 1 {
+		t.Errorf("Expected 1 entry cleaned, got %d", cleaned)
 	}
-	if expiredPartialExists {
+	if rl.GetAttempts("expired-partial") != 0 {
 		t.Error("Expired partial entry should have been removed")
 	}
-	if !recentBlockedExists {
+	if rl.GetAttempts("recent-blocked") == 0 {
 		t.Error("Recent blocked entry should have been kept")
 	}
-	if !recentPartialExists {
+	if rl.GetAttempts("recent-partial") != 1 {
 		t.Error("Recent partial entry should have been kept")
 	}
-	if total != 2 {
-		t.Errorf("Expected 2 remaining entries, got %d", total)
+	if rl.Count() != 2 {
+		t.Errorf("Expected 2 remaining entries, got %d", rl.Count())
+	}
+}
+
+// TestRateLimiter_Integration tests the full rate limiter through FileReceiver methods.
+func TestRateLimiter_Integration(t *testing.T) {
+	fr := NewFileReceiver("test", t.TempDir(), false)
+
+	// Initially not blocked
+	if fr.isPINBlocked("192.168.1.1") {
+		t.Error("IP should not be blocked initially")
+	}
+
+	// Record attempts up to but not including max
+	for i := 0; i < maxPINAttempts-1; i++ {
+		fr.recordPINAttempt("192.168.1.1")
+	}
+
+	// Still not blocked
+	if fr.isPINBlocked("192.168.1.1") {
+		t.Error("IP should not be blocked before max attempts")
+	}
+
+	// One more to trigger block
+	fr.recordPINAttempt("192.168.1.1")
+
+	// Now blocked
+	if !fr.isPINBlocked("192.168.1.1") {
+		t.Error("IP should be blocked after max attempts")
+	}
+
+	// Clear attempts
+	fr.clearPINAttempts("192.168.1.1")
+
+	// No longer blocked
+	if fr.isPINBlocked("192.168.1.1") {
+		t.Error("IP should not be blocked after clear")
 	}
 }

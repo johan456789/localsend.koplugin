@@ -33,6 +33,7 @@ var (
 	preserveStructure bool
 	configDir         string
 	stunServers       []string
+	devName           string
 )
 
 var Cmd = &cobra.Command{
@@ -66,11 +67,19 @@ var Cmd = &cobra.Command{
 				return err
 			}
 		} else {
-			devinfo = models.NewDeviceInfo(lsutils.GenAlias(), lsutils.GenFingerprint())
+			// For download API, use custom device name or generate one
+			alias := devName
+			if alias == "" {
+				alias = lsutils.GenAlias()
+			}
+			devinfo = models.NewDeviceInfo(alias, lsutils.GenFingerprint())
 		}
 
 		sender := localsend.NewFileSender(useDownloadAPI)
 		sender.SetPIN(pin)
+		if devName != "" {
+			sender.SetAlias(devName)
+		}
 		if err := sender.Init(&devinfo, supportHttps); err != nil {
 			slog.Error("Failed to initialize sender", "error", err)
 			return fmt.Errorf("sender initialization failed: %w", err)
@@ -148,7 +157,12 @@ func sendViaWebRTC() error {
 	}
 
 	// Connect to signaling server
-	info := signaling.NewClientInfo(lsutils.GenAlias(), token)
+	// Use custom device name or generate one
+	alias := devName
+	if alias == "" {
+		alias = lsutils.GenAlias()
+	}
+	info := signaling.NewClientInfo(alias, token)
 
 	slog.Info("Connecting to WebRTC signaling server")
 	client, err := signaling.Connect(signaling.DefaultSignalingServer, info)
@@ -304,4 +318,5 @@ func init() {
 	Cmd.PersistentFlags().BoolVar(&preserveStructure, "preserve-structure", true, "Preserve subdirectory structure when sending directories")
 	Cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "Config directory for trusted devices persistence")
 	Cmd.PersistentFlags().StringSliceVar(&stunServers, "stun-servers", nil, "Custom STUN servers for WebRTC (e.g., stun:stun.example.com:3478). Defaults to Google STUN servers if not set.")
+	Cmd.PersistentFlags().StringVarP(&devName, "devname", "n", "", "Device name to display to receiver")
 }

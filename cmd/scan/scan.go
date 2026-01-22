@@ -25,6 +25,7 @@ var (
 	lan           bool
 	jsonOutput    bool
 	excludeIDFile string
+	devName       string
 )
 
 // LANDevice represents a device discovered via LAN (multicast/HTTP)
@@ -58,8 +59,14 @@ var Cmd = &cobra.Command{
 			slog.Info("Start Scanning")
 		}
 
+		// Use custom device name or generate one
+		alias := devName
+		if alias == "" {
+			alias = utils.GenAlias()
+		}
+
 		scanner, err := localsend.NewDiscoverer(
-			models.NewDeviceInfo(utils.GenAlias(), utils.GenFingerprint()),
+			models.NewDeviceInfo(alias, utils.GenFingerprint()),
 			false)
 		if err != nil {
 			slog.Error("Fail to create advertiser", "error", err)
@@ -105,7 +112,7 @@ var Cmd = &cobra.Command{
 			if !jsonOutput {
 				slog.Info("Connecting to WebRTC signaling server")
 			}
-			signalingPeers = discoverViaSignaling(ctx, jsonOutput)
+			signalingPeers = discoverViaSignaling(ctx, jsonOutput, alias)
 		}
 
 		<-ctx.Done()
@@ -190,7 +197,7 @@ var Cmd = &cobra.Command{
 	},
 }
 
-func discoverViaSignaling(ctx context.Context, silent bool) []signaling.ClientInfo {
+func discoverViaSignaling(ctx context.Context, silent bool, alias string) []signaling.ClientInfo {
 	// Generate signing key and token
 	_, token, err := crypto.GenerateKeyPairWithToken()
 	if err != nil {
@@ -201,7 +208,7 @@ func discoverViaSignaling(ctx context.Context, silent bool) []signaling.ClientIn
 	}
 
 	// Connect to signaling server
-	info := signaling.NewClientInfo(utils.GenAlias(), token)
+	info := signaling.NewClientInfo(alias, token)
 
 	client, err := signaling.ConnectWithContext(ctx, signaling.DefaultSignalingServer, info)
 	if err != nil {
@@ -233,4 +240,5 @@ func init() {
 	Cmd.PersistentFlags().BoolVarP(&lan, "lan", "n", false, "perform LAN discovery (mDNS/UDP)")
 	Cmd.PersistentFlags().BoolVarP(&jsonOutput, "json", "j", false, "output results as JSON")
 	Cmd.PersistentFlags().StringVarP(&excludeIDFile, "exclude-id-file", "e", "", "file containing signaling ID to exclude (for self-filtering)")
+	Cmd.PersistentFlags().StringVar(&devName, "devname", "", "device name to display to other peers")
 }

@@ -60,8 +60,10 @@ end
 -- @param filepath string Path to file to send
 -- @param pin string Optional PIN code
 -- @param callback function Called with success boolean and message string
-function M.sendFile(device, filepath, pin, callback)
+-- @param options table Optional settings: { device_name = string }
+function M.sendFile(device, filepath, pin, callback, options)
     local ServerState = state.ServerState
+    options = options or {}
 
     -- Prevent concurrent sends
     if ServerState.send_in_progress then
@@ -80,6 +82,12 @@ function M.sendFile(device, filepath, pin, callback)
 
     -- Build send command based on device type
     local args = {binary_path, "send"}
+
+    -- Add device name if provided
+    if options.device_name and options.device_name ~= "" then
+        table.insert(args, "-n")
+        table.insert(args, options.device_name)
+    end
 
     if device.type == "lan" then
         -- V2 HTTP send
@@ -178,14 +186,19 @@ function M.sendFile(device, filepath, pin, callback)
                 timeout = 3,
             })
         else
-            -- Extract error message from output or provide generic
-            if output:match("rejected") or output:match("declined") then
+            -- Use categorizeError for consistent error handling
+            local error_category = M.categorizeError(output)
+            if error_category == "rejected" then
                 message = deps._("Transfer was rejected by the recipient")
-            elseif output:match("PIN") or output:match("pin") then
+            elseif error_category == "wrong_pin" or error_category == "pin_required" then
                 message = deps._("Incorrect PIN")
-            elseif output:match("connection") or output:match("Connection") then
+            elseif error_category == "connection_refused" then
+                message = deps._("Device is not running LocalSend")
+            elseif error_category == "rate_limited" then
+                message = deps._("Too many failed attempts - try again later")
+            elseif error_category == "connection" then
                 message = deps._("Connection failed")
-            elseif output:match("timeout") or output:match("Timeout") then
+            elseif error_category == "timeout" then
                 message = deps._("Connection timed out")
             else
                 message = deps._("Send failed")
@@ -209,7 +222,8 @@ end
 -- @param device table Target device
 -- @param start_path string Optional start path for picker
 -- @param callback function Called with success boolean and message string
-local function showFilePicker(device, start_path, callback)
+-- @param options table Optional settings: { device_name = string }
+local function showFilePicker(device, start_path, callback, options)
     -- Default start path
     start_path = start_path or constants.DEFAULT_SAVE_DIR
 
@@ -224,13 +238,115 @@ local function showFilePicker(device, start_path, callback)
         select_directory = false,
         onConfirm = function(filepath)
             -- Send the file
-            M.sendFile(device, filepath, nil, callback)
+            M.sendFile(device, filepath, nil, callback, options)
         end,
-        onClose = function()
+        close_callback = function()
             if callback then callback(false, deps._("Cancelled")) end
         end,
     }
     deps.UIManager:show(picker)
+end
+
+-- Helper to extract common send flow options from instance
+-- @param instance table LocalSend plugin instance
+-- @return table scan_options, table send_options, string start_path
+local function getSendFlowConfig(instance)
+    local device_name = instance and instance.device_name
+    local scan_options = {
+        use_webrtc = instance and instance.use_webrtc,
+        device_name = device_name,  -- Pass to scan so we show correct name to peers
+    }
+    local send_options = { device_name = device_name }
+    local start_path = instance and instance.save_dir or constants.DEFAULT_SAVE_DIR
+    return scan_options, send_options, start_path
+end
+
+-- Helper to scan for devices and show selector
+-- @param instance table LocalSend plugin instance (for settings)
+-- @param onDeviceSelected function Called with (device, send_options, start_path) when device selected
+local function scanAndSelectDevice(instance, onDeviceSelected)
+    local scan_options, send_options, start_path = getSendFlowConfig(instance)
+
+    -- Show scanning dialog
+    local scanning_dialog = discovery.showScanningDialog(function()
+        discovery.cancelScan()
+    end)
+
+    -- Start device scan
+    discovery.scanDevices(function(devices)
+        -- Close scanning dialog
+        if scanning_dialog then
+            deps.UIManager:close(scanning_dialog)
+        end
+
+        -- Show device selector
+        discovery.showDeviceSelector(devices, function(device)
+            if device then
+                onDeviceSelected(device, send_options, start_path)
+            end
+        end)
+    end, scan_options)
+end
+
+-- Helper to show device selector with cached devices (no rescan)
+-- @param instance table LocalSend plugin instance (for settings)
+-- @param onDeviceSelected function Called with (device, send_options, start_path) when device selected
+local function selectCachedDevice(instance, onDeviceSelected)
+    local _, send_options, start_path = getSendFlowConfig(instance)
+    local devices = state.ServerState.discovered_devices or {}
+
+    discovery.showDeviceSelector(devices, function(device)
+        if device then
+            onDeviceSelected(device, send_options, start_path)
+        end
+    end)
+end
+
+-- Forward declaration for mutual recursion
+local showSendMoreDialog
+
+-- Show "send more files?" dialog after successful send
+-- @param instance table LocalSend plugin instance (for settings)
+showSendMoreDialog = function(instance)
+    -- Callback for after send completes - show dialog again on success
+    local function onSendComplete(success, _)
+        if success then
+            showSendMoreDialog(instance)
+        end
+    end
+
+    -- Handler when device is selected
+    local function onDeviceSelected(device, send_options, start_path)
+        showFilePicker(device, start_path, onSendComplete, send_options)
+    end
+
+    local dialog
+    dialog = deps.ButtonDialog:new{
+        title = deps._("Send more files?"),
+        buttons = {
+            {{
+                text = deps._("Yes"),
+                callback = function()
+                    deps.UIManager:close(dialog)
+                    selectCachedDevice(instance, onDeviceSelected)
+                end,
+            }},
+            {{
+                text = deps._("Scan again"),
+                callback = function()
+                    deps.UIManager:close(dialog)
+                    scanAndSelectDevice(instance, onDeviceSelected)
+                end,
+            }},
+            {{
+                text = deps._("No"),
+                callback = function()
+                    deps.UIManager:close(dialog)
+                end,
+            }},
+        },
+    }
+    deps.UIManager:show(dialog)
 end
 
 -- Main entry point: scan for devices, select one, choose file, and send
@@ -256,35 +372,25 @@ function M.showFileSendFlow(instance, preset_file)
         return
     end
 
-    -- Show scanning indicator
-    local scanning_dialog = discovery.showScanningDialog(function()
-        discovery.cancelScan()
-    end)
-
-    -- Start device scan
-    discovery.scanDevices(function(devices)
-        -- Close scanning dialog
-        if scanning_dialog then
-            deps.UIManager:close(scanning_dialog)
+    -- Handler when device is selected
+    local function onDeviceSelected(device, send_options, start_path)
+        -- Callback to show "send more?" dialog on success
+        local function onSendComplete(success, _)
+            if success then
+                showSendMoreDialog(instance)
+            end
         end
 
-        -- Show device selector
-        discovery.showDeviceSelector(devices, function(device)
-            if not device then
-                -- User cancelled
-                return
-            end
+        if preset_file then
+            -- Send preset file directly
+            M.sendFile(device, preset_file, nil, onSendComplete, send_options)
+        else
+            -- Show file picker
+            showFilePicker(device, start_path, onSendComplete, send_options)
+        end
+    end
 
-            if preset_file then
-                -- Send preset file directly
-                M.sendFile(device, preset_file, nil, nil)
-            else
-                -- Show file picker
-                local start_path = instance and instance.save_dir or constants.DEFAULT_SAVE_DIR
-                showFilePicker(device, start_path, nil)
-            end
-        end)
-    end)
+    scanAndSelectDevice(instance, onDeviceSelected)
 end
 
 -- Cancel an in-progress send
@@ -311,13 +417,19 @@ end
 
 -- Categorize an error message from send output
 -- @param error_msg string Error message from CLI output
--- @return string Category: "pin_required", "wrong_pin", "rejected", "connection", "timeout", or "unknown"
+-- @return string Category: "pin_required", "wrong_pin", "rejected", "connection_refused",
+--                          "rate_limited", "connection", "timeout", or "unknown"
 function M.categorizeError(error_msg)
     if not error_msg or error_msg == "" then
         return "unknown"
     end
 
     local msg_lower = error_msg:lower()
+
+    -- Rate limiting / too many attempts (check first - more specific)
+    if msg_lower:match("too many") or msg_lower:match("blocked") or msg_lower:match("rate") then
+        return "rate_limited"
+    end
 
     -- PIN-related errors
     if msg_lower:match("pin required") or msg_lower:match("401") then
@@ -331,7 +443,12 @@ function M.categorizeError(error_msg)
         return "rejected"
     end
 
-    -- Connection errors
+    -- Connection refused (device not running - check before generic connection)
+    if msg_lower:match("connection refused") or msg_lower:match("refused") then
+        return "connection_refused"
+    end
+
+    -- Generic connection errors
     if msg_lower:match("connection") or msg_lower:match("connect") then
         return "connection"
     end

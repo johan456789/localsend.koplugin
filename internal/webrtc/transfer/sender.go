@@ -376,12 +376,25 @@ func (s *RTCSender) handleTokenResponse(msg interface{}, msgType string, data []
 		if !s.closed {
 			s.errors <- fmt.Errorf("too many PIN attempts, receiver blocked transfer")
 		}
+		// Close peer connection asynchronously to avoid deadlock
+		// (we're holding s.mu via handleMessage's defer)
+		if s.peer != nil {
+			go func(peer *PeerConnection) {
+				_ = peer.Close()
+			}(s.peer)
+		}
 		return
 	}
 
 	if msgType == "status_INVALID_SIGNATURE" {
 		if !s.closed {
 			s.errors <- fmt.Errorf("receiver rejected our token signature")
+		}
+		// Close peer connection asynchronously to avoid deadlock
+		if s.peer != nil {
+			go func(peer *PeerConnection) {
+				_ = peer.Close()
+			}(s.peer)
 		}
 		return
 	}

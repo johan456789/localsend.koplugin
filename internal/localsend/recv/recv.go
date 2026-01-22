@@ -40,11 +40,11 @@ type FileReceiver struct {
 	listenAddr        string           // Custom listen address (defaults to constants.DefaultListenAddr)
 
 	// configMu protects configuration fields that can be modified after creation
-	// (expectedPin, allowedExtensions, transferLogPath, transferLogFile, onTransferCmd, router, listenAddr, pinAttempts)
+	// (expectedPin, allowedExtensions, transferLogPath, transferLogFile, onTransferCmd, router, listenAddr)
 	configMu sync.RWMutex
 
-	// PIN rate limiting
-	pinAttempts map[string]*pinAttemptInfo // IP -> attempt info
+	// PIN rate limiting (uses shared RateLimiter from utils package)
+	pinRateLimiter *utils.RateLimiter
 
 	// V3 nonce caches for token verification
 	receivedNonceCache  *localsend.NonceCache // nonces received from clients
@@ -54,19 +54,12 @@ type FileReceiver struct {
 	cmdWg sync.WaitGroup
 }
 
-// PIN rate limiting constants
+// PIN rate limiting constants - use shared constants from constants package
 const (
-	maxPINAttempts     = 3               // Maximum incorrect PIN attempts before lockout
-	pinBlockDuration   = 5 * time.Minute // Duration of lockout after max attempts
-	pinCleanupInterval = 5 * time.Minute // Interval for cleaning up expired PIN attempt entries
+	maxPINAttempts     = constants.MaxPINAttempts
+	pinBlockDuration   = constants.PINBlockDuration
+	pinCleanupInterval = constants.PINCleanupInterval
 )
-
-// pinAttemptInfo tracks failed PIN attempts for an IP
-type pinAttemptInfo struct {
-	count       int
-	blockedAt   time.Time
-	lastAttempt time.Time // When the last attempt occurred (for stale entry cleanup)
-}
 
 // TransferLogEntry represents a single transfer log entry
 type TransferLogEntry struct {
@@ -85,6 +78,7 @@ func NewFileReceiver(devname string, saveToDir string, supportHttps bool) *FileR
 		sessman:             sess.NewRecvSessManager(),
 		allowedExtensions:   nil, // nil means accept all
 		listenAddr:          constants.DefaultListenAddr,
+		pinRateLimiter:      utils.NewRateLimiter(maxPINAttempts, pinBlockDuration),
 		receivedNonceCache:  localsend.NewNonceCache(200),
 		generatedNonceCache: localsend.NewNonceCache(200),
 	}
@@ -254,53 +248,17 @@ func (fr *FileReceiver) getExpectedPIN() string {
 
 // isPINBlocked returns true if the IP is currently blocked due to too many failed PIN attempts.
 func (fr *FileReceiver) isPINBlocked(ip string) bool {
-	fr.configMu.Lock()
-	defer fr.configMu.Unlock()
-
-	info, ok := fr.pinAttempts[ip]
-	if !ok {
-		return false
-	}
-
-	// Check if block has expired
-	if info.count >= maxPINAttempts {
-		if time.Since(info.blockedAt) > pinBlockDuration {
-			delete(fr.pinAttempts, ip) // Clear expired block
-			return false
-		}
-		return true
-	}
-	return false
+	return fr.pinRateLimiter.IsBlocked(ip)
 }
 
 // recordPINAttempt records a failed PIN attempt for an IP.
 func (fr *FileReceiver) recordPINAttempt(ip string) {
-	fr.configMu.Lock()
-	defer fr.configMu.Unlock()
-
-	if fr.pinAttempts == nil {
-		fr.pinAttempts = make(map[string]*pinAttemptInfo)
-	}
-
-	info, ok := fr.pinAttempts[ip]
-	if !ok {
-		info = &pinAttemptInfo{}
-		fr.pinAttempts[ip] = info
-	}
-
-	info.count++
-	info.lastAttempt = time.Now()
-	if info.count >= maxPINAttempts {
-		info.blockedAt = time.Now()
-		slog.Warn("PIN rate limit reached, blocking IP", "ip", ip, "duration", pinBlockDuration)
-	}
+	fr.pinRateLimiter.RecordAttempt(ip)
 }
 
 // clearPINAttempts clears failed PIN attempts for an IP (on successful auth).
 func (fr *FileReceiver) clearPINAttempts(ip string) {
-	fr.configMu.Lock()
-	defer fr.configMu.Unlock()
-	delete(fr.pinAttempts, ip)
+	fr.pinRateLimiter.Clear(ip)
 }
 
 // validatePIN checks PIN authentication and rate limiting.
@@ -520,29 +478,5 @@ func (fr *FileReceiver) pinCleanupTask(ctx context.Context) {
 // This includes both blocked IPs whose block has expired and stale partial-attempt
 // entries from IPs that haven't made attempts recently (handles rotating IP attacks).
 func (fr *FileReceiver) cleanupExpiredPINAttempts() {
-	fr.configMu.Lock()
-	defer fr.configMu.Unlock()
-
-	if fr.pinAttempts == nil {
-		return
-	}
-
-	now := time.Now()
-	cleaned := 0
-	for ip, info := range fr.pinAttempts {
-		// Remove blocked entries whose block has expired
-		if info.count >= maxPINAttempts && now.Sub(info.blockedAt) > pinBlockDuration {
-			delete(fr.pinAttempts, ip)
-			cleaned++
-			continue
-		}
-		// Remove stale partial-attempt entries (no activity for pinBlockDuration)
-		if info.count < maxPINAttempts && now.Sub(info.lastAttempt) > pinBlockDuration {
-			delete(fr.pinAttempts, ip)
-			cleaned++
-		}
-	}
-	if cleaned > 0 {
-		slog.Debug("Cleaned up expired PIN attempt entries", "count", cleaned)
-	}
+	fr.pinRateLimiter.CleanupExpired()
 }

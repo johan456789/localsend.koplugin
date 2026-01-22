@@ -9,6 +9,7 @@ import (
 
 type FileSender interface {
 	SetPIN(pin string)
+	SetAlias(alias string)
 	Init(target *models.DeviceInfo, https bool) error
 	AddFile(filePath string) error
 	AddDir(dirPath string) error
@@ -22,10 +23,15 @@ type baseSender struct {
 	files   models.FileMetas
 	session string
 	pin     string
+	alias   string // Custom alias for device name (if set, overrides generated alias)
 }
 
 func (fsp *baseSender) SetPIN(pin string) {
 	fsp.pin = pin
+}
+
+func (fsp *baseSender) SetAlias(alias string) {
+	fsp.alias = alias
 }
 
 func (fsp *baseSender) AddFile(filePath string) error {

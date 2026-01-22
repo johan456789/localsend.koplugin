@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
 	"localsend-cli/internal/utils"
 )
@@ -1336,15 +1337,15 @@ func TestSaveFileFolderRemapOnlyAffectsSubdirs(t *testing.T) {
 }
 
 // TestRecvSession_AcceptFile_RejectsBeyondMaxLimit verifies that AcceptFile
-// returns ErrTooManyFiles when the session has reached MaxFilesPerSession files.
+// returns ErrTooManyFiles when the session has reached constants.MaxFilesPerSession files.
 func TestRecvSession_AcceptFile_RejectsBeyondMaxLimit(t *testing.T) {
 	sess, err := NewRecvSession("test-session", "192.168.1.1")
 	if err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}
 
-	// Accept exactly MaxFilesPerSession files
-	for i := 0; i < MaxFilesPerSession; i++ {
+	// Accept exactly constants.MaxFilesPerSession files
+	for i := 0; i < constants.MaxFilesPerSession; i++ {
 		fileId := fmt.Sprintf("file%d", i)
 		fileMeta := models.FileMeta{
 			Id:       fileId,
@@ -1356,10 +1357,10 @@ func TestRecvSession_AcceptFile_RejectsBeyondMaxLimit(t *testing.T) {
 		}
 	}
 
-	// Verify we have exactly MaxFilesPerSession files
+	// Verify we have exactly constants.MaxFilesPerSession files
 	tokens := sess.FileTokens()
-	if len(tokens) != MaxFilesPerSession {
-		t.Fatalf("Expected %d tokens, got %d", MaxFilesPerSession, len(tokens))
+	if len(tokens) != constants.MaxFilesPerSession {
+		t.Fatalf("Expected %d tokens, got %d", constants.MaxFilesPerSession, len(tokens))
 	}
 
 	// Try to accept one more file - should fail
@@ -1370,7 +1371,7 @@ func TestRecvSession_AcceptFile_RejectsBeyondMaxLimit(t *testing.T) {
 	}
 	err = sess.AcceptFile("extra-file", extraFileMeta)
 	if err == nil {
-		t.Error("AcceptFile should reject files beyond MaxFilesPerSession")
+		t.Error("AcceptFile should reject files beyond constants.MaxFilesPerSession")
 	}
 
 	// Verify it's the correct error type
@@ -1380,15 +1381,15 @@ func TestRecvSession_AcceptFile_RejectsBeyondMaxLimit(t *testing.T) {
 }
 
 // TestRecvSession_AcceptFile_AllowsExactlyMaxFiles verifies that AcceptFile
-// accepts exactly MaxFilesPerSession files (boundary test).
+// accepts exactly constants.MaxFilesPerSession files (boundary test).
 func TestRecvSession_AcceptFile_AllowsExactlyMaxFiles(t *testing.T) {
 	sess, err := NewRecvSession("test-session", "192.168.1.1")
 	if err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}
 
-	// Accept exactly MaxFilesPerSession files - all should succeed
-	for i := 0; i < MaxFilesPerSession; i++ {
+	// Accept exactly constants.MaxFilesPerSession files - all should succeed
+	for i := 0; i < constants.MaxFilesPerSession; i++ {
 		fileId := fmt.Sprintf("file%d", i)
 		fileMeta := models.FileMeta{
 			Id:       fileId,
@@ -1396,20 +1397,20 @@ func TestRecvSession_AcceptFile_AllowsExactlyMaxFiles(t *testing.T) {
 			Size:     100,
 		}
 		if err := sess.AcceptFile(fileId, fileMeta); err != nil {
-			t.Fatalf("AcceptFile should allow file %d (max is %d): %v", i, MaxFilesPerSession, err)
+			t.Fatalf("AcceptFile should allow file %d (max is %d): %v", i, constants.MaxFilesPerSession, err)
 		}
 	}
 
-	// Verify we have exactly MaxFilesPerSession files
+	// Verify we have exactly constants.MaxFilesPerSession files
 	tokens := sess.FileTokens()
-	if len(tokens) != MaxFilesPerSession {
-		t.Errorf("Expected exactly %d tokens, got %d", MaxFilesPerSession, len(tokens))
+	if len(tokens) != constants.MaxFilesPerSession {
+		t.Errorf("Expected exactly %d tokens, got %d", constants.MaxFilesPerSession, len(tokens))
 	}
 }
 
 // TestRecvSession_MaxFilesPerSession_Constant verifies the constant value is as expected.
 func TestRecvSession_MaxFilesPerSession_Constant(t *testing.T) {
-	if MaxFilesPerSession != 10000 {
-		t.Errorf("MaxFilesPerSession should be 10000, got %d", MaxFilesPerSession)
+	if constants.MaxFilesPerSession != 10000 {
+		t.Errorf("constants.MaxFilesPerSession should be 10000, got %d", constants.MaxFilesPerSession)
 	}
 }

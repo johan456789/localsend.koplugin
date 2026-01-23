@@ -191,7 +191,21 @@ function M.sendFile(device, filepath, pin, callback, options)
             if error_category == "rejected" then
                 message = deps._("Transfer was rejected by the recipient")
             elseif error_category == "wrong_pin" or error_category == "pin_required" then
-                message = deps._("Incorrect PIN")
+                -- Prompt for PIN and retry
+                M.showPINDialog(device, function(entered_pin)
+                    if entered_pin and entered_pin ~= "" then
+                        -- Retry with PIN
+                        M.sendFile(device, filepath, entered_pin, callback, options)
+                    else
+                        -- User cancelled PIN entry
+                        deps.UIManager:show(deps.Notification:new{
+                            text = deps._("Send cancelled"),
+                            timeout = 2,
+                        })
+                        if callback then callback(false, "Cancelled") end
+                    end
+                end)
+                return  -- Don't show error or call callback - PIN dialog handles it
             elseif error_category == "connection_refused" then
                 message = deps._("Device is not running LocalSend")
             elseif error_category == "rate_limited" then
@@ -272,20 +286,34 @@ local function scanAndSelectDevice(instance, onDeviceSelected)
         discovery.cancelScan()
     end)
 
-    -- Start device scan
-    discovery.scanDevices(function(devices)
+    -- Define scan completion handler (used for initial scan and retries)
+    local function onScanComplete(devices)
         -- Close scanning dialog
         if scanning_dialog then
             deps.UIManager:close(scanning_dialog)
+            scanning_dialog = nil
         end
 
-        -- Show device selector
+        -- Retry callback for "Scan again" button
+        local function onRetry()
+            -- Show scanning dialog again
+            scanning_dialog = discovery.showScanningDialog(function()
+                discovery.cancelScan()
+            end)
+            -- Rescan
+            discovery.scanDevices(onScanComplete, scan_options)
+        end
+
+        -- Show device selector with retry option
         discovery.showDeviceSelector(devices, function(device)
             if device then
                 onDeviceSelected(device, send_options, start_path)
             end
-        end)
-    end, scan_options)
+        end, onRetry)
+    end
+
+    -- Start device scan
+    discovery.scanDevices(onScanComplete, scan_options)
 end
 
 -- Helper to show device selector with cached devices (no rescan)
@@ -295,11 +323,16 @@ local function selectCachedDevice(instance, onDeviceSelected)
     local _, send_options, start_path = getSendFlowConfig(instance)
     local devices = state.ServerState.discovered_devices or {}
 
+    -- Retry callback triggers a fresh scan
+    local function onRetry()
+        scanAndSelectDevice(instance, onDeviceSelected)
+    end
+
     discovery.showDeviceSelector(devices, function(device)
         if device then
             onDeviceSelected(device, send_options, start_path)
         end
-    end)
+    end, onRetry)
 end
 
 -- Forward declaration for mutual recursion
@@ -432,7 +465,7 @@ function M.categorizeError(error_msg)
     end
 
     -- PIN-related errors
-    if msg_lower:match("pin required") or msg_lower:match("401") then
+    if msg_lower:match("pin required") or msg_lower:match("401") or msg_lower:match("invalid pin") then
         return "pin_required"
     elseif msg_lower:match("wrong pin") or msg_lower:match("incorrect pin") then
         return "wrong_pin"

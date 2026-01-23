@@ -227,13 +227,41 @@ end
 -- Show device selector dialog
 -- @param devices table Array of device objects
 -- @param onSelect function Called with selected device (or nil if cancelled)
-function M.showDeviceSelector(devices, onSelect)
+-- @param onRetry function Optional callback to retry scan (enables "Scan again" button)
+function M.showDeviceSelector(devices, onSelect, onRetry)
     if not devices or #devices == 0 then
-        deps.UIManager:show(deps.InfoMessage:new{
-            text = deps._("No devices found. Make sure LocalSend is running on the target device."),
-            timeout = 4,
-        })
-        if onSelect then onSelect(nil) end
+        if onRetry then
+            -- Show dialog with retry option
+            local dialog
+            dialog = deps.ButtonDialog:new{
+                title = deps._("No devices found"),
+                info_text = deps._("Make sure LocalSend is running on the target device."),
+                buttons = {{
+                    {
+                        text = deps._("Scan again"),
+                        callback = function()
+                            deps.UIManager:close(dialog)
+                            onRetry()
+                        end,
+                    },
+                    {
+                        text = deps._("Cancel"),
+                        callback = function()
+                            deps.UIManager:close(dialog)
+                            if onSelect then onSelect(nil) end
+                        end,
+                    },
+                }},
+            }
+            deps.UIManager:show(dialog)
+        else
+            -- Fallback to original behavior (no retry available)
+            deps.UIManager:show(deps.InfoMessage:new{
+                text = deps._("No devices found. Make sure LocalSend is running on the target device."),
+                timeout = 4,
+            })
+            if onSelect then onSelect(nil) end
+        end
         return
     end
 

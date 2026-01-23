@@ -246,14 +246,14 @@ describe("localsend_sender", function()
             local state = require("localsend_state")
             state.ServerState.send_in_progress = true
 
-            sender.showFileSendFlow({})
+            sender.showFileSendFlow({ getPickerStartPath = function(_, path) return path end })
 
             local notification = helper.find_notification("in progress")
             assert.is_not_nil(notification)
         end)
 
         it("starts device scan when network connected", function()
-            sender.showFileSendFlow({})
+            sender.showFileSendFlow({ getPickerStartPath = function(_, path) return path end })
 
             -- Should have executed scan command
             assert.is_true(#helper.state.os_execute_calls > 0)

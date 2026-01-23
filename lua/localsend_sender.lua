@@ -257,7 +257,7 @@ local function getSendFlowConfig(instance)
         device_name = device_name,  -- Pass to scan so we show correct name to peers
     }
     local send_options = { device_name = device_name }
-    local start_path = instance and instance.save_dir or constants.DEFAULT_SAVE_DIR
+    local start_path = instance:getPickerStartPath(instance.save_dir)
     return scan_options, send_options, start_path
 end
 

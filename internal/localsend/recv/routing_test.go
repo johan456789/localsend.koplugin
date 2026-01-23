@@ -22,6 +22,7 @@ func TestExtensionRouter_GetSaveDir(t *testing.T) {
 		{"image.png", "/default"},   // no route, use default
 		{"noextension", "/default"}, // no extension, use default
 		{"file.unknown", "/default"},
+		{"file.", "/default"}, // trailing dot, no extension
 	}
 
 	for _, tt := range tests {
@@ -83,6 +84,44 @@ func TestExtensionRouter_HasRoutes(t *testing.T) {
 	router.routes["epub"] = "/books"
 	if !router.HasRoutes() {
 		t.Error("Expected HasRoutes() to be true after adding route")
+	}
+}
+
+func TestExtensionRouter_CompoundExtensions(t *testing.T) {
+	router := NewExtensionRouter("/default")
+	router.routes["pdf"] = "/pdfs"
+	router.routes["safari.pdf"] = "/safari"
+	router.routes["work.report.pdf"] = "/work"
+
+	tests := []struct {
+		name     string
+		filename string
+		want     string
+	}{
+		// Compound extension matches
+		{"compound safari.pdf", "document.safari.pdf", "/safari"},
+		{"compound case insensitive", "document.Safari.PDF", "/safari"},
+		{"triple compound", "quarterly.work.report.pdf", "/work"},
+
+		// Falls back to simple extension when no compound match
+		{"fallback to pdf", "document.unknown.pdf", "/pdfs"},
+		{"simple pdf still works", "document.pdf", "/pdfs"},
+
+		// No match at all
+		{"no match uses default", "document.safari.docx", "/default"},
+
+		// Edge cases
+		{"path with compound", "/path/to/file.safari.pdf", "/safari"},
+		{"dotfile with extension", ".hidden.pdf", "/pdfs"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := router.GetSaveDir(tt.filename)
+			if got != tt.want {
+				t.Errorf("GetSaveDir(%q) = %q, want %q", tt.filename, got, tt.want)
+			}
+		})
 	}
 }
 

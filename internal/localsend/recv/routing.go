@@ -68,18 +68,37 @@ func (r *ExtensionRouter) LoadFromFile(path string) error {
 }
 
 // GetSaveDir returns the appropriate save directory for a file based on its extension.
+// Supports compound extensions like "safari.pdf" for category-based routing.
+// For "file.safari.pdf", it tries "safari.pdf" first, then falls back to "pdf".
 // Falls back to the default directory if no specific route is configured.
 func (r *ExtensionRouter) GetSaveDir(filename string) string {
-	ext := filepath.Ext(filename)
-	if ext == "" {
+	// Get base name without path
+	base := filepath.Base(filename)
+
+	// Find first dot (for compound extension like "safari.pdf")
+	idx := strings.Index(base, ".")
+	if idx == -1 || idx >= len(base)-1 {
 		return r.defaultDir
 	}
 
-	// Remove leading dot and lowercase
-	ext = strings.ToLower(ext[1:])
+	compound := strings.ToLower(base[idx+1:]) // "safari.pdf" from "file.safari.pdf"
 
-	if dir, ok := r.routes[ext]; ok {
+	// Try compound extension first
+	if dir, ok := r.routes[compound]; ok {
 		return dir
+	}
+
+	// Fall back to simple extension (last segment)
+	if lastDot := strings.LastIndex(compound, "."); lastDot != -1 && lastDot < len(compound)-1 {
+		simple := compound[lastDot+1:] // "pdf" from "safari.pdf"
+		if dir, ok := r.routes[simple]; ok {
+			return dir
+		}
+	} else {
+		// No compound, just a simple extension
+		if dir, ok := r.routes[compound]; ok {
+			return dir
+		}
 	}
 
 	return r.defaultDir

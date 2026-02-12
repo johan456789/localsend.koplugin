@@ -42,6 +42,7 @@ const (
 
 // Package-level blocked peers map (persists across receiver instances)
 // This ensures attackers can't bypass rate limiting by reconnecting.
+// Cleanup is done lazily in isPeerBlocked() to avoid background CPU usage on e-readers.
 var (
 	blockedPeers   = make(map[string]time.Time) // signaling ID -> blocked until
 	blockedPeersMu sync.RWMutex

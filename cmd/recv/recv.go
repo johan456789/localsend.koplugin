@@ -246,7 +246,7 @@ func init() {
 	Cmd.PersistentFlags().StringVarP(&logFile, "log", "l", "", "Path to transfer log file (JSON lines format)")
 	Cmd.PersistentFlags().BoolVarP(&webrtcMode, "webrtc", "w", true, "Listen for WebRTC offers via signaling server (v3 protocol)")
 	Cmd.PersistentFlags().StringVar(&extRouting, "ext-routing", "", "Path to extension routing config (JSON). Routes files to different directories by extension.")
-	Cmd.PersistentFlags().StringVar(&onTransferCmd, "on-transfer", "", "Shell command to run after each file transfer completes (e.g., 'touch /tmp/notify')")
+	Cmd.PersistentFlags().StringVar(&onTransferCmd, "on-transfer", "", "Shell command to run after each file transfer completes (WARNING: executed with full shell privileges via 'sh -c')")
 	Cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "Config directory for trusted devices persistence")
 	Cmd.PersistentFlags().BoolVar(&requirePairing, "require-pairing", false, "Require PAIR before accepting WebRTC transfers from unknown devices")
 	Cmd.PersistentFlags().StringSliceVar(&stunServers, "stun-servers", nil, "Custom STUN servers for WebRTC (e.g., stun:stun.example.com:3478). Defaults to Google STUN servers if not set.")

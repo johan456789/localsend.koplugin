@@ -17,6 +17,7 @@ var (
 	ErrChecksum        = errors.New("sha256 mismatch")
 	ErrFingerprint     = errors.New("fingerprint mismatch")
 	ErrNotFound        = errors.New("not found")
+	ErrTooManySessions = errors.New("maximum concurrent sessions reached")
 )
 
 func ParseError(status int) error {

@@ -10,6 +10,9 @@ import (
 	"localsend-cli/internal/models"
 )
 
+// MaxConcurrentSessions is the maximum number of concurrent receive sessions
+const MaxConcurrentSessions = 100
+
 type RecvSessManager struct {
 	sessions *sync.Map
 	done     chan struct{}
@@ -77,6 +80,16 @@ func (rsm *RecvSessManager) GeneratePreUploadResp(sessionId string) (models.PreU
 }
 
 func (rsm *RecvSessManager) NewSession(reqFiles models.FileMetas, clientIP string) (string, error) {
+	// Check session count limit
+	count := 0
+	rsm.sessions.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	if count >= MaxConcurrentSessions {
+		return "", constants.ErrTooManySessions
+	}
+
 	sessionId := uuid.NewString()
 	session, err := NewRecvSession(sessionId, clientIP)
 	if err != nil {

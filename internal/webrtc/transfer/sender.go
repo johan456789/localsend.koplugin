@@ -19,7 +19,8 @@ import (
 
 const (
 	// ChunkSize is the size of each binary chunk sent over WebRTC.
-	ChunkSize = 16 * 1024 // 16KB chunks
+	// Per LocalSend protocol v3 spec section 8.2: "All binary data is chunked at 16 KiB (16,384 bytes)"
+	ChunkSize = 16 * 1024 // 16 KiB
 
 	// answerTimeout is the maximum time to wait for an SDP answer from the receiver.
 	answerTimeout = 30 * time.Second

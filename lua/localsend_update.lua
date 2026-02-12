@@ -58,10 +58,15 @@ end
 -- @param plugin_path string Path to plugin directory
 function M.setReinstallRequired(plugin_path)
     local marker_path = plugin_path .. "/" .. M.REINSTALL_MARKER_FILE
-    local f = io.open(marker_path, "w")
-    if f then
-        f:write("Update failed at " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n")
+    local open_ok, f = pcall(io.open, marker_path, "w")
+    if open_ok and f then
+        local write_ok = pcall(function()
+            f:write("Update failed at " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n")
+        end)
         f:close()
+        if not write_ok then
+            deps.logger.dbg("[LocalSend] Failed to write reinstall marker")
+        end
     end
 end
 

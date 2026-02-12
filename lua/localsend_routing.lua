@@ -36,20 +36,20 @@ function M.exportExtRouting(routing_enabled, ext_dirs, routing_accept_all, save_
     end
 
     local path = plugin_path .. "/ext_routing.json"
-    local f = io.open(path, "w")
-    if f then
-        local ok, err = pcall(function()
+    local open_ok, f = pcall(io.open, path, "w")
+    if open_ok and f then
+        local write_ok, err = pcall(function()
             f:write(deps.json.encode(config))
         end)
         f:close()
-        if not ok then
+        if not write_ok then
             deps.logger.warn("[LocalSend] Failed to write extension routing config:", err)
             return nil
         end
         deps.logger.dbg("[LocalSend] Exported extension routing config to", path)
         return path
-    else
-        deps.logger.warn("[LocalSend] Failed to open extension routing config file for writing:", path)
+    elseif not open_ok then
+        deps.logger.warn("[LocalSend] Failed to open extension routing config file:", f)
     end
     return nil
 end

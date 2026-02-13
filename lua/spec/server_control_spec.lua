@@ -236,4 +236,168 @@ describe("Server Control", function()
             assert.is_true(term_signal_used, "Should use SIGTERM first")
         end)
     end)
+
+    describe("stop_in_progress flag", function()
+        it("should block start() while stop is in progress", function()
+            local instance, LocalSend = helper.create_instance()
+            LocalSend._ServerState.stop_in_progress = true
+
+            local start_proceeded = false
+            instance.validateSaveDir = function() return true end
+            instance.openFirewall = function() end
+            instance.isRunning = function() return false end
+            instance._unschedulePolling = function() end
+
+            instance:start(false)
+
+            assert.is_false(start_proceeded, "start() should not proceed while stop is in progress")
+            local msg = helper.find_notification("stopping")
+            assert.is_truthy(msg, "Should show 'stopping' message")
+        end)
+
+        it("should block start() silently in silent mode", function()
+            local instance, LocalSend = helper.create_instance()
+            LocalSend._ServerState.stop_in_progress = true
+
+            instance.validateSaveDir = function() return true end
+            instance.openFirewall = function() end
+            instance.isRunning = function() return false end
+            instance._unschedulePolling = function() end
+
+            instance:start(true)
+
+            local msg = helper.find_notification("stopping")
+            assert.is_nil(msg, "Should not show message in silent mode")
+        end)
+
+        it("should block toggle() while stop is in progress", function()
+            local instance, LocalSend = helper.create_instance()
+            LocalSend._ServerState.stop_in_progress = true
+            instance.isRunning = function() return false end
+
+            local start_called = false
+            instance._startWhenConnected = function() start_called = true end
+
+            instance:onToggleLocalSend()
+
+            assert.is_false(start_called, "toggle should not start while stop is in progress")
+            local msg = helper.find_notification("stopping")
+            assert.is_truthy(msg, "Should show 'stopping' message")
+        end)
+
+        it("restart() should queue start after stop completes", function()
+            local instance, LocalSend = helper.create_instance()
+            LocalSend._ServerState.stop_in_progress = true
+            instance.isRunning = function() return true end
+
+            local stop_options = nil
+            instance.stopServer = function(self, options)
+                stop_options = options
+            end
+
+            instance:restart()
+
+            assert.is_not_nil(stop_options, "Should call stopServer")
+            assert.is_not_nil(stop_options.callback, "Should pass callback for restart")
+        end)
+    end)
+
+    describe("server_op_id guard", function()
+        it("should skip stale start callbacks when new operation started", function()
+            local instance, LocalSend = helper.create_instance()
+            LocalSend._ServerState.server_op_id = 1
+
+            package.loaded["util"].pathExists = function(path)
+                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
+                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
+                return false
+            end
+
+            local original_execute = os.execute
+            os.execute = function(cmd)
+                if cmd:match("localsend") and cmd:match("recv") then
+                    return 0
+                end
+                return 0
+            end
+
+            instance.validateSaveDir = function() return true end
+            instance.openFirewall = function() end
+            instance.exportExtRouting = function() return nil end
+            instance._unschedulePolling = function() end
+            instance._checkSentinelFile = function() end
+            instance.check_sentinel_task = function() end
+            instance.isRunning = function()
+                return false
+            end
+
+            instance:start(false)
+
+            LocalSend._ServerState.server_op_id = 99
+
+            local initial_task_count = #helper.state.scheduled_tasks
+            for i = 1, initial_task_count do
+                local task = helper.state.scheduled_tasks[i]
+                if task and task.callback then
+                    task.callback()
+                end
+            end
+
+            os.execute = original_execute
+
+            assert.is_true(initial_task_count >= 1, "Should have scheduled callbacks")
+        end)
+
+        it("should skip stale stop callbacks when new operation started", function()
+            local instance, LocalSend = helper.create_instance()
+            local callback_invoked = false
+
+            package.loaded["util"].pathExists = function(path)
+                if path == "/tmp/localsend_koreader.pid" then return true end
+                if path == "/proc/12345" then return true end
+                return false
+            end
+            package.loaded["util"].readFromFile = function(path)
+                if path == "/tmp/localsend_koreader.pid" then return "12345" end
+                if path == "/proc/12345/cmdline" then return "/tmp/localsend\0recv\0" end
+                return nil
+            end
+
+            local kill_count = 0
+            local original_execute = os.execute
+            os.execute = function(cmd)
+                if cmd:match("kill") then
+                    kill_count = kill_count + 1
+                end
+                return 0
+            end
+
+            instance.closeFirewall = function() end
+            instance._unschedulePolling = function() end
+            instance._updateCache = function() end
+            instance.registerEvents = function() end
+
+            LocalSend._ServerState.server_op_id = 1
+
+            instance:stopServer({
+                callback = function(success, message)
+                    callback_invoked = true
+                end
+            })
+
+            LocalSend._ServerState.server_op_id = 99
+
+            local initial_task_count = #helper.state.scheduled_tasks
+            for i = 1, math.min(initial_task_count, 50) do
+                local task = helper.state.scheduled_tasks[i]
+                if task and task.callback then
+                    task.callback()
+                end
+            end
+
+            os.execute = original_execute
+
+            assert.is_false(callback_invoked, "Stale callback should be skipped")
+        end)
+    end)
 end)

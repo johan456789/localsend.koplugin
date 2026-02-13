@@ -515,6 +515,144 @@ describe("Menu Building", function()
         end)
     end)
 
+    describe("stopping state in menu", function()
+        it("top-level text shows 'stopping...' when _cached_stopping is true", function()
+            local instance = helper.create_instance()
+            instance._cached_stopping = true
+            instance._cached_running = true
+
+            local menu_items = {}
+            instance:addToMainMenu(menu_items)
+
+            local text = menu_items.localsend.text_func()
+            assert.truthy(text:match("stopping"), "Should show 'stopping' in menu text")
+        end)
+
+        it("start/stop item text shows 'Stopping server...' when stopping", function()
+            local instance = helper.create_instance()
+            instance._cached_stopping = true
+            instance._cached_running = true
+
+            local menu_items = {}
+            instance:addToMainMenu(menu_items)
+
+            local toggle_item = nil
+            for _, item in ipairs(menu_items.localsend.sub_item_table) do
+                if item.text_func then
+                    local text = item.text_func()
+                    if text:match("Stopping") or text:match("Stop server") or text:match("Start server") then
+                        toggle_item = item
+                        break
+                    end
+                end
+            end
+
+            assert.is_not_nil(toggle_item, "Should find toggle item")
+            local text = toggle_item.text_func()
+            assert.truthy(text:match("Stopping"), "Toggle item should show 'Stopping server...'")
+        end)
+
+        it("start/stop item is disabled when stopping", function()
+            local instance = helper.create_instance()
+            instance._cached_stopping = true
+            instance._cached_running = true
+
+            local menu_items = {}
+            instance:addToMainMenu(menu_items)
+
+            local toggle_item = nil
+            for _, item in ipairs(menu_items.localsend.sub_item_table) do
+                if item.text_func then
+                    local text = item.text_func()
+                    if text:match("Stopping") or text:match("Stop server") or text:match("Start server") then
+                        toggle_item = item
+                        break
+                    end
+                end
+            end
+
+            assert.is_not_nil(toggle_item, "Should find toggle item")
+            assert.is_function(toggle_item.enabled_func)
+            assert.is_false(toggle_item.enabled_func(), "Toggle should be disabled while stopping")
+        end)
+
+        it("_refreshMenuUntilSettled schedules refresh while stop_in_progress", function()
+            local instance, LocalSend = helper.create_instance()
+            LocalSend._ServerState.stop_in_progress = true
+
+            local update_count = 0
+            local mock_touchmenu = {
+                updateItems = function() update_count = update_count + 1 end
+            }
+
+            instance:_refreshMenuUntilSettled(mock_touchmenu, 3)
+
+            assert.equal(1, update_count, "Should call updateItems once initially")
+
+            local scheduled_refresh = nil
+            for _, task in ipairs(helper.state.scheduled_tasks) do
+                if task.delay == 0.25 then
+                    scheduled_refresh = task
+                    break
+                end
+            end
+            assert.is_not_nil(scheduled_refresh, "Should schedule refresh in 0.25s")
+        end)
+
+        it("_refreshMenuUntilSettled stops scheduling when stop_in_progress is false", function()
+            local instance, LocalSend = helper.create_instance()
+            LocalSend._ServerState.stop_in_progress = false
+
+            local update_count = 0
+            local mock_touchmenu = {
+                updateItems = function() update_count = update_count + 1 end
+            }
+
+            instance:_refreshMenuUntilSettled(mock_touchmenu, 3)
+
+            assert.equal(1, update_count, "Should call updateItems once")
+
+            local scheduled_refresh = nil
+            for _, task in ipairs(helper.state.scheduled_tasks) do
+                if task.delay == 0.25 then
+                    scheduled_refresh = task
+                    break
+                end
+            end
+            assert.is_nil(scheduled_refresh, "Should not schedule more refreshes when not stopping")
+        end)
+
+        it("_refreshMenuUntilSettled stops when attempts exhausted", function()
+            local instance, LocalSend = helper.create_instance()
+            LocalSend._ServerState.stop_in_progress = true
+
+            local update_count = 0
+            local mock_touchmenu = {
+                updateItems = function() update_count = update_count + 1 end
+            }
+
+            instance:_refreshMenuUntilSettled(mock_touchmenu, 0)
+
+            assert.equal(1, update_count, "Should call updateItems once even with 0 attempts")
+
+            for _, task in ipairs(helper.state.scheduled_tasks) do
+                if task.delay == 0.25 then
+                    assert.fail("Should not schedule refresh when attempts is 0")
+                end
+            end
+        end)
+
+        it("_refreshMenuUntilSettled handles nil touchmenu gracefully", function()
+            local instance = helper.create_instance()
+
+            local tasks_before = #helper.state.scheduled_tasks
+            instance:_refreshMenuUntilSettled(nil, 5)
+            local tasks_after = #helper.state.scheduled_tasks
+
+            assert.equal(tasks_before, tasks_after, "Should not schedule anything with nil touchmenu")
+        end)
+    end)
+
     -- =========================================================================
     -- Settings menu cache consistency
     -- =========================================================================

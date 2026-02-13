@@ -89,8 +89,12 @@ if [ -f ".lua_env/bin/activate" ]; then
 fi
 
 cd lua
-# Ensure local lua files are found first (required for localsend_utils.lua)
-if ! run_test "Lua tests" busted --lua="lua -e 'package.path=\"./?.lua;\"..package.path'" spec/; then
+# Run busted directly from lua/ (matches CLAUDE.md and local developer workflow).
+if ! run_test "Lua tests" busted spec/; then
+    echo -e "${YELLOW}Lua test runtime diagnostics:${NC}"
+    echo "which lua:   $(command -v lua || echo 'not found')"
+    echo "which busted: $(command -v busted || echo 'not found')"
+    lua -v 2>/dev/null || true
     FAILED=1
 fi
 cd ..

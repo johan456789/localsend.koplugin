@@ -61,12 +61,6 @@ func (fr *FileReceiver) preUploadHandler(c *fiber.Ctx) error {
 		return c.SendStatus(status)
 	}
 
-	// Per protocol spec Section 4.1: return 409 when blocked by another session
-	if fr.sessman.HasActiveSessions() {
-		slog.Info("Blocked upload request - another session is active", "remote", c.IP())
-		return c.SendStatus(409)
-	}
-
 	var metaReq models.PreUploadReq
 
 	err := c.BodyParser(&metaReq)
@@ -81,11 +75,14 @@ func (fr *FileReceiver) preUploadHandler(c *fiber.Ctx) error {
 	}
 	metaReq.Files = filteredFiles
 
-	// new session - store client IP for validation per protocol spec Section 4.2
-	sessionId, err := fr.sessman.NewSession(metaReq.Files, c.IP())
+	// Atomically enforce admission rules + create session.
+	// Prevents races between active-session checks and creation.
+	sessionId, err := fr.sessman.CreateSessionIfAllowed(metaReq.Files, c.IP())
 	if err != nil {
-		slog.Error("preupload error", "error", err)
-		return c.SendStatus(500)
+		if err == constants.ErrTooManySessions {
+			return c.SendStatus(429)
+		}
+		return c.SendStatus(constants.Status(err))
 	}
 
 	slog.Info("Accepting file", "remote", c.IP(), "session", sessionId, "files", len(metaReq.Files))
@@ -262,40 +259,29 @@ func (fr *FileReceiver) preUploadV3Handler(c *fiber.Ctx) error {
 		return c.SendStatus(status)
 	}
 
-	// Per protocol spec Section 4.1: return 409 when blocked by another session
-	if fr.sessman.HasActiveSessions() {
-		slog.Info("Blocked upload request - another session is active", "remote", c.IP())
-		return c.SendStatus(409)
-	}
-
 	var metaReq models.PreUploadReq
 	err := c.BodyParser(&metaReq)
 	if err != nil {
 		return c.SendStatus(400)
 	}
 
-	// V3 token verification (optional - if nonces were exchanged)
-	// Full token verification requires the client's public key, which is only available
-	// via mTLS (client certificate) or out-of-band key exchange. The WebRTC path does
-	// full verification since both parties exchange keys in the data channel.
-	// For HTTP V3, we verify the nonce exchange was done for replay protection.
+	// V3 nonce exchange is required before prepare-upload.
+	// Full signature verification still requires client public-key material.
 	clientID := c.IP()
-	if receivedNonce, ok := fr.receivedNonceCache.Get(clientID); ok {
-		if generatedNonce, ok := fr.generatedNonceCache.Get(clientID); ok {
-			// Combined nonce: client's nonce || our nonce
-			combinedNonce := crypto.CombineNonces(receivedNonce, generatedNonce)
-
-			// Log V3 nonce verification was successful (replay protection active)
-			slog.Info("V3 nonce exchange verified",
-				"remote", clientID,
-				"combinedNonceLen", len(combinedNonce),
-				"hasToken", metaReq.Info != nil && metaReq.Info.Token != "")
-
-			// Clear nonces after use (one-time use for replay protection)
-			fr.receivedNonceCache.Delete(clientID)
-			fr.generatedNonceCache.Delete(clientID)
-		}
+	receivedNonce, hasReceived := fr.receivedNonceCache.Get(clientID)
+	generatedNonce, hasGenerated := fr.generatedNonceCache.Get(clientID)
+	if !hasReceived || !hasGenerated {
+		slog.Warn("V3 prepare-upload rejected: missing nonce exchange", "remote", clientID, "hasReceivedNonce", hasReceived, "hasGeneratedNonce", hasGenerated)
+		return c.SendStatus(400)
 	}
+
+	// Combined nonce: client nonce || server nonce
+	combinedNonce := crypto.CombineNonces(receivedNonce, generatedNonce)
+	slog.Info("V3 nonce exchange verified", "remote", clientID, "combinedNonceLen", len(combinedNonce), "hasToken", metaReq.Info != nil && metaReq.Info.Token != "")
+
+	// One-time use nonces for replay protection.
+	fr.receivedNonceCache.Delete(clientID)
+	fr.generatedNonceCache.Delete(clientID)
 
 	// Filter files by extension if filter is enabled
 	filteredFiles, errStatus := fr.filterFilesByExtension(metaReq.Files, c.IP())
@@ -304,11 +290,14 @@ func (fr *FileReceiver) preUploadV3Handler(c *fiber.Ctx) error {
 	}
 	metaReq.Files = filteredFiles
 
-	// new session - store client IP for validation per protocol spec Section 4.2
-	sessionId, err := fr.sessman.NewSession(metaReq.Files, c.IP())
+	// Atomically enforce admission rules + create session.
+	// Prevents races between active-session checks and creation.
+	sessionId, err := fr.sessman.CreateSessionIfAllowed(metaReq.Files, c.IP())
 	if err != nil {
-		slog.Error("preupload error", "error", err)
-		return c.SendStatus(500)
+		if err == constants.ErrTooManySessions {
+			return c.SendStatus(429)
+		}
+		return c.SendStatus(constants.Status(err))
 	}
 
 	slog.Info("V3 Accepting file", "remote", c.IP(), "session", sessionId, "files", len(metaReq.Files))

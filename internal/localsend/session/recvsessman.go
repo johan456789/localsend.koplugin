@@ -14,9 +14,10 @@ import (
 const MaxConcurrentSessions = 100
 
 type RecvSessManager struct {
-	sessions *sync.Map
-	done     chan struct{}
-	stopOnce sync.Once
+	sessions    *sync.Map
+	done        chan struct{}
+	stopOnce    sync.Once
+	admissionMu sync.Mutex
 }
 
 func NewRecvSessManager() *RecvSessManager {
@@ -80,13 +81,26 @@ func (rsm *RecvSessManager) GeneratePreUploadResp(sessionId string) (models.PreU
 }
 
 func (rsm *RecvSessManager) NewSession(reqFiles models.FileMetas, clientIP string) (string, error) {
-	// Check session count limit
-	count := 0
-	rsm.sessions.Range(func(_, _ any) bool {
-		count++
-		return true
-	})
-	if count >= MaxConcurrentSessions {
+	rsm.admissionMu.Lock()
+	defer rsm.admissionMu.Unlock()
+	return rsm.newSessionLocked(reqFiles, clientIP)
+}
+
+// CreateSessionIfAllowed atomically enforces admission rules and creates a session.
+// It prevents races between "has active session?" and session creation.
+func (rsm *RecvSessManager) CreateSessionIfAllowed(reqFiles models.FileMetas, clientIP string) (string, error) {
+	rsm.admissionMu.Lock()
+	defer rsm.admissionMu.Unlock()
+
+	if rsm.hasActiveSessionsLocked() {
+		return "", constants.ErrBlockedByOthers
+	}
+
+	return rsm.newSessionLocked(reqFiles, clientIP)
+}
+
+func (rsm *RecvSessManager) newSessionLocked(reqFiles models.FileMetas, clientIP string) (string, error) {
+	if rsm.sessionCountLocked() >= MaxConcurrentSessions {
 		return "", constants.ErrTooManySessions
 	}
 
@@ -109,6 +123,31 @@ func (rsm *RecvSessManager) NewSession(reqFiles models.FileMetas, clientIP strin
 	session.Start()
 
 	return sessionId, nil
+}
+
+func (rsm *RecvSessManager) sessionCountLocked() int {
+	count := 0
+	rsm.sessions.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	return count
+}
+
+func (rsm *RecvSessManager) hasActiveSessionsLocked() bool {
+	hasActive := false
+	rsm.sessions.Range(func(_, value any) bool {
+		session, ok := value.(*RecvSession)
+		if !ok {
+			return true
+		}
+		if !session.Stopped() {
+			hasActive = true
+			return false
+		}
+		return true
+	})
+	return hasActive
 }
 
 func (rsm *RecvSessManager) KillSession(sessionId string) {

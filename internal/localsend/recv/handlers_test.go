@@ -36,6 +36,27 @@ func newTestReceiver() *FileReceiver {
 	}
 }
 
+func performNonceExchange(t *testing.T, app *fiber.App) {
+	t.Helper()
+
+	nonce, err := crypto.GenerateNonce()
+	if err != nil {
+		t.Fatalf("Failed to generate nonce: %v", err)
+	}
+
+	body, _ := json.Marshal(models.NonceRequest{Nonce: crypto.EncodeNonce(nonce)})
+	req := httptest.NewRequest("POST", constants.NoncePathV3, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("Failed to call nonce endpoint: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("Nonce exchange status = %d; want 200", resp.StatusCode)
+	}
+}
+
 // =============================================================================
 // Nonce Exchange Handler Tests (POST /api/localsend/v3/nonce)
 // =============================================================================
@@ -351,7 +372,9 @@ func TestPreUploadV3Handler_BlockedBySession(t *testing.T) {
 	_, _ = fr.sessman.NewSession(testFiles, "127.0.0.1")
 
 	app := fiber.New()
+	app.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
 	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
+	performNonceExchange(t, app)
 
 	body := []byte(`{"info":{"alias":"Sender"},"files":{}}`)
 	req := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
@@ -408,7 +431,9 @@ func TestPreUploadV3Handler_CorrectPIN(t *testing.T) {
 	fr.SetPIN("123456")
 
 	app := fiber.New()
+	app.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
 	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
+	performNonceExchange(t, app)
 
 	body := []byte(`{"info":{"alias":"Sender","version":"2.3","deviceType":"MOBILE"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100,"fileType":"text/plain"}}}`)
 	req := httptest.NewRequest("POST", constants.PreuploadPathV3+"?pin=123456", bytes.NewReader(body))
@@ -416,9 +441,71 @@ func TestPreUploadV3Handler_CorrectPIN(t *testing.T) {
 
 	resp, _ := app.Test(req)
 
-	// Should succeed with correct PIN (may return 200 or other depending on file acceptance)
-	if resp.StatusCode == 401 {
-		t.Errorf("Status = %d; should not be 401 with correct PIN", resp.StatusCode)
+	// Should succeed with correct PIN and valid nonce exchange
+	if resp.StatusCode != 200 {
+		t.Errorf("Status = %d; want 200 with correct PIN and nonce", resp.StatusCode)
+	}
+}
+
+func TestPreUploadV3Handler_RequiresNonceExchange(t *testing.T) {
+	fr := newTestReceiver()
+
+	app := fiber.New()
+	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
+
+	body := []byte(`{"info":{"alias":"Sender","version":"2.3","deviceType":"MOBILE"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100,"fileType":"text/plain"}}}`)
+	req := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, _ := app.Test(req)
+	if resp.StatusCode != 400 {
+		t.Errorf("Status = %d; want 400 when nonce exchange is missing", resp.StatusCode)
+	}
+}
+
+func TestPreUploadV3Handler_RejectsPartialNonceState(t *testing.T) {
+	fr := newTestReceiver()
+
+	nonce, _ := crypto.GenerateNonce()
+	fr.receivedNonceCache.Put("0.0.0.0", nonce)
+
+	app := fiber.New()
+	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
+
+	body := []byte(`{"info":{"alias":"Sender","version":"2.3","deviceType":"MOBILE"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100,"fileType":"text/plain"}}}`)
+	req := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, _ := app.Test(req)
+	if resp.StatusCode != 400 {
+		t.Errorf("Status = %d; want 400 when only one nonce cache entry exists", resp.StatusCode)
+	}
+}
+
+func TestPreUploadV3Handler_NonceReplayRejected(t *testing.T) {
+	fr := newTestReceiver()
+
+	app := fiber.New()
+	app.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
+	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
+
+	body := []byte(`{"info":{"alias":"Sender","version":"2.3","deviceType":"MOBILE"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100,"fileType":"text/plain"}}}`)
+
+	// First request after nonce exchange should succeed.
+	performNonceExchange(t, app)
+	firstReq := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
+	firstReq.Header.Set("Content-Type", "application/json")
+	firstResp, _ := app.Test(firstReq)
+	if firstResp.StatusCode != 200 {
+		t.Fatalf("First prepare-upload status = %d; want 200", firstResp.StatusCode)
+	}
+
+	// Reusing without a fresh nonce exchange should fail.
+	secondReq := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
+	secondReq.Header.Set("Content-Type", "application/json")
+	secondResp, _ := app.Test(secondReq)
+	if secondResp.StatusCode != 400 {
+		t.Errorf("Second prepare-upload status = %d; want 400 (replay blocked)", secondResp.StatusCode)
 	}
 }
 

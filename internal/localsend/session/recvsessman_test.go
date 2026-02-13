@@ -2,9 +2,11 @@ package session
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
 )
 
@@ -360,5 +362,46 @@ func TestRecvSessManagerMultipleSessions(t *testing.T) {
 		if err != nil {
 			t.Errorf("GetSession(%s) failed after killing another session: %v", id, err)
 		}
+	}
+}
+
+func TestCreateSessionIfAllowed_ConcurrentSingleAdmission(t *testing.T) {
+	mgr := NewRecvSessManager()
+	defer mgr.Stop()
+
+	files := models.FileMetas{
+		"file1": {Id: "file1", Filename: "test.txt", Size: 100},
+	}
+
+	const workers = 40
+	var wg sync.WaitGroup
+	wg.Add(workers)
+
+	var successCount int32
+	var blockedCount int32
+
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+
+			_, err := mgr.CreateSessionIfAllowed(files, "192.168.1.10")
+			switch err {
+			case nil:
+				atomic.AddInt32(&successCount, 1)
+			case constants.ErrBlockedByOthers:
+				atomic.AddInt32(&blockedCount, 1)
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&successCount); got != 1 {
+		t.Fatalf("successful admissions = %d; want 1", got)
+	}
+	if got := atomic.LoadInt32(&blockedCount); got == 0 {
+		t.Fatalf("blocked admissions = %d; want > 0", got)
 	}
 }

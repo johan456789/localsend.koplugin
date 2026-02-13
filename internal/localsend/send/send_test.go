@@ -2,6 +2,8 @@ package send
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,9 +14,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"localsend-cli/internal/localsend/constants"
 	lsutils "localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/models"
+	coreutils "localsend-cli/internal/utils"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/valyala/fasthttp"
@@ -848,6 +853,92 @@ func TestForwardSender_Start_ReturnsNilOnSuccess(t *testing.T) {
 	// Should return nil when all files transfer successfully
 	if err != nil {
 		t.Errorf("Start() should return nil on success, got: %v", err)
+	}
+}
+
+func TestForwardSender_Start_HTTPSCustomPort_UsesConfiguredPortForFingerprint(t *testing.T) {
+	app := fiber.New()
+
+	app.Post(constants.PreuploadPath, func(c *fiber.Ctx) error {
+		var req struct {
+			Files map[string]interface{} `json:"files"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.SendStatus(400)
+		}
+
+		tokens := make(map[string]string)
+		for fileID := range req.Files {
+			tokens[fileID] = "token-" + fileID
+		}
+
+		return c.JSON(map[string]interface{}{
+			"sessionId": "tls-session",
+			"files":     tokens,
+		})
+	})
+
+	app.Post(constants.UploadPath, func(c *fiber.Ctx) error {
+		return c.SendStatus(200)
+	})
+
+	tmpDir := t.TempDir()
+	privKeyFile := filepath.Join(tmpDir, "key.pem")
+	certFile := filepath.Join(tmpDir, "cert.pem")
+	cert, err := lsutils.GenAndSaveTLScert(privKeyFile, certFile)
+	if err != nil {
+		t.Fatalf("failed to generate TLS cert: %v", err)
+	}
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatalf("failed to create TLS listener: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	go func() { _ = app.Listener(ln) }()
+	defer func() { _ = app.Shutdown() }()
+
+	port := fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port)
+	addr := net.JoinHostPort("127.0.0.1", port)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		certs, fetchErr := coreutils.FetchX509Cert(addr)
+		if fetchErr == nil && len(certs) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("TLS server did not start in time: %v", fetchErr)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	testFile := filepath.Join(tmpDir, "file.txt")
+	if err := os.WriteFile(testFile, []byte("secure content"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	sender := NewForwardSender()
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("failed to parse generated certificate: %v", err)
+	}
+	target := &models.DeviceInfo{
+		Alias:       "TLSReceiver",
+		IP:          "127.0.0.1",
+		Fingerprint: coreutils.SHA256ofCert(leaf),
+	}
+	if err := sender.Init(target, true); err != nil {
+		t.Fatalf("failed to init sender: %v", err)
+	}
+	sender.SetRemotePort(port)
+	if err := sender.AddFile(testFile); err != nil {
+		t.Fatalf("failed to add file: %v", err)
+	}
+
+	if err := sender.Start(); err != nil {
+		t.Fatalf("Start failed over HTTPS custom port: %v", err)
 	}
 }
 

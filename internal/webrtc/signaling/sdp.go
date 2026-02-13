@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/base64"
+	"fmt"
 	"io"
 )
+
+const maxDecompressedSDPBytes = 512 * 1024
 
 // CompressSDP compresses an SDP string using zlib and encodes it as base64.
 // Uses URL-safe base64 without padding to match official LocalSend protocol.
@@ -37,9 +40,12 @@ func DecompressSDP(compressed string) (string, error) {
 	}
 	defer func() { _ = r.Close() }()
 
-	result, err := io.ReadAll(r)
+	result, err := io.ReadAll(io.LimitReader(r, maxDecompressedSDPBytes+1))
 	if err != nil {
 		return "", err
+	}
+	if len(result) > maxDecompressedSDPBytes {
+		return "", fmt.Errorf("decompressed SDP exceeds %d bytes", maxDecompressedSDPBytes)
 	}
 
 	return string(result), nil

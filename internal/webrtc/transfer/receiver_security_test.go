@@ -568,6 +568,146 @@ func TestRTCReceiver_SubdirectoryTraversalRejected(t *testing.T) {
 	}
 }
 
+func TestRTCReceiver_HandleFileHeader_ValidTokenTransitionsToReceiving(t *testing.T) {
+	tmpDir := t.TempDir()
+	f, err := os.CreateTemp(tmpDir, "file-1-*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+	}()
+
+	r := &RTCReceiver{
+		state:       stateWaitFiles,
+		fileTokens:  map[string]string{"file-1": "valid-token"},
+		fileWriters: map[string]*os.File{"file-1": f},
+		filePaths:   map[string]string{"file-1": f.Name()},
+		fileHashers: makeHasherMap(),
+	}
+
+	r.handleMessage([]byte(`{"id":"file-1","token":"valid-token"}`))
+
+	if r.state != stateReceivingFiles {
+		t.Fatalf("state = %d; want %d", r.state, stateReceivingFiles)
+	}
+	if r.currentFileID != "file-1" {
+		t.Fatalf("currentFileID = %q; want %q", r.currentFileID, "file-1")
+	}
+}
+
+func TestRTCReceiver_HandleFileHeader_RejectsInvalidToken(t *testing.T) {
+	tmpDir := t.TempDir()
+	f, err := os.CreateTemp(tmpDir, "file-1-*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+	}()
+
+	r := &RTCReceiver{
+		state:       stateWaitFiles,
+		fileTokens:  map[string]string{"file-1": "valid-token"},
+		fileWriters: map[string]*os.File{"file-1": f},
+		filePaths:   map[string]string{"file-1": f.Name()},
+		fileHashers: makeHasherMap(),
+	}
+
+	r.handleMessage([]byte(`{"id":"file-1","token":"invalid-token"}`))
+
+	if r.state != stateWaitFiles {
+		t.Fatalf("state = %d; want %d", r.state, stateWaitFiles)
+	}
+	if r.currentFileID != "" {
+		t.Fatalf("currentFileID = %q; want empty", r.currentFileID)
+	}
+}
+
+func TestRTCReceiver_HandleFileHeader_RejectsUnknownFileID(t *testing.T) {
+	tmpDir := t.TempDir()
+	f, err := os.CreateTemp(tmpDir, "file-1-*")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+	}()
+
+	r := &RTCReceiver{
+		state:       stateWaitFiles,
+		fileTokens:  map[string]string{"file-1": "valid-token"},
+		fileWriters: map[string]*os.File{"file-1": f},
+		filePaths:   map[string]string{"file-1": f.Name()},
+		fileHashers: makeHasherMap(),
+	}
+
+	r.handleMessage([]byte(`{"id":"file-2","token":"anything"}`))
+
+	if r.state != stateWaitFiles {
+		t.Fatalf("state = %d; want %d", r.state, stateWaitFiles)
+	}
+	if r.currentFileID != "" {
+		t.Fatalf("currentFileID = %q; want empty", r.currentFileID)
+	}
+}
+
+func TestRTCReceiver_HandleNextHeader_RejectsMissingToken(t *testing.T) {
+	tmpDir := t.TempDir()
+	currentFile, err := os.CreateTemp(tmpDir, "current-*")
+	if err != nil {
+		t.Fatalf("failed to create current temp file: %v", err)
+	}
+	nextFile, err := os.CreateTemp(tmpDir, "next-*")
+	if err != nil {
+		t.Fatalf("failed to create next temp file: %v", err)
+	}
+	defer func() {
+		_ = currentFile.Close()
+		_ = nextFile.Close()
+		_ = os.Remove(currentFile.Name())
+		_ = os.Remove(nextFile.Name())
+	}()
+
+	r := &RTCReceiver{
+		state:         stateReceivingFiles,
+		currentFileID: "file-1",
+		peer:          &PeerConnection{},
+		fileTokens: map[string]string{
+			"file-1": "token-1",
+			"file-2": "token-2",
+		},
+		fileWriters: map[string]*os.File{
+			"file-1": currentFile,
+			"file-2": nextFile,
+		},
+		filePaths: map[string]string{
+			"file-1": currentFile.Name(),
+			"file-2": nextFile.Name(),
+		},
+		fileHashers: map[string]hash.Hash{
+			"file-1": sha256.New(),
+			"file-2": sha256.New(),
+		},
+		files: []RTCFileDto{
+			{ID: "file-1", FileName: "one.txt", Size: 1},
+			{ID: "file-2", FileName: "two.txt", Size: 1},
+		},
+	}
+
+	r.handleMessage([]byte(`{"id":"file-2"}`))
+
+	if r.state != stateWaitFiles {
+		t.Fatalf("state = %d; want %d", r.state, stateWaitFiles)
+	}
+	if r.currentFileID != "" {
+		t.Fatalf("currentFileID = %q; want empty", r.currentFileID)
+	}
+}
+
 // =============================================================================
 // Concurrency/Race Condition Tests
 // =============================================================================

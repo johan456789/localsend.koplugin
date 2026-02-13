@@ -68,7 +68,7 @@ func (fsp *ForwardSender) preUploadReq() error {
 
 	if fsp.https {
 		// check fingerprint if https mode (See https://github.com/localsend/protocol section.2)
-		certs, err := utils.FetchX509Cert(net.JoinHostPort(fsp.remote.IP, constants.DefaultPortStr))
+		certs, err := utils.FetchX509Cert(net.JoinHostPort(fsp.remote.IP, fsp.remotePort))
 		if err != nil {
 			return fmt.Errorf("failed to fetch certificate: %w", err)
 		}

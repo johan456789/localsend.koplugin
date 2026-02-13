@@ -39,6 +39,10 @@ const (
 	// answerCallbackTTL is the time-to-live for answer callbacks.
 	// Callbacks not invoked within this time are cleaned up to prevent memory leaks.
 	answerCallbackTTL = 60 * time.Second
+
+	// maxSignalingMessageBytes caps individual signaling frames to prevent
+	// oversized payloads from exhausting memory on constrained devices.
+	maxSignalingMessageBytes = 2 * 1024 * 1024
 )
 
 // answerCallback holds a callback and its creation time for TTL cleanup.
@@ -97,6 +101,7 @@ func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutI
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to signaling server: %w", err)
 	}
+	conn.SetReadLimit(maxSignalingMessageBytes)
 
 	client := &SignalingClient{
 		conn:     conn,
@@ -156,7 +161,12 @@ func (c *SignalingClient) waitForHello() error {
 
 	c.client = *msg.Client
 	if msg.Peers != nil {
-		for _, peer := range *msg.Peers {
+		peers := *msg.Peers
+		if len(peers) > MaxPeers {
+			slog.Warn("HELLO peer list exceeds limit, truncating", "received", len(peers), "max", MaxPeers)
+			peers = peers[:MaxPeers]
+		}
+		for _, peer := range peers {
 			c.peers[peer.ID] = peer
 		}
 	}

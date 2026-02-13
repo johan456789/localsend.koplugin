@@ -500,8 +500,7 @@ func (r *RTCReceiver) handleMessage(data []byte) {
 			if err := json.Unmarshal(data, &header); err == nil && header.ID != "" {
 				// Finish current file before starting next
 				r.finishCurrentFile()
-				slog.Info("Received file header", "id", header.ID)
-				r.currentFileID = header.ID
+				_ = r.startReceivingFile(&header)
 				return
 			}
 		}
@@ -927,9 +926,49 @@ func (r *RTCReceiver) handleFileHeader(msg interface{}, msgType string) {
 		slog.Error("Invalid message type for file_header", "got", fmt.Sprintf("%T", msg))
 		return
 	}
-	slog.Info("Receiving file", "id", header.ID)
+	_ = r.startReceivingFile(header)
+}
+
+func (r *RTCReceiver) startReceivingFile(header *RTCSendFileHeader) bool {
+	if err := r.validateFileHeader(header); err != nil {
+		slog.Warn("Rejected file header", "id", header.ID, "error", err)
+		r.rejectFileTransfer(err.Error())
+		return false
+	}
+
 	r.currentFileID = header.ID
 	r.state = stateReceivingFiles
+	slog.Info("Receiving file", "id", header.ID)
+	return true
+}
+
+func (r *RTCReceiver) validateFileHeader(header *RTCSendFileHeader) error {
+	expectedToken, ok := r.fileTokens[header.ID]
+	if !ok {
+		return fmt.Errorf("unknown file ID")
+	}
+
+	if subtle.ConstantTimeCompare([]byte(header.Token), []byte(expectedToken)) != 1 {
+		return fmt.Errorf("invalid file token")
+	}
+
+	if _, ok := r.fileWriters[header.ID]; !ok {
+		return fmt.Errorf("file not prepared for receive")
+	}
+
+	return nil
+}
+
+func (r *RTCReceiver) rejectFileTransfer(reason string) {
+	if r.peer != nil {
+		peer := r.peer
+		r.peer = nil
+		go func(p *PeerConnection) {
+			_ = p.Close()
+		}(peer)
+	}
+	r.currentFileID = ""
+	r.state = stateWaitFiles
 }
 
 // handleBinaryData writes received file data.

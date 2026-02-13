@@ -397,8 +397,15 @@ function M.showFileSendFlow(instance, preset_file)
         return
     end
 
-    -- Ensure network is connected
-    if not deps.NetworkMgr:isConnected() then
+    -- Ensure network is connected.
+    -- Prefer willRerunWhenConnected for cleaner control flow in recursive entrypoints.
+    if deps.NetworkMgr.willRerunWhenConnected then
+        if deps.NetworkMgr:willRerunWhenConnected(function()
+            M.showFileSendFlow(instance, preset_file)
+        end) then
+            return
+        end
+    elseif not deps.NetworkMgr:isConnected() then
         deps.NetworkMgr:runWhenConnected(function()
             M.showFileSendFlow(instance, preset_file)
         end)

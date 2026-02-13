@@ -261,6 +261,45 @@ describe("localsend_sender", function()
             assert.truthy(cmd:match("scan"))
             assert.truthy(cmd:match("%-%-json"))
         end)
+
+        it("uses willRerunWhenConnected to avoid duplicate flow when offline", function()
+            local rerun_called = false
+            local scan_called = false
+            package.loaded["ui/network/manager"] = {
+                isConnected = function() return false end,
+                willRerunWhenConnected = function(self, callback)
+                    rerun_called = true
+                    return true
+                end,
+                runWhenConnected = function(self, callback)
+                    scan_called = true
+                    if callback then callback() end
+                end,
+            }
+
+            sender.init({
+                UIManager = package.loaded["ui/uimanager"],
+                InfoMessage = package.loaded["ui/widget/infomessage"],
+                Notification = package.loaded["ui/widget/notification"],
+                InputDialog = package.loaded["ui/widget/inputdialog"],
+                ButtonDialog = package.loaded["ui/widget/buttondialog"],
+                PathChooser = package.loaded["ui/widget/pathchooser"],
+                NetworkMgr = package.loaded["ui/network/manager"],
+                util = package.loaded["util"],
+                json = package.loaded["json"],
+                logger = package.loaded["logger"],
+                T = require("ffi/util").template,
+                _ = require("gettext"),
+            }, {
+                binary_path = "/tmp/localsend",
+            })
+
+            sender.showFileSendFlow({ getPickerStartPath = function(_, path) return path end })
+
+            assert.is_true(rerun_called)
+            assert.is_false(scan_called)
+            assert.equals(0, #helper.state.os_execute_calls)
+        end)
     end)
 
     -- =============================================================================

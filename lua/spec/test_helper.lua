@@ -167,6 +167,20 @@ function M.mock_network_manager(opts)
         runWhenConnected = function(self, callback)
             if opts.is_connected ~= false then callback() end
         end,
+        willRerunWhenOnline = function(self, callback)
+            if opts.is_online == false then
+                if callback then callback() end
+                return true
+            end
+            return false
+        end,
+        willRerunWhenConnected = function(self, callback)
+            if opts.is_connected == false then
+                if callback then callback() end
+                return true
+            end
+            return false
+        end,
     }
 end
 

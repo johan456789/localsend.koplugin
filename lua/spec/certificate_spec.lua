@@ -140,9 +140,12 @@ describe("Certificate Management", function()
             local stop_called_first = false
 
             instance.isRunning = function() return true end
-            instance.stopServer = function(self, silent)
+            instance.stopServer = function(self, options)
                 stop_called = true
                 if not start_called then stop_called_first = true end
+                if options and options.callback then
+                    options.callback(true)
+                end
             end
             instance.start = function() start_called = true end
 

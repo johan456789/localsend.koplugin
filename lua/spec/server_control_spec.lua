@@ -42,16 +42,21 @@ describe("Server Control", function()
         end)
 
         describe("when server is not running", function()
-            it("should call start()", function()
+            it("should call _startWhenConnected(false)", function()
                 local instance = helper.create_instance()
 
-                local start_called = false
+                local start_when_connected_called = false
+                local start_when_connected_silent = nil
                 instance.isRunning = function() return false end
-                instance.start = function() start_called = true end
+                instance._startWhenConnected = function(self, silent)
+                    start_when_connected_called = true
+                    start_when_connected_silent = silent
+                end
 
                 instance:onToggleLocalSend()
 
-                assert.is_true(start_called, "Should call start when not running")
+                assert.is_true(start_when_connected_called, "Should call _startWhenConnected when not running")
+                assert.is_false(start_when_connected_silent, "Manual toggle should use silent=false")
             end)
 
             it("should clear user_stopped flag", function()
@@ -61,7 +66,7 @@ describe("Server Control", function()
                 local instance = helper.create_instance()
 
                 instance.isRunning = function() return false end
-                instance.start = function() end
+                instance._startWhenConnected = function() end
 
                 instance:onToggleLocalSend()
 
@@ -90,7 +95,9 @@ describe("Server Control", function()
                 local actions = {}
                 instance.isRunning = function() return false end
                 instance.stop = function() table.insert(actions, "stop") end
-                instance.start = function() table.insert(actions, "start") end
+                instance._startWhenConnected = function(self, silent)
+                    table.insert(actions, "start")
+                end
 
                 instance:onToggleLocalSend()
 
@@ -104,7 +111,12 @@ describe("Server Control", function()
         describe("user_stopped flag", function()
             it("should set user_stopped flag in ServerState", function()
                 local instance, LocalSend = helper.create_instance()
-                instance.stopServer = function() return true end
+                instance.stopServer = function(self, options)
+                    if options and options.callback then
+                        options.callback(true)
+                    end
+                    return true
+                end
 
                 instance:stop()
 
@@ -116,8 +128,11 @@ describe("Server Control", function()
                 local instance, LocalSend = helper.create_instance()
 
                 local flag_was_set = false
-                instance.stopServer = function()
+                instance.stopServer = function(self, options)
                     flag_was_set = LocalSend._ServerState.user_stopped
+                    if options and options.callback then
+                        options.callback(true)
+                    end
                     return true
                 end
 
@@ -133,8 +148,11 @@ describe("Server Control", function()
                 local instance = helper.create_instance()
 
                 local stop_call_count = 0
-                instance.stopServer = function(self)
+                instance.stopServer = function(self, options)
                     stop_call_count = stop_call_count + 1
+                    if options and options.callback then
+                        options.callback(true)
+                    end
                     return true
                 end
 
@@ -145,7 +163,12 @@ describe("Server Control", function()
 
             it("should always show success notification", function()
                 local instance = helper.create_instance()
-                instance.stopServer = function() return true end
+                instance.stopServer = function(self, options)
+                    if options and options.callback then
+                        options.callback(true)
+                    end
+                    return true
+                end
 
                 instance:stop()
 
@@ -155,7 +178,12 @@ describe("Server Control", function()
 
             it("success notification should have timeout", function()
                 local instance = helper.create_instance()
-                instance.stopServer = function() return true end
+                instance.stopServer = function(self, options)
+                    if options and options.callback then
+                        options.callback(true)
+                    end
+                    return true
+                end
 
                 instance:stop()
 
@@ -174,8 +202,8 @@ describe("Server Control", function()
             assert.is_true(result, "Should return true when no PID file")
         end)
 
-        it("should use SIGKILL (signal 9) for guaranteed termination", function()
-            local kill_signal_used = nil
+        it("should use SIGTERM first for graceful termination", function()
+            local term_signal_used = false
 
             package.loaded["util"].pathExists = function(path)
                 if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
@@ -186,14 +214,16 @@ describe("Server Control", function()
             end
             package.loaded["util"].readFromFile = function(path)
                 if path == "/tmp/localsend_koreader.pid" then return "12345" end
+                if path == "/proc/12345/cmdline" then return "/tmp/localsend\0recv\0" end
                 return nil
             end
 
             local original_execute = os.execute
             os.execute = function(cmd)
                 if cmd:match("kill") then
-                    -- Match shell_escape format: 'kill' '-9' or unescaped: kill -9
-                    if cmd:match("'kill'") and cmd:match("'%-9'") then kill_signal_used = 9 end
+                    if cmd:match("'kill'") and cmd:match("'%-TERM'") then
+                        term_signal_used = true
+                    end
                 end
                 return 0
             end
@@ -203,7 +233,7 @@ describe("Server Control", function()
 
             os.execute = original_execute
 
-            assert.equal(9, kill_signal_used, "Should use SIGKILL (signal 9)")
+            assert.is_true(term_signal_used, "Should use SIGTERM first")
         end)
     end)
 end)

@@ -263,6 +263,7 @@ function LocalSend:init()
     -- Cache for menu rendering (avoids disk I/O on every menu open)
     -- Updated via _updateCache() on state changes
     self._cached_running = false
+    self._cached_stopping = false
     self._cached_transfer_count = 0
 
     -- Create instance-specific task references for proper unscheduling
@@ -495,7 +496,27 @@ end
 -- Update cached state values (called on state changes to avoid disk I/O in menu)
 function LocalSend:_updateCache()
     self._cached_running = self:isRunning()
+    self._cached_stopping = ServerState.stop_in_progress
     self._cached_transfer_count = self:getTransferCount()
+end
+
+-- Keep menu state refreshed while async stop/start transitions settle.
+function LocalSend:_refreshMenuUntilSettled(touchmenu_instance, attempts)
+    if not touchmenu_instance then
+        return
+    end
+
+    touchmenu_instance:updateItems()
+
+    if attempts <= 0 then
+        return
+    end
+
+    if ServerState.stop_in_progress then
+        UIManager:scheduleIn(0.25, function()
+            self:_refreshMenuUntilSettled(touchmenu_instance, attempts - 1)
+        end)
+    end
 end
 
 -- Server lifecycle functions (delegated to localsend_server module)
@@ -659,8 +680,8 @@ function LocalSend:isRunning()
     return lsserver.isRunning()
 end
 
-function LocalSend:stopServer()
-    return lsserver.stopServer(self)
+function LocalSend:stopServer(options)
+    return lsserver.stopServer(self, options)
 end
 
 function LocalSend:_cleanupServerState()
@@ -901,6 +922,9 @@ function LocalSend:addToMainMenu(menu_items)
             if REINSTALL_REQUIRED then
                 return _("LocalSend (⚠ Reinstall Required)")
             end
+            if self._cached_stopping then
+                return _("LocalSend (stopping...)")
+            end
             if self._cached_running then
                 if self._cached_transfer_count > 0 then
                     return T(_("LocalSend (%1 received)"), self._cached_transfer_count)
@@ -918,11 +942,7 @@ function LocalSend:addToMainMenu(menu_items)
         -- Quick toggle via long-press (SSH plugin pattern)
         hold_callback = function(touchmenu_instance)
             self:onToggleLocalSend()
-            UIManager:scheduleIn(1, function()
-                if touchmenu_instance then
-                    touchmenu_instance:updateItems()
-                end
-            end)
+            self:_refreshMenuUntilSettled(touchmenu_instance, 16)
         end,
         sub_item_table = self:_buildMainMenu(),
     }
@@ -954,6 +974,9 @@ function LocalSend:_buildMainMenu()
     -- Start/Stop server
     table.insert(menu, {
         text_func = function()
+            if self._cached_stopping then
+                return _("Stopping server...")
+            end
             if self._cached_running then
                 return _("Stop server")
             else
@@ -963,17 +986,16 @@ function LocalSend:_buildMainMenu()
         keep_menu_open = true,
         checked_func = function() return self._cached_running end,
         enabled_func = function()
+            if self._cached_stopping then
+                return false
+            end
             -- Allow stopping if running, but block starting if reinstall required
             return self._cached_running or not REINSTALL_REQUIRED
         end,
         check_callback_updates_menu = true,
         callback = function(touchmenu_instance)
             self:onToggleLocalSend()
-            UIManager:scheduleIn(1, function()
-                if touchmenu_instance then
-                    touchmenu_instance:updateItems()
-                end
-            end)
+            self:_refreshMenuUntilSettled(touchmenu_instance, 16)
         end,
     })
 

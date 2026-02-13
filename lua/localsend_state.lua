@@ -23,6 +23,10 @@ M.ServerState = {
     -- Cancellation flags (checked by polling callbacks to avoid stale callbacks)
     scan_cancelled = false,  -- True when scan was cancelled by user
     send_cancelled = false,  -- True when send was cancelled by user
+
+    -- Server lifecycle operation tracking (prevents stale async callbacks)
+    server_op_id = 0,  -- Monotonic operation counter for start/stop transitions
+    stop_in_progress = false,  -- True while graceful stop is in progress
 }
 
 -- Expose for testing (matches current LocalSend._ServerState pattern)

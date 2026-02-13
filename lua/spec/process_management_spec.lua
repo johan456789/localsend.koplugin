@@ -7,8 +7,22 @@ describe("Process Management", function()
     local pid_file_content
     local pid_file_exists
     local proc_exists_map
+    local proc_cmdline_map
     local kill_calls
-    local terminate_calls
+
+    local function flushScheduledTasks(limit)
+        limit = limit or 100
+        local steps = 0
+        while #helper.state.scheduled_tasks > 0 and steps < limit do
+            local task = table.remove(helper.state.scheduled_tasks, 1)
+            if task and task.callback and (task.delay or 0) <= 1 then
+                task.callback()
+            elseif task then
+                table.insert(helper.state.scheduled_tasks, task)
+            end
+            steps = steps + 1
+        end
+    end
 
     setup(function()
         helper.setup_complete()
@@ -19,17 +33,8 @@ describe("Process Management", function()
         pid_file_content = nil
         pid_file_exists = false
         proc_exists_map = {}
+        proc_cmdline_map = {}
         kill_calls = {}
-        terminate_calls = {}
-
-        -- Override ffiutil for subprocess checks
-        package.loaded["ffi/util"].isSubProcessDone = function(pid, wait)
-            return proc_exists_map[pid] ~= true
-        end
-        package.loaded["ffi/util"].terminateSubProcess = function(pid)
-            table.insert(terminate_calls, pid)
-            proc_exists_map[pid] = false
-        end
 
         -- Override pathExists for PID file and /proc checks
         local base_pathExists = package.loaded["util"].pathExists
@@ -47,6 +52,10 @@ describe("Process Management", function()
                 if not pid_file_exists then return nil end
                 return pid_file_content
             end
+            local pid = path:match("^/proc/(%d+)/cmdline$")
+            if pid then
+                return proc_cmdline_map[tonumber(pid)]
+            end
             return nil
         end
 
@@ -60,7 +69,7 @@ describe("Process Management", function()
             end
             if sig and pid then
                 pid = tonumber(pid)
-                if sig == "KILL" or sig == "9" then
+                if sig == "KILL" or sig == "9" or sig == "TERM" then
                     proc_exists_map[pid] = false
                 end
             end
@@ -118,16 +127,29 @@ describe("Process Management", function()
             pid_file_exists = true
             pid_file_content = "12345"
             proc_exists_map[12345] = true
+            proc_cmdline_map[12345] = "/tmp/localsend\0recv\0"
 
             local instance = helper.create_instance()
 
             assert.is_true(instance:isRunning())
         end)
 
+        it("returns false when PID belongs to another process", function()
+            pid_file_exists = true
+            pid_file_content = "12345"
+            proc_exists_map[12345] = true
+            proc_cmdline_map[12345] = "/usr/bin/python\0script.py\0"
+
+            local instance = helper.create_instance()
+
+            assert.is_false(instance:isRunning())
+        end)
+
         it("handles PID with newline from read(*l)", function()
             pid_file_exists = true
             pid_file_content = "12345"
             proc_exists_map[12345] = true
+            proc_cmdline_map[12345] = "/tmp/localsend\0recv\0"
 
             local instance = helper.create_instance()
 
@@ -146,44 +168,20 @@ describe("Process Management", function()
             assert.is_true(ok)
         end)
 
-        it("sends SIGKILL directly for guaranteed termination", function()
+        it("sends SIGTERM first for graceful shutdown", function()
             pid_file_exists = true
             pid_file_content = "12345"
             proc_exists_map[12345] = true
+            proc_cmdline_map[12345] = "/tmp/localsend\0recv\0"
 
-            local kill_9_called = false
-            _G.os.execute = function(cmd)
-                table.insert(kill_calls, cmd)
-                -- Match shell_escape format: 'kill' '-9' or unescaped: kill -9
-                if cmd:match("'kill'") and cmd:match("'%-9'") then
-                    kill_9_called = true
-                    proc_exists_map[12345] = false
-                end
-                return 0
-            end
-
-            local instance = helper.create_instance()
-            instance.closeFirewall = function() end
-
-            local ok = instance:stopServer()
-
-            assert.is_true(ok)
-            assert.is_true(kill_9_called, "Should use SIGKILL (kill -9) for guaranteed termination")
-        end)
-
-        it("removes PID file BEFORE killing process", function()
-            pid_file_exists = true
-            pid_file_content = "12345"
-            proc_exists_map[12345] = true
-
-            local pid_removed_before_kill = false
+            local term_called = false
             local kill_called = false
-
             _G.os.execute = function(cmd)
                 table.insert(kill_calls, cmd)
-                -- Match shell_escape format: 'kill' '-9' or unescaped: kill -9
-                if cmd:match("'kill'") and cmd:match("'%-9'") then
-                    pid_removed_before_kill = not pid_file_exists
+                if cmd:match("'kill'") and cmd:match("'%-TERM'") then
+                    term_called = true
+                    proc_exists_map[12345] = false
+                elseif cmd:match("'kill'") and cmd:match("'%-KILL'") then
                     kill_called = true
                 end
                 return 0
@@ -192,19 +190,83 @@ describe("Process Management", function()
             local instance = helper.create_instance()
             instance.closeFirewall = function() end
 
-            instance:stopServer()
+            local ok = instance:stopServer()
+            flushScheduledTasks()
 
-            assert.is_true(kill_called, "Should call kill")
-            assert.is_true(pid_removed_before_kill, "PID file should be removed BEFORE killing")
+            assert.is_true(ok)
+            assert.is_true(term_called, "Should attempt graceful stop with SIGTERM")
+            assert.is_false(kill_called, "Should not force-kill if SIGTERM succeeds")
+        end)
+
+        it("forces SIGKILL when graceful stop times out", function()
+            pid_file_exists = true
+            pid_file_content = "12345"
+            proc_exists_map[12345] = true
+            proc_cmdline_map[12345] = "/tmp/localsend\0recv\0"
+
+            local term_called = false
+            local kill_called = false
+
+            _G.os.execute = function(cmd)
+                table.insert(kill_calls, cmd)
+                if cmd:match("'kill'") and cmd:match("'%-TERM'") then
+                    term_called = true
+                    -- Simulate stubborn process still running after TERM.
+                elseif cmd:match("'kill'") and cmd:match("'%-KILL'") then
+                    kill_called = true
+                    proc_exists_map[12345] = false
+                end
+                return 0
+            end
+
+            local instance = helper.create_instance()
+            instance.closeFirewall = function() end
+
+            instance:stopServer()
+            flushScheduledTasks()
+
+            assert.is_true(term_called, "Should try SIGTERM first")
+            assert.is_true(kill_called, "Should force-kill with SIGKILL after timeout")
+        end)
+
+        it("removes PID file only after process exits", function()
+            pid_file_exists = true
+            pid_file_content = "12345"
+            proc_exists_map[12345] = true
+            proc_cmdline_map[12345] = "/tmp/localsend\0recv\0"
+
+            local pid_exists_during_term = nil
+
+            _G.os.execute = function(cmd)
+                table.insert(kill_calls, cmd)
+                if cmd:match("'kill'") and cmd:match("'%-TERM'") then
+                    pid_exists_during_term = pid_file_exists
+                    proc_exists_map[12345] = false
+                end
+                return 0
+            end
+
+            local instance = helper.create_instance()
+            instance.closeFirewall = function() end
+
+            instance:stopServer()
+            flushScheduledTasks()
+
+            assert.is_true(pid_exists_during_term, "PID file should exist while stopping")
+            assert.is_false(pid_file_exists, "PID file should be removed after process exit")
         end)
 
         it("calls closeFirewall after stopping", function()
             pid_file_exists = true
             pid_file_content = "12345"
             proc_exists_map[12345] = true
+            proc_cmdline_map[12345] = "/tmp/localsend\0recv\0"
 
             _G.os.execute = function(cmd)
                 table.insert(kill_calls, cmd)
+                if cmd:match("'kill'") and cmd:match("'%-TERM'") then
+                    proc_exists_map[12345] = false
+                end
                 return 0
             end
 
@@ -214,17 +276,23 @@ describe("Process Management", function()
             instance.closeFirewall = function() firewall_closed = true end
 
             instance:stopServer()
+            flushScheduledTasks()
 
             assert.is_true(firewall_closed, "Firewall should be closed")
         end)
 
-        it("always returns true (SIGKILL cannot fail)", function()
+        it("refuses to kill unrelated process and cleans stale PID", function()
             pid_file_exists = true
             pid_file_content = "12345"
             proc_exists_map[12345] = true
+            proc_cmdline_map[12345] = "/usr/bin/python\0worker.py\0"
 
+            local kill_attempted = false
             _G.os.execute = function(cmd)
                 table.insert(kill_calls, cmd)
+                if cmd:match("'kill'") then
+                    kill_attempted = true
+                end
                 return 0
             end
 
@@ -232,8 +300,11 @@ describe("Process Management", function()
             instance.closeFirewall = function() end
 
             local ok = instance:stopServer()
+            flushScheduledTasks()
 
-            assert.is_true(ok, "stopServer always succeeds (no blocking wait)")
+            assert.is_true(ok)
+            assert.is_false(kill_attempted, "Should not kill unrelated processes")
+            assert.is_false(pid_file_exists, "Should clean stale PID file")
         end)
     end)
 
@@ -242,10 +313,11 @@ describe("Process Management", function()
             pid_file_exists = true
             pid_file_content = "12345"
             proc_exists_map[12345] = true
+            proc_cmdline_map[12345] = "/tmp/localsend\0recv\0"
 
             _G.os.execute = function(cmd)
                 table.insert(kill_calls, cmd)
-                if cmd:match("kill %-9") then
+                if cmd:match("'kill'") and cmd:match("'%-TERM'") then
                     proc_exists_map[12345] = false
                 end
                 return 0
@@ -257,15 +329,16 @@ describe("Process Management", function()
             local stop_called = false
             local start_called = false
             local original_stopServer = instance.stopServer
-            instance.stopServer = function(self)
+            instance.stopServer = function(self, options)
                 stop_called = true
-                return original_stopServer(self)
+                return original_stopServer(self, options)
             end
             instance.start = function()
                 start_called = true
             end
 
             instance:restart()
+            flushScheduledTasks()
 
             assert.is_true(stop_called, "stopServer should be called")
             assert.is_true(start_called, "start should be called")

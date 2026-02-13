@@ -256,7 +256,12 @@ function M.mock_util(opts)
 
         makePath = opts.makePath or function(path) return true end,
 
-        readFromFile = opts.readFromFile or function(path) return nil end,
+        readFromFile = opts.readFromFile or function(path)
+            if path:match("^/proc/%d+/cmdline$") then
+                return "/tmp/localsend\0recv\0"
+            end
+            return nil
+        end,
 
         removeFile = opts.removeFile or function(path)
             table.insert(M.state.removed_files, path)
@@ -391,6 +396,10 @@ function M.mock_localsend_state()
             discovered_devices = {},
             scan_in_progress = false,
             send_in_progress = false,
+            scan_cancelled = false,
+            send_cancelled = false,
+            server_op_id = 0,
+            stop_in_progress = false,
         },
     }
     -- Expose for testing (matches LocalSend._ServerState pattern)
@@ -410,6 +419,10 @@ function M.reset_localsend_state()
         state.ServerState.discovered_devices = {}
         state.ServerState.scan_in_progress = false
         state.ServerState.send_in_progress = false
+        state.ServerState.scan_cancelled = false
+        state.ServerState.send_cancelled = false
+        state.ServerState.server_op_id = 0
+        state.ServerState.stop_in_progress = false
     end
 end
 

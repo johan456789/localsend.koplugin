@@ -100,6 +100,7 @@ local function initUpdateModule()
     lsupdate.init({
         UIManager = UIManager,
         InfoMessage = InfoMessage,
+        Notification = Notification,
         NetworkMgr = NetworkMgr,
         util = util,
         ffiutil = ffiutil,
@@ -160,6 +161,7 @@ function LocalSend:init()
     self.update_check_interval_hours = G_reader_settings:readSetting("LocalSend_update_check_interval_hours")
         or constants.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS
     self.last_update_check = G_reader_settings:readSetting("LocalSend_last_update_check") or 0
+    self.update_available_tag = G_reader_settings:readSetting("LocalSend_update_available_tag") or ""
 
     -- Initialize update module with dependencies
     initUpdateModule()
@@ -905,6 +907,9 @@ function LocalSend:addToMainMenu(menu_items)
                 end
                 return _("LocalSend (running)")
             end
+            if self.update_available_tag ~= "" then
+                return _("LocalSend (update available)")
+            end
             return _("LocalSend")
         end,
         sorting_hint = "network",
@@ -931,6 +936,16 @@ function LocalSend:_buildMainMenu()
     if REINSTALL_REQUIRED then
         table.insert(menu, {
             text = _("⚠ Previous update failed - Reinstall required"),
+            enabled_func = function() return false end,
+            separator = true,
+        })
+    end
+
+    if self.update_available_tag ~= "" then
+        table.insert(menu, {
+            text_func = function()
+                return T(_("⬆ Update available: %1"), self.update_available_tag)
+            end,
             enabled_func = function() return false end,
             separator = true,
         })

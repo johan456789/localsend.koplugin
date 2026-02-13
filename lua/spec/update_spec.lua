@@ -577,6 +577,31 @@ describe("Self-Update", function()
             assert.is_function(instance.check_update_task,
                 "check_update_task should be created in init()")
         end)
+
+        it("stores update_available_tag after auto-check finds a newer release", function()
+            file_contents["/tmp/koreader/cache/localsend/update_check.json"] = [[
+                {"tag_name":"v2.0.0","body":"New features"}
+            ]]
+
+            local instance = helper.create_instance()
+            instance:_autoCheckForUpdates()
+
+            assert.equals("v2.0.0", instance.update_available_tag)
+            assert.equals("v2.0.0", helper.state.settings["LocalSend_update_available_tag"])
+        end)
+
+        it("clears update_available_tag when already up to date", function()
+            helper.state.settings["LocalSend_update_available_tag"] = "v2.0.0"
+            file_contents["/tmp/koreader/cache/localsend/update_check.json"] = [[
+                {"tag_name":"v1.1.1","body":"Current release"}
+            ]]
+
+            local instance = helper.create_instance()
+            instance:_autoCheckForUpdates()
+
+            assert.equals("", instance.update_available_tag)
+            assert.equals("", helper.state.settings["LocalSend_update_available_tag"])
+        end)
     end)
 
     describe("auto-update scheduling", function()

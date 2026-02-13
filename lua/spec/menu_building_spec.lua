@@ -216,6 +216,38 @@ describe("Menu Building", function()
             assert.truthy(text_with_transfers:match("received") or text_with_transfers:match("%%1") or text_with_transfers:match("5"))
         end)
 
+        it("shows update available in top-level label when idle", function()
+            helper.state.settings["LocalSend_update_available_tag"] = "v2.0.0"
+            local instance = helper.create_instance()
+
+            local menu_items = {}
+            instance:addToMainMenu(menu_items)
+
+            local text = menu_items.localsend.text_func()
+            assert.truthy(text:match("update available"))
+        end)
+
+        it("shows update available banner in submenu", function()
+            helper.state.settings["LocalSend_update_available_tag"] = "v2.0.0"
+            local instance = helper.create_instance()
+
+            local menu_items = {}
+            instance:addToMainMenu(menu_items)
+
+            local found_banner = false
+            for _, item in ipairs(menu_items.localsend.sub_item_table) do
+                if item.text_func then
+                    local text = item.text_func()
+                    if text and text:match("Update available") and text:match("v2%.0%.0") then
+                        found_banner = true
+                        break
+                    end
+                end
+            end
+
+            assert.is_true(found_banner, "Should show persistent update-available menu banner")
+        end)
+
         it("has sub_item_table with expected items", function()
             local instance = helper.create_instance()
 

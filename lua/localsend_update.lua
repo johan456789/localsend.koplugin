@@ -19,10 +19,19 @@ local deps = {}
 local cache_dir = nil
 
 -- Initialize module with dependencies
--- @param d table Dependencies: { UIManager, InfoMessage, NetworkMgr, util, ffiutil, json, logger, T, _, cache_dir }
+-- @param d table Dependencies: { UIManager, InfoMessage, Notification, NetworkMgr, util, ffiutil, json, logger, T, _, cache_dir }
 function M.init(d)
     deps = d
     cache_dir = d.cache_dir
+end
+
+-- Persist and mirror update availability state.
+-- @param instance table LocalSend instance
+-- @param tag_name string|nil Release tag (e.g., "v2.1.0") or nil to clear
+local function setUpdateAvailable(instance, tag_name)
+    local value = tag_name or ""
+    instance.update_available_tag = value
+    deps.G_reader_settings:saveSetting("LocalSend_update_available_tag", value)
 end
 
 -- Get the cache directory for update temp files, creating if needed
@@ -332,6 +341,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
 
     -- Success! Clear any previous reinstall marker
     M.clearReinstallRequired(plugin_path)
+    setUpdateAvailable(instance, nil)
     deps.UIManager:show(deps.InfoMessage:new{
         text = deps.T(deps._("Update to %1 installed successfully!\n\nPlease restart KOReader for changes to take effect."), new_version),
     })
@@ -429,10 +439,17 @@ function M.doAutoCheckForUpdates(instance, plugin_version, schedule_next)
 
     -- Check if update available
     if lsutils.compareVersions(current_version, latest_version) < 0 then
-        -- Show update notification (modal, requires dismissal)
-        deps.UIManager:show(deps.InfoMessage:new{
-            text = deps.T(deps._("LocalSend update available: %1\nGo to LocalSend menu to install."), release.tag_name),
-        })
+        local should_notify = instance.update_available_tag ~= release.tag_name
+        setUpdateAvailable(instance, release.tag_name)
+
+        if should_notify then
+            deps.UIManager:show(deps.Notification:new{
+                text = deps.T(deps._("LocalSend update available: %1"), release.tag_name),
+                timeout = 5,
+            })
+        end
+    else
+        setUpdateAvailable(instance, nil)
     end
 
     -- Schedule next check
@@ -512,6 +529,8 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
     end
 
     if lsutils.compareVersions(current_version, latest_version) >= 0 then
+        setUpdateAvailable(instance, nil)
+
         -- Up to date - offer reinstall option if possible
         if download_url then
             local ConfirmBox = require("ui/widget/confirmbox")
@@ -531,6 +550,8 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
             })
         end
     else
+        setUpdateAvailable(instance, release.tag_name)
+
         -- Update available
 
         local release_notes = release.body or deps._("No release notes available.")

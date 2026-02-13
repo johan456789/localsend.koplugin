@@ -188,6 +188,13 @@ func TestNewWebServer(t *testing.T) {
 		if app == nil {
 			t.Error("should return non-nil app")
 		}
+		cfg := app.Config()
+		if !cfg.StreamRequestBody {
+			t.Error("StreamRequestBody should be enabled")
+		}
+		if cfg.BodyLimit != 1*1024*1024*1024 {
+			t.Errorf("BodyLimit = %d; want %d", cfg.BodyLimit, 1*1024*1024*1024)
+		}
 		_ = app.Shutdown()
 	})
 

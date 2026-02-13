@@ -2,6 +2,8 @@ package recv
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 
@@ -10,6 +12,37 @@ import (
 	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
 )
+
+const (
+	maxPreUploadBodyBytes = 8 * 1024 * 1024
+	maxRegisterBodyBytes  = 1 * 1024 * 1024
+	maxNonceBodyBytes     = 64 * 1024
+)
+
+var errRequestBodyTooLarge = errors.New("request body too large")
+
+// parseJSONBodyLimited parses JSON with a hard size cap to prevent oversized
+// metadata requests from exhausting memory.
+func parseJSONBodyLimited(c *fiber.Ctx, dst interface{}, maxBytes int64) error {
+	if c.Context().Request.Header.ContentLength() > int(maxBytes) {
+		return errRequestBodyTooLarge
+	}
+
+	body := c.Context().RequestBodyStream()
+	if body == nil {
+		body = bytes.NewReader(c.Body())
+	}
+
+	payload, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(payload)) > maxBytes {
+		return errRequestBodyTooLarge
+	}
+
+	return json.Unmarshal(payload, dst)
+}
 
 // filterFilesByExtension filters files based on allowed extensions.
 // Returns the filtered files, or an error status code if all files were rejected.
@@ -63,8 +96,11 @@ func (fr *FileReceiver) preUploadHandler(c *fiber.Ctx) error {
 
 	var metaReq models.PreUploadReq
 
-	err := c.BodyParser(&metaReq)
+	err := parseJSONBodyLimited(c, &metaReq, maxPreUploadBodyBytes)
 	if err != nil {
+		if errors.Is(err, errRequestBodyTooLarge) {
+			return c.SendStatus(fiber.StatusRequestEntityTooLarge)
+		}
 		return c.SendStatus(400)
 	}
 
@@ -162,7 +198,10 @@ func (fr *FileReceiver) infoHandler(c *fiber.Ctx) error {
 
 func (fr *FileReceiver) registerHandler(c *fiber.Ctx) error {
 	var announcement models.Announcement
-	if err := c.BodyParser(&announcement); err != nil {
+	if err := parseJSONBodyLimited(c, &announcement, maxRegisterBodyBytes); err != nil {
+		if errors.Is(err, errRequestBodyTooLarge) {
+			return c.SendStatus(fiber.StatusRequestEntityTooLarge)
+		}
 		return c.SendStatus(400)
 	}
 
@@ -180,7 +219,10 @@ func (fr *FileReceiver) registerHandler(c *fiber.Ctx) error {
 // This exchanges nonces for secure token verification in v3 protocol.
 func (fr *FileReceiver) nonceExchangeHandler(c *fiber.Ctx) error {
 	var req models.NonceRequest
-	if err := c.BodyParser(&req); err != nil {
+	if err := parseJSONBodyLimited(c, &req, maxNonceBodyBytes); err != nil {
+		if errors.Is(err, errRequestBodyTooLarge) {
+			return c.SendStatus(fiber.StatusRequestEntityTooLarge)
+		}
 		slog.Warn("Invalid nonce request", "error", err, "remote", c.IP())
 		return c.SendStatus(400)
 	}
@@ -231,7 +273,10 @@ func (fr *FileReceiver) nonceExchangeHandler(c *fiber.Ctx) error {
 // This handles device registration with v3 protocol fields.
 func (fr *FileReceiver) registerV3Handler(c *fiber.Ctx) error {
 	var req models.RegisterRequestV3
-	if err := c.BodyParser(&req); err != nil {
+	if err := parseJSONBodyLimited(c, &req, maxRegisterBodyBytes); err != nil {
+		if errors.Is(err, errRequestBodyTooLarge) {
+			return c.SendStatus(fiber.StatusRequestEntityTooLarge)
+		}
 		slog.Error("Failed to parse v3 register request", "error", err)
 		return c.SendStatus(400)
 	}
@@ -260,8 +305,11 @@ func (fr *FileReceiver) preUploadV3Handler(c *fiber.Ctx) error {
 	}
 
 	var metaReq models.PreUploadReq
-	err := c.BodyParser(&metaReq)
+	err := parseJSONBodyLimited(c, &metaReq, maxPreUploadBodyBytes)
 	if err != nil {
+		if errors.Is(err, errRequestBodyTooLarge) {
+			return c.SendStatus(fiber.StatusRequestEntityTooLarge)
+		}
 		return c.SendStatus(400)
 	}
 

@@ -39,6 +39,8 @@ local _ = require("gettext")
 -- Constants
 local TEXT_INPUT_SAVE_DIR = "/tmp/localsend_textinput"
 local POLL_INTERVAL = 1  -- seconds
+local STARTUP_CHECK_INTERVAL = 0.1  -- seconds
+local STARTUP_MAX_ATTEMPTS = 50
 local LOG_PREFIX = "[LocalSend-TextInput]"
 
 -- State tracking
@@ -46,28 +48,28 @@ local TextInputIntegration = {
     active_input_widget = nil,
     server_started_by_us = false,
     poll_task = nil,
+    startup_task = nil,
     last_file_count = 0,
+    plugin_instance = nil,
+    original_plugin_config = nil,
+    using_raw_server = false,
 }
 
 -- Get the LocalSend plugin instance
 local function getLocalSendPlugin()
     local PluginLoader = require("pluginloader")
-    if PluginLoader.enabled_plugins then
-        for _, plugin in ipairs(PluginLoader.enabled_plugins) do
-            if plugin.name == "LocalSend" then
-                return plugin
-            end
+    if PluginLoader.getPluginInstance then
+        local instance = PluginLoader:getPluginInstance("localsend")
+            or PluginLoader:getPluginInstance("LocalSend")
+        if instance then
+            return instance
         end
     end
 
-    -- Try alternate method via PluginShare
-    local PluginShare = require("pluginshare")
-    if PluginShare.localsend_running then
-        -- Plugin is running, try to get instance from loaded plugins
-        local ok, main = pcall(require, "localsend.koplugin/main")
-        if ok and main then
-            return main
-        end
+    -- Fallback: inspect loaded_plugins table directly if available.
+    if PluginLoader.loaded_plugins then
+        return PluginLoader.loaded_plugins.localsend
+            or PluginLoader.loaded_plugins.LocalSend
     end
 
     return nil
@@ -253,64 +255,184 @@ function TextInputIntegration:startServer()
     clearSaveDir()
     self.last_file_count = 0
 
-    -- Build command to start LocalSend server
-    local DataStorage = require("datastorage")
-    local binary_path = DataStorage:getFullDataDir() .. "/plugins/localsend.koplugin/localsend"
+    local plugin = getLocalSendPlugin()
+    if not plugin then
+        logger.warn(LOG_PREFIX, "LocalSend plugin instance not found; using raw recv fallback")
 
-    if not util.pathExists(binary_path) then
-        logger.warn(LOG_PREFIX, "LocalSend binary not found")
-        return false
-    end
-
-    -- Check if server is already running
-    local PluginShare = require("pluginshare")
-    if PluginShare.localsend_running then
-        logger.dbg(LOG_PREFIX, "LocalSend already running, using existing server")
-        -- We need to configure it to accept .txt files to our directory
-        -- For now, we'll use a separate instance approach
-    end
-
-    -- Start the server with text-input specific settings
-    local pid_file = "/tmp/localsend_textinput.pid"
-
-    -- Build command using proper shell escaping
-    local cmd = string.format(
-        "(%s recv -d %s --accept-ext txt -n KOReader-TextInput) & echo $! > %s",
-        binary_path,
-        TEXT_INPUT_SAVE_DIR,
-        pid_file
-    )
-
-    logger.dbg(LOG_PREFIX, "Starting server:", cmd)
-    local result = os.execute(cmd)
-
-    if result == 0 then
-        self.server_started_by_us = true
-
-        -- Start polling for files
-        self.poll_task = function()
-            pollForFiles()
+        local DataStorage = require("datastorage")
+        local binary_path = DataStorage:getFullDataDir() .. "/plugins/localsend.koplugin/localsend"
+        if not util.pathExists(binary_path) then
+            UIManager:show(Notification:new{
+                text = _("LocalSend binary not found"),
+                timeout = 4,
+            })
+            return false
         end
-        UIManager:scheduleIn(POLL_INTERVAL, self.poll_task)
 
-        UIManager:show(Notification:new{
-            text = _("LocalSend ready for text input"),
-            timeout = 3,
-        })
+        local PluginShare = require("pluginshare")
+        if PluginShare.localsend_running then
+            UIManager:show(Notification:new{
+                text = _("LocalSend already running. Stop it first for text input mode."),
+                timeout = 4,
+            })
+            return false
+        end
+
+        local pid_file = "/tmp/localsend_textinput.pid"
+        local cmd = string.format(
+            "(%s recv -d %s --accept-ext txt -n KOReader-TextInput) & echo $! > %s",
+            binary_path,
+            TEXT_INPUT_SAVE_DIR,
+            pid_file
+        )
+
+        local result = os.execute(cmd)
+        if result ~= 0 then
+            UIManager:show(Notification:new{
+                text = _("LocalSend failed to start for text input"),
+                timeout = 4,
+            })
+            return false
+        end
+
+        self.using_raw_server = true
+        local attempts_remaining = STARTUP_MAX_ATTEMPTS
+        self.startup_task = function()
+            if not TextInputIntegration.active_input_widget then
+                TextInputIntegration:stopServer()
+                return
+            end
+
+            local f = io.open(pid_file, "r")
+            local pid = f and f:read("*l") or nil
+            if f then f:close() end
+
+            if pid and util.pathExists("/proc/" .. pid) then
+                TextInputIntegration.server_started_by_us = true
+                TextInputIntegration.startup_task = nil
+
+                TextInputIntegration.poll_task = function()
+                    pollForFiles()
+                end
+                UIManager:scheduleIn(POLL_INTERVAL, TextInputIntegration.poll_task)
+
+                UIManager:show(Notification:new{
+                    text = _("LocalSend ready for text input"),
+                    timeout = 3,
+                })
+                return
+            end
+
+            attempts_remaining = attempts_remaining - 1
+            if attempts_remaining <= 0 then
+                TextInputIntegration.startup_task = nil
+                UIManager:show(Notification:new{
+                    text = _("LocalSend failed to start for text input"),
+                    timeout = 4,
+                })
+                return
+            end
+
+            UIManager:scheduleIn(STARTUP_CHECK_INTERVAL, TextInputIntegration.startup_task)
+        end
+
+        UIManager:scheduleIn(STARTUP_CHECK_INTERVAL, self.startup_task)
         return true
     end
 
-    return false
+    self.plugin_instance = plugin
+
+    -- Avoid launching a second receiver that can conflict with main LocalSend.
+    if plugin.isRunning and plugin:isRunning() then
+        UIManager:show(Notification:new{
+            text = _("LocalSend already running. Stop it first for text input mode."),
+            timeout = 4,
+        })
+        return false
+    end
+
+    -- Temporarily override receiver settings for text-only input mode.
+    self.original_plugin_config = {
+        save_dir = plugin.save_dir,
+        accept_ext = plugin.accept_ext,
+        device_name = plugin.device_name,
+        routing_enabled = plugin.routing_enabled,
+    }
+
+    plugin.save_dir = TEXT_INPUT_SAVE_DIR
+    plugin.accept_ext = "txt"
+    plugin.device_name = "KOReader-TextInput"
+    plugin.routing_enabled = false
+
+    if not plugin.start then
+        logger.warn(LOG_PREFIX, "LocalSend plugin has no start() method")
+        UIManager:show(Notification:new{
+            text = _("LocalSend plugin start() not available"),
+            timeout = 4,
+        })
+        return false
+    end
+
+    plugin:start(true)
+
+    local attempts_remaining = STARTUP_MAX_ATTEMPTS
+    self.startup_task = function()
+        if not TextInputIntegration.active_input_widget then
+            TextInputIntegration:stopServer()
+            return
+        end
+
+        if plugin.isRunning and plugin:isRunning() then
+            TextInputIntegration.server_started_by_us = true
+            TextInputIntegration.startup_task = nil
+
+            TextInputIntegration.poll_task = function()
+                pollForFiles()
+            end
+            UIManager:scheduleIn(POLL_INTERVAL, TextInputIntegration.poll_task)
+
+            UIManager:show(Notification:new{
+                text = _("LocalSend ready for text input"),
+                timeout = 3,
+            })
+            return
+        end
+
+        attempts_remaining = attempts_remaining - 1
+        if attempts_remaining <= 0 then
+            TextInputIntegration.startup_task = nil
+            UIManager:show(Notification:new{
+                text = _("LocalSend failed to start for text input"),
+                timeout = 4,
+            })
+            return
+        end
+
+        UIManager:scheduleIn(STARTUP_CHECK_INTERVAL, TextInputIntegration.startup_task)
+    end
+
+    UIManager:scheduleIn(STARTUP_CHECK_INTERVAL, self.startup_task)
+    return true
 end
 
 -- Stop the LocalSend server if we started it
 function TextInputIntegration:stopServer()
+    if self.startup_task then
+        UIManager:unschedule(self.startup_task)
+        self.startup_task = nil
+    end
+
     if self.poll_task then
         UIManager:unschedule(self.poll_task)
         self.poll_task = nil
     end
 
-    if self.server_started_by_us then
+    local plugin = self.plugin_instance
+    if self.server_started_by_us and plugin and plugin.stopServer then
+        plugin:stopServer()
+    end
+
+    if self.server_started_by_us and self.using_raw_server then
         local pid_file = "/tmp/localsend_textinput.pid"
         local f = io.open(pid_file, "r")
         if f then
@@ -321,11 +443,24 @@ function TextInputIntegration:stopServer()
             end
             os.remove(pid_file)
         end
+    end
+
+    if plugin and self.original_plugin_config then
+        plugin.save_dir = self.original_plugin_config.save_dir
+        plugin.accept_ext = self.original_plugin_config.accept_ext
+        plugin.device_name = self.original_plugin_config.device_name
+        plugin.routing_enabled = self.original_plugin_config.routing_enabled
+        self.original_plugin_config = nil
+    end
+
+    if self.server_started_by_us then
         self.server_started_by_us = false
         logger.dbg(LOG_PREFIX, "Server stopped")
     end
 
     clearSaveDir()
+    self.plugin_instance = nil
+    self.using_raw_server = false
     self.active_input_widget = nil
 end
 

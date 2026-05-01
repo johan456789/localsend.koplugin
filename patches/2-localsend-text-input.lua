@@ -50,6 +50,7 @@ local TextInputIntegration = {
     last_file_count = 0,
     plugin_instance = nil,
     original_plugin_config = nil,
+    original_check_for_new_transfers = nil,
     using_raw_server = false,
 }
 
@@ -366,6 +367,9 @@ function TextInputIntegration:startServer()
     plugin.accept_ext = "txt"
     plugin.device_name = "KOReader-TextInput"
     plugin.routing_enabled = false
+    -- Suppress default LocalSend "File received: <filename>" toasts during text input mode.
+    self.original_check_for_new_transfers = plugin._checkForNewTransfers
+    plugin._checkForNewTransfers = function() end
 
     if not plugin.start then
         logger.warn(LOG_PREFIX, "LocalSend plugin has no start() method")
@@ -420,6 +424,11 @@ function TextInputIntegration:stopServer()
         plugin.device_name = self.original_plugin_config.device_name
         plugin.routing_enabled = self.original_plugin_config.routing_enabled
         self.original_plugin_config = nil
+    end
+
+    if plugin and self.original_check_for_new_transfers then
+        plugin._checkForNewTransfers = self.original_check_for_new_transfers
+        self.original_check_for_new_transfers = nil
     end
 
     if self.server_started_by_us then

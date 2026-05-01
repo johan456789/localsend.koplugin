@@ -28,8 +28,6 @@ Usage:
 --]]
 
 local Device = require("device")
-local Event = require("ui/event")
-local InfoMessage = require("ui/widget/infomessage")
 local Notification = require("ui/widget/notification")
 local UIManager = require("ui/uimanager")
 local logger = require("logger")
@@ -244,6 +242,46 @@ local function pollForFiles()
     end
 end
 
+local function beginStartupWait(is_ready)
+    local attempts_remaining = STARTUP_MAX_ATTEMPTS
+    TextInputIntegration.startup_task = function()
+        if not TextInputIntegration.active_input_widget then
+            TextInputIntegration:stopServer()
+            return
+        end
+
+        if is_ready() then
+            TextInputIntegration.server_started_by_us = true
+            TextInputIntegration.startup_task = nil
+
+            TextInputIntegration.poll_task = function()
+                pollForFiles()
+            end
+            UIManager:scheduleIn(POLL_INTERVAL, TextInputIntegration.poll_task)
+
+            UIManager:show(Notification:new{
+                text = _("LocalSend ready for text input"),
+                timeout = 3,
+            })
+            return
+        end
+
+        attempts_remaining = attempts_remaining - 1
+        if attempts_remaining <= 0 then
+            TextInputIntegration.startup_task = nil
+            UIManager:show(Notification:new{
+                text = _("LocalSend failed to start for text input"),
+                timeout = 4,
+            })
+            return
+        end
+
+        UIManager:scheduleIn(STARTUP_CHECK_INTERVAL, TextInputIntegration.startup_task)
+    end
+
+    UIManager:scheduleIn(STARTUP_CHECK_INTERVAL, TextInputIntegration.startup_task)
+end
+
 -- Start the LocalSend server for text input
 function TextInputIntegration:startServer()
     if not isLocalSendInstalled() then
@@ -296,51 +334,14 @@ function TextInputIntegration:startServer()
         end
 
         self.using_raw_server = true
-        local attempts_remaining = STARTUP_MAX_ATTEMPTS
-        self.startup_task = function()
-            if not TextInputIntegration.active_input_widget then
-                TextInputIntegration:stopServer()
-                return
-            end
-
+        beginStartupWait(function()
             local f = io.open(pid_file, "r")
             local pid = f and f:read("*l") or nil
             if f then f:close() end
-
-            if pid and util.pathExists("/proc/" .. pid) then
-                TextInputIntegration.server_started_by_us = true
-                TextInputIntegration.startup_task = nil
-
-                TextInputIntegration.poll_task = function()
-                    pollForFiles()
-                end
-                UIManager:scheduleIn(POLL_INTERVAL, TextInputIntegration.poll_task)
-
-                UIManager:show(Notification:new{
-                    text = _("LocalSend ready for text input"),
-                    timeout = 3,
-                })
-                return
-            end
-
-            attempts_remaining = attempts_remaining - 1
-            if attempts_remaining <= 0 then
-                TextInputIntegration.startup_task = nil
-                UIManager:show(Notification:new{
-                    text = _("LocalSend failed to start for text input"),
-                    timeout = 4,
-                })
-                return
-            end
-
-            UIManager:scheduleIn(STARTUP_CHECK_INTERVAL, TextInputIntegration.startup_task)
-        end
-
-        UIManager:scheduleIn(STARTUP_CHECK_INTERVAL, self.startup_task)
+            return pid and util.pathExists("/proc/" .. pid)
+        end)
         return true
     end
-
-    self.plugin_instance = plugin
 
     -- Avoid launching a second receiver that can conflict with main LocalSend.
     if plugin.isRunning and plugin:isRunning() then
@@ -350,6 +351,8 @@ function TextInputIntegration:startServer()
         })
         return false
     end
+
+    self.plugin_instance = plugin
 
     -- Temporarily override receiver settings for text-only input mode.
     self.original_plugin_config = {
@@ -375,43 +378,9 @@ function TextInputIntegration:startServer()
 
     plugin:start(true)
 
-    local attempts_remaining = STARTUP_MAX_ATTEMPTS
-    self.startup_task = function()
-        if not TextInputIntegration.active_input_widget then
-            TextInputIntegration:stopServer()
-            return
-        end
-
-        if plugin.isRunning and plugin:isRunning() then
-            TextInputIntegration.server_started_by_us = true
-            TextInputIntegration.startup_task = nil
-
-            TextInputIntegration.poll_task = function()
-                pollForFiles()
-            end
-            UIManager:scheduleIn(POLL_INTERVAL, TextInputIntegration.poll_task)
-
-            UIManager:show(Notification:new{
-                text = _("LocalSend ready for text input"),
-                timeout = 3,
-            })
-            return
-        end
-
-        attempts_remaining = attempts_remaining - 1
-        if attempts_remaining <= 0 then
-            TextInputIntegration.startup_task = nil
-            UIManager:show(Notification:new{
-                text = _("LocalSend failed to start for text input"),
-                timeout = 4,
-            })
-            return
-        end
-
-        UIManager:scheduleIn(STARTUP_CHECK_INTERVAL, TextInputIntegration.startup_task)
-    end
-
-    UIManager:scheduleIn(STARTUP_CHECK_INTERVAL, self.startup_task)
+    beginStartupWait(function()
+        return plugin.isRunning and plugin:isRunning()
+    end)
     return true
 end
 

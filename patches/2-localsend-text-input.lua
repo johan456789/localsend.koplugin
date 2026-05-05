@@ -36,7 +36,7 @@ local _ = require("gettext")
 
 -- Constants
 local TEXT_INPUT_SAVE_DIR = "/tmp/localsend_textinput"
-local POLL_INTERVAL = 1  -- seconds
+local POLL_INTERVAL = 0.5  -- seconds
 local STARTUP_CHECK_INTERVAL = 0.1  -- seconds
 local STARTUP_MAX_ATTEMPTS = 50
 local LOG_PREFIX = "[LocalSend-TextInput]"

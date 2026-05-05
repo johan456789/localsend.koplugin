@@ -297,10 +297,18 @@ function TextInputIntegration:startServer()
 
         local pid_file = "/tmp/localsend_textinput.pid"
         local cmd = string.format(
-            "(%s recv -d %s --accept-ext txt -n KOReader-TextInput) & echo $! > %s",
-            binary_path,
-            TEXT_INPUT_SAVE_DIR,
-            pid_file
+            "(%s) & echo $! > %s",
+            util.shell_escape({
+                binary_path,
+                "recv",
+                "-d",
+                TEXT_INPUT_SAVE_DIR,
+                "--accept-ext",
+                "txt",
+                "-n",
+                "KOReader-TextInput",
+            }),
+            util.shell_escape({pid_file})
         )
 
         local result = os.execute(cmd)

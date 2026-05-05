@@ -95,7 +95,12 @@ local function clearSaveDir()
         return
     end
 
-    for file in lfs.dir(TEXT_INPUT_SAVE_DIR) do
+    local ok, iter, dir_obj = pcall(lfs.dir, TEXT_INPUT_SAVE_DIR)
+    if not ok then
+        return
+    end
+
+    for file in iter, dir_obj do
         if file ~= "." and file ~= ".." then
             os.remove(TEXT_INPUT_SAVE_DIR .. "/" .. file)
         end
@@ -110,7 +115,12 @@ local function getTxtFiles()
         return files
     end
 
-    for file in lfs.dir(TEXT_INPUT_SAVE_DIR) do
+    local ok, iter, dir_obj = pcall(lfs.dir, TEXT_INPUT_SAVE_DIR)
+    if not ok then
+        return files
+    end
+
+    for file in iter, dir_obj do
         if file:match("%.txt$") then
             local path = TEXT_INPUT_SAVE_DIR .. "/" .. file
             local modified = lfs.attributes(path, "modification") or 0

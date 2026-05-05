@@ -32,7 +32,7 @@ local Notification = require("ui/widget/notification")
 local UIManager = require("ui/uimanager")
 local logger = require("logger")
 local util = require("util")
-local lfs = require("lfs")
+local lfs = require("libs/libkoreader-lfs")
 local _ = require("gettext")
 
 -- Constants

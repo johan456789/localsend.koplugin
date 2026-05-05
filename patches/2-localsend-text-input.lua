@@ -185,7 +185,7 @@ end
 
 -- Check for new text files and process them
 local function checkForNewFiles()
-    for _, txt_file in ipairs(getTxtFiles()) do
+    for i, txt_file in ipairs(getTxtFiles()) do
         local content = readTextFile(txt_file)
 
         if content and content ~= "" then

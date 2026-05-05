@@ -32,6 +32,7 @@ local Notification = require("ui/widget/notification")
 local UIManager = require("ui/uimanager")
 local logger = require("logger")
 local util = require("util")
+local lfs = require("lfs")
 local _ = require("gettext")
 
 -- Constants
@@ -90,7 +91,15 @@ end
 
 -- Clear old files from save directory
 local function clearSaveDir()
-    os.execute("rm -f " .. TEXT_INPUT_SAVE_DIR .. "/*")
+    if not util.pathExists(TEXT_INPUT_SAVE_DIR) then
+        return
+    end
+
+    for file in lfs.dir(TEXT_INPUT_SAVE_DIR) do
+        if file ~= "." and file ~= ".." then
+            os.remove(TEXT_INPUT_SAVE_DIR .. "/" .. file)
+        end
+    end
 end
 
 -- Get list of .txt files in save directory, oldest first.

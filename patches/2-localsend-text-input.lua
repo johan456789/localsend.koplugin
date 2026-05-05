@@ -401,8 +401,8 @@ function TextInputIntegration:stopServer()
         if f then
             local pid = f:read("*l")
             f:close()
-            if pid then
-                os.execute("kill " .. pid .. " 2>/dev/null")
+            if pid and pid:match("^%d+$") then
+                os.execute(util.shell_escape({"kill", "-TERM", pid}) .. " 2>/dev/null")
             end
             os.remove(pid_file)
         end

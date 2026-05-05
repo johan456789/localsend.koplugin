@@ -95,7 +95,12 @@ local function clearSaveDir()
         return
     end
 
-    for file in lfs.dir(TEXT_INPUT_SAVE_DIR) do
+    local ok, iter, dir_obj = pcall(lfs.dir, TEXT_INPUT_SAVE_DIR)
+    if not ok then
+        return
+    end
+
+    for file in iter, dir_obj do
         if file ~= "." and file ~= ".." then
             os.remove(TEXT_INPUT_SAVE_DIR .. "/" .. file)
         end
@@ -105,13 +110,35 @@ end
 -- Get list of .txt files in save directory, oldest first.
 local function getTxtFiles()
     local files = {}
-    local dir = io.popen("ls -1tr " .. TEXT_INPUT_SAVE_DIR .. "/*.txt 2>/dev/null")
-    if dir then
-        for line in dir:lines() do
-            table.insert(files, line)
-        end
-        dir:close()
+
+    if not util.pathExists(TEXT_INPUT_SAVE_DIR) then
+        return files
     end
+
+    local ok, iter, dir_obj = pcall(lfs.dir, TEXT_INPUT_SAVE_DIR)
+    if not ok then
+        return files
+    end
+
+    for file in iter, dir_obj do
+        if file:match("%.txt$") then
+            local path = TEXT_INPUT_SAVE_DIR .. "/" .. file
+            local modified = lfs.attributes(path, "modification") or 0
+            table.insert(files, {
+                path = path,
+                modified = modified,
+            })
+        end
+    end
+
+    table.sort(files, function(a, b)
+        return a.modified < b.modified
+    end)
+
+    for i, file in ipairs(files) do
+        files[i] = file.path
+    end
+
     return files
 end
 
@@ -273,6 +300,10 @@ end
 
 -- Start the LocalSend server for text input
 function TextInputIntegration:startServer()
+    if self.server_start_requested_by_us or self.server_started_by_us then
+        return true
+    end
+
     if not isLocalSendInstalled() then
         logger.dbg(LOG_PREFIX, "LocalSend plugin not installed")
         return false

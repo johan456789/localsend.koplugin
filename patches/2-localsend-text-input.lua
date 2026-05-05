@@ -45,6 +45,7 @@ local LOG_PREFIX = "[LocalSend-TextInput]"
 local TextInputIntegration = {
     active_input_widget = nil,
     server_started_by_us = false,
+    server_start_requested_by_us = false,
     poll_task = nil,
     startup_task = nil,
     last_file_count = 0,
@@ -327,6 +328,7 @@ function TextInputIntegration:startServer()
 
         local result = os.execute(cmd)
         if result ~= 0 then
+            self.server_start_requested_by_us = false
             UIManager:show(Notification:new{
                 text = _("LocalSend failed to start for text input"),
                 timeout = 4,
@@ -335,6 +337,7 @@ function TextInputIntegration:startServer()
         end
 
         self.using_raw_server = true
+        self.server_start_requested_by_us = true
         beginStartupWait(function()
             local f = io.open(pid_file, "r")
             local pid = f and f:read("*l") or nil
@@ -348,6 +351,15 @@ function TextInputIntegration:startServer()
     if plugin.isRunning and plugin:isRunning() then
         UIManager:show(Notification:new{
             text = _("LocalSend already running. Stop it first for text input mode."),
+            timeout = 4,
+        })
+        return false
+    end
+
+    if not plugin.start then
+        logger.warn(LOG_PREFIX, "LocalSend plugin has no start() method")
+        UIManager:show(Notification:new{
+            text = _("LocalSend plugin start() not available"),
             timeout = 4,
         })
         return false
@@ -371,15 +383,7 @@ function TextInputIntegration:startServer()
     self.original_check_for_new_transfers = plugin._checkForNewTransfers
     plugin._checkForNewTransfers = function() end
 
-    if not plugin.start then
-        logger.warn(LOG_PREFIX, "LocalSend plugin has no start() method")
-        UIManager:show(Notification:new{
-            text = _("LocalSend plugin start() not available"),
-            timeout = 4,
-        })
-        return false
-    end
-
+    self.server_start_requested_by_us = true
     plugin:start(true)
 
     beginStartupWait(function()
@@ -401,11 +405,12 @@ function TextInputIntegration:stopServer()
     end
 
     local plugin = self.plugin_instance
-    if self.server_started_by_us and plugin and plugin.stopServer then
+    local should_stop_server = self.server_started_by_us or self.server_start_requested_by_us
+    if should_stop_server and plugin and plugin.stopServer then
         plugin:stopServer()
     end
 
-    if self.server_started_by_us and self.using_raw_server then
+    if should_stop_server and self.using_raw_server then
         local pid_file = "/tmp/localsend_textinput.pid"
         local f = io.open(pid_file, "r")
         if f then
@@ -436,6 +441,7 @@ function TextInputIntegration:stopServer()
         logger.dbg(LOG_PREFIX, "Server stopped")
     end
 
+    self.server_start_requested_by_us = false
     clearSaveDir()
     self.plugin_instance = nil
     self.using_raw_server = false

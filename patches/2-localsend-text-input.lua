@@ -48,7 +48,6 @@ local TextInputIntegration = {
     server_start_requested_by_us = false,
     poll_task = nil,
     startup_task = nil,
-    last_file_count = 0,
     plugin_instance = nil,
     original_plugin_config = nil,
     original_check_for_new_transfers = nil,
@@ -94,23 +93,10 @@ local function clearSaveDir()
     os.execute("rm -f " .. TEXT_INPUT_SAVE_DIR .. "/*")
 end
 
--- Count files in save directory
-local function countFiles()
-    local count = 0
-    local dir = io.popen("ls -1 " .. TEXT_INPUT_SAVE_DIR .. " 2>/dev/null")
-    if dir then
-        for _ in dir:lines() do
-            count = count + 1
-        end
-        dir:close()
-    end
-    return count
-end
-
--- Get list of .txt files in save directory
+-- Get list of .txt files in save directory, oldest first.
 local function getTxtFiles()
     local files = {}
-    local dir = io.popen("ls -1t " .. TEXT_INPUT_SAVE_DIR .. "/*.txt 2>/dev/null")
+    local dir = io.popen("ls -1tr " .. TEXT_INPUT_SAVE_DIR .. "/*.txt 2>/dev/null")
     if dir then
         for line in dir:lines() do
             table.insert(files, line)
@@ -190,42 +176,34 @@ end
 
 -- Check for new text files and process them
 local function checkForNewFiles()
-    local current_count = countFiles()
-    if current_count > TextInputIntegration.last_file_count then
-        -- New files arrived
-        local txt_files = getTxtFiles()
-        if #txt_files > 0 then
-            -- Process the newest file
-            local newest_file = txt_files[1]
-            local content = readTextFile(newest_file)
+    for _, txt_file in ipairs(getTxtFiles()) do
+        local content = readTextFile(txt_file)
 
-            if content and content ~= "" then
-                -- Clean up the content (trim whitespace)
-                content = content:gsub("^%s+", ""):gsub("%s+$", "")
+        if content and content ~= "" then
+            -- Clean up the content (trim whitespace)
+            content = content:gsub("^%s+", ""):gsub("%s+$", "")
 
-                -- Try to insert into active input
-                local inserted = insertTextIntoInput(content)
+            -- Try to insert into active input
+            local inserted = insertTextIntoInput(content)
 
-                if inserted then
-                    UIManager:show(Notification:new{
-                        text = _("Text inserted from LocalSend"),
-                        timeout = 2,
-                    })
-                else
-                    -- Fallback to clipboard
-                    copyToClipboard(content)
-                    UIManager:show(Notification:new{
-                        text = _("Text copied to clipboard from LocalSend"),
-                        timeout = 2,
-                    })
-                end
-
-                -- Remove the processed file
-                os.remove(newest_file)
+            if inserted then
+                UIManager:show(Notification:new{
+                    text = _("Text inserted from LocalSend"),
+                    timeout = 2,
+                })
+            else
+                -- Fallback to clipboard
+                copyToClipboard(content)
+                UIManager:show(Notification:new{
+                    text = _("Text copied to clipboard from LocalSend"),
+                    timeout = 2,
+                })
             end
         end
+
+        -- Remove the processed file
+        os.remove(txt_file)
     end
-    TextInputIntegration.last_file_count = current_count
 end
 
 -- Poll task function
@@ -293,7 +271,6 @@ function TextInputIntegration:startServer()
 
     ensureSaveDir()
     clearSaveDir()
-    self.last_file_count = 0
 
     local plugin = getLocalSendPlugin()
     if not plugin then

@@ -273,6 +273,10 @@ end
 
 -- Start the LocalSend server for text input
 function TextInputIntegration:startServer()
+    if self.server_start_requested_by_us or self.server_started_by_us then
+        return true
+    end
+
     if not isLocalSendInstalled() then
         logger.dbg(LOG_PREFIX, "LocalSend plugin not installed")
         return false
